@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "ShapeForge"
+description = "A client-side visual shape generator for web developers and designers. Create and edit SVG shapes, generate waves and blobs, convert between paths and polygons, and copy production-ready SVG, CSS, React, HTML, and JSON output."
+version = "1.0.0"
+id = "artifacts/shapeforge"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23313
+
+[services.development]
+run = "pnpm --filter @workspace/shapeforge run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/shapeforge", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/shapeforge/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23313"
+BASE_PATH = "/"
