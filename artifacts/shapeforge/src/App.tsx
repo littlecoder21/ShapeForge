@@ -1,132 +1,159 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, Check, Code2, Copy, Download, Grid2X2, MousePointer2, Pentagon, Plus, Redo2, RotateCcw, Scissors, Shapes, SlidersHorizontal, Sparkles, Undo2, Waves, X } from 'lucide-react';
-import { exportCode, getHandles, makeShape, pathFromPoints, samplePath, simplify, W, H, type Point, type ShapeModel } from './geometry';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowDownToLine, Check, ChevronUp, Code2, Copy, Download, Grid2X2, Hand, Magnet, MousePointer2, Move, PenTool, Plus, Redo2, ScanLine, Shapes, SlidersHorizontal,
+  Sparkles, Undo2, Waves, X, Crosshair,
+} from 'lucide-react';
+import { exportCode, makeShape, samplePath, simplify, type ShapeModel, type Unit } from './geometry';
+import { NONE, nudgeNode, deleteNode, type Selection, type Tool } from './edit';
+import { DEFAULT_WAVE, buildWaveShape, clampWave, type WaveParams } from './wave';
+import { loadSettings, saveSettings, type EditorSettings } from './settings';
+import Stage, { type StageHandle } from './components/Stage';
+import PrecisionPanel from './components/PrecisionPanel';
+import ShapePanel from './components/ShapePanel';
+import WavePanel from './components/WavePanel';
+import BoundaryPanel from './components/BoundaryPanel';
+import EditorPanel from './components/EditorPanel';
 import './index.css';
 
 const FORMATS = ['SVG', 'SVG PATH', 'CSS PATH', 'POLYGON', 'REACT', 'HTML + CSS', 'JSON'];
 const LIBRARY = ['Triangle', 'Diamond', 'Pentagon', 'Hexagon', 'Octagon', 'Star', 'Circle'];
+type Tab = 'node' | 'shape' | 'wave' | 'outer' | 'editor';
+const TABS: { id: Tab; label: string }[] = [{ id: 'node', label: 'Node' }, { id: 'shape', label: 'Shape' }, { id: 'wave', label: 'Wave' }, { id: 'outer', label: 'Outer' }, { id: 'editor', label: 'Editor' }];
+
+function useMedia(query: string) {
+  const [m, setM] = useState(() => (typeof window !== 'undefined' ? window.matchMedia(query).matches : false));
+  useEffect(() => {
+    const mq = window.matchMedia(query), on = () => setM(mq.matches);
+    on(); mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [query]);
+  return m;
+}
 
 function App() {
   const [shape, setShape] = useState<ShapeModel>(() => makeShape('Blob', 23));
   const [format, setFormat] = useState('SVG');
-  const [tool, setTool] = useState('Select');
-  const [selected, setSelected] = useState<number | null>(null);
+  const [tool, setTool] = useState<Tool>('Select');
+  const [selection, setSelection] = useState<Selection>(NONE);
   const [history, setHistory] = useState<ShapeModel[]>([]);
   const [future, setFuture] = useState<ShapeModel[]>([]);
   const [seed, setSeed] = useState(23);
-  const [amplitude, setAmplitude] = useState(115);
-  const [cycles, setCycles] = useState(2);
-  const [tolerance, setTolerance] = useState(6);
+  const [tolerance, setTolerance] = useState(3);
   const [precision, setPrecision] = useState(1);
   const [fill, setFill] = useState('#69dfb5');
+  const [unit, setUnit] = useState<Unit>('%');
   const [grid, setGrid] = useState(true);
-  const [sheet, setSheet] = useState<'tools' | 'properties' | 'code' | null>(null);
+  const [settings, setSettingsState] = useState<EditorSettings>(loadSettings);
+  const [waveParams, setWaveParams] = useState<WaveParams>(DEFAULT_WAVE);
+  const [tab, setTab] = useState<Tab>('shape');
+  const [dockOpen, setDockOpen] = useState(false);
+  const [dockTall, setDockTall] = useState(false);
+  const [sheet, setSheet] = useState<'tools' | 'code' | null>(null);
   const [toast, setToast] = useState('');
   const [copied, setCopied] = useState(false);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const dragIndex = useRef<number | null>(null);
-  const dragHandle = useRef<{ index: number; side: 'in' | 'out' } | null>(null);
-  const dragStart = useRef<ShapeModel | null>(null);
+
+  const isNarrow = useMedia('(max-width: 900px)');
+  const isPhone = useMedia('(max-width: 640px)');
+  const stageRef = useRef<StageHandle>(null);
+  const shapeRef = useRef(shape); shapeRef.current = shape;
+  const liveBefore = useRef<ShapeModel | null>(null);
+  const autoDock = useRef(true);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const code = useMemo(() => exportCode({ ...shape, fill }, format, precision, tolerance), [shape, fill, format, precision, tolerance]);
-  const sampledShape = useMemo(() => shape.kind === 'path' ? samplePath(shape.points, shape.closed) : shape.points, [shape]);
-  const simplified = useMemo(() => simplify(sampledShape, tolerance), [sampledShape, tolerance]);
+
+  const setSettings = useCallback((patch: Partial<EditorSettings>) => setSettingsState(s => ({ ...s, ...patch })), []);
+  useEffect(() => saveSettings(settings), [settings]);
 
   const announce = useCallback((message: string) => {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(''), 1900);
+    toastTimer.current = setTimeout(() => setToast(''), 2200);
   }, []);
-  const commit = useCallback((next: ShapeModel) => {
-    setHistory(items => [...items.slice(-39), shape]);
-    setFuture([]);
-    setShape(next);
-  }, [shape]);
-  const update = useCallback((patch: Partial<ShapeModel>) => commit({ ...shape, ...patch }), [commit, shape]);
+
+  /* ───── history ───── */
+  const pushHistory = useCallback((before: ShapeModel) => { setHistory(h => [...h.slice(-39), before]); setFuture([]); }, []);
+  const commit = useCallback((next: ShapeModel, sel?: Selection) => {
+    setHistory(h => [...h.slice(-39), shapeRef.current]); setFuture([]); setShape(next);
+    if (sel) setSelection(sel);
+  }, []);
+  /** Streaming edits (sliders): one history entry when the gesture ends. */
+  const live = useCallback((next: ShapeModel) => { if (!liveBefore.current) liveBefore.current = shapeRef.current; setShape(next); }, []);
+  const liveEnd = useCallback(() => { if (liveBefore.current) { pushHistory(liveBefore.current); liveBefore.current = null; } }, [pushHistory]);
+
   const undo = useCallback(() => {
     if (!history.length) return;
-    setFuture(items => [shape, ...items]);
-    setShape(history[history.length - 1]);
-    setHistory(items => items.slice(0, -1));
-    setSelected(null);
+    setFuture(items => [shape, ...items]); setShape(history[history.length - 1]); setHistory(items => items.slice(0, -1)); setSelection(NONE);
   }, [history, shape]);
   const redo = useCallback(() => {
     if (!future.length) return;
-    setHistory(items => [...items, shape]);
-    setShape(future[0]);
-    setFuture(items => items.slice(1));
-    setSelected(null);
+    setHistory(items => [...items, shape]); setShape(future[0]); setFuture(items => items.slice(1)); setSelection(NONE);
   }, [future, shape]);
 
+  // a wave regenerated elsewhere (undo / redo) keeps the wave controls in sync
+  useEffect(() => { if (shape.wave) setWaveParams(shape.wave); }, [shape.wave]);
+
+  /* ───── selection → open the precision panel ───── */
+  useEffect(() => {
+    if (selection.kind === 'none') return;
+    if (isNarrow) {
+      if (!dockOpen && autoDock.current) { setTab('node'); setDockOpen(true); }
+      else if (dockOpen && tab === 'shape') setTab('node');
+    } else if (tab === 'shape') setTab('node');
+  }, [selection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ───── keyboard ───── */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-      if ((e.key === 'Backspace' || e.key === 'Delete') && selected !== null && shape.points.length > 3) {
-        commit({ ...shape, points: shape.points.filter((_, i) => i !== selected) });
-        setSelected(null);
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+      if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if (mod && k === 'y') { e.preventDefault(); redo(); return; }
+      if (mod) return;
+      if (k === 'v') setTool('Select'); else if (k === 'p') setTool('Pen'); else if (k === 'h') setTool('Hand');
+      else if (k === '0') stageRef.current?.fit(); else if (k === '1') stageRef.current?.reset();
+      else if (k === '=' || k === '+') stageRef.current?.zoomIn(); else if (k === '-') stageRef.current?.zoomOut();
+      else if (k === 'escape') setSelection(NONE);
+      else if ((k === 'backspace' || k === 'delete') && (selection.kind === 'node' || selection.kind === 'handle')) {
+        const next = deleteNode(shape, selection.index);
+        if (next) { commit(next, NONE); } else announce('A shape needs at least ' + (shape.closed ? 3 : 2) + ' nodes');
+      } else if (k.startsWith('arrow') && (selection.kind === 'node' || selection.kind === 'handle')) {
+        e.preventDefault();
+        const step = e.shiftKey ? 10 : 1, dx = k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, dy = k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0;
+        commit(nudgeNode(shape, selection.index, dx, dy), selection);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selected, shape, commit]);
+  }, [undo, redo, selection, shape, commit, announce]);
 
-  const generate = (name: string, nextSeed = seed) => {
-    const next = makeShape(name, nextSeed);
-    if (name === 'Wave') next.points = Array.from({ length: 13 }, (_, i) => ({ x: 35 + i * 77.5, y: 300 + Math.sin(i / 12 * Math.PI * 2 * cycles) * amplitude }));
-    commit(next); setFill(next.fill); setSelected(null); setTool('Select'); setSheet(null);
+  /* ───── generators ───── */
+  const applyWave = useCallback((p: WaveParams, mode: 'live' | 'apply') => {
+    const w = clampWave(p);
+    setWaveParams(w); setSelection(NONE);
+    const next = buildWaveShape(w, fill);
+    mode === 'live' ? live(next) : commit(next);
+  }, [fill, live, commit]);
+
+  const openTab = (t: Tab) => { setTab(t); if (isNarrow) { setDockOpen(true); autoDock.current = true; } };
+  const generate = (name: string) => {
+    if (name === 'Wave') { applyWave(shape.wave ?? DEFAULT_WAVE, 'apply'); setTolerance(t => Math.min(t, 1)); openTab('wave'); setSheet(null); setTool('Select'); return; }
+    const next = makeShape(name, seed);
+    commit(next); setFill(next.fill); setSelection(NONE); setTool('Select'); setSheet(null);
   };
-  const randomize = () => { const next = seed + 17; setSeed(next); generate('Blob', next); announce('New seed · ' + next); };
-  const pointAt = (e: React.PointerEvent<SVGSVGElement>): Point => {
-    const rect = svgRef.current!.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(W, (e.clientX - rect.left) / rect.width * W)), y: Math.max(0, Math.min(H, (e.clientY - rect.top) / rect.height * H)) };
+  const randomize = () => { const n = seed + 17; setSeed(n); commit(makeShape('Blob', n)); setSelection(NONE); setSheet(null); announce('New seed · ' + n); };
+  const reset = () => { commit(makeShape('Blob', 23)); setFill('#69dfb5'); setFormat('SVG'); setSelection(NONE); announce('New shape created'); };
+  const convert = () => {
+    if (shape.kind === 'polygon') { commit({ ...shape, kind: 'path', name: `${shape.name} · path`, points: shape.points.map(p => ({ ...p, mode: 'corner' as const })) }); announce('Polygon converted to an exact path'); }
+    else { commit({ ...shape, kind: 'polygon', points: simplify(samplePath(shape.points, shape.closed), tolerance), name: `${shape.name} · polygon`, wave: undefined }); announce('Path converted to editable polygon'); }
+    setSelection(NONE);
   };
-  const startDrag = (e: React.PointerEvent<SVGCircleElement>, index: number) => {
-    e.stopPropagation(); e.preventDefault(); setSelected(index);
-    dragIndex.current = index; dragStart.current = shape;
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  const movePoint = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (dragHandle.current !== null) {
-      const { index, side } = dragHandle.current, p = pointAt(e);
-      setShape(current => ({ ...current, points: current.points.map((pt, i) => {
-        if (i !== index) return pt;
-        const opposite = side === 'in' ? 'out' : 'in';
-        return { ...pt, [side]: p, [opposite]: { x: 2 * pt.x - p.x, y: 2 * pt.y - p.y } };
-      }) }));
-      return;
-    }
-    if (dragIndex.current === null) return;
-    const p = pointAt(e);
-    setShape(current => ({ ...current, points: current.points.map((pt, i) => {
-      if (i !== dragIndex.current) return pt;
-      const dx = p.x - pt.x, dy = p.y - pt.y;
-      return { ...pt, x: p.x, y: p.y, ...(pt.in ? { in: { x: pt.in.x + dx, y: pt.in.y + dy } } : {}), ...(pt.out ? { out: { x: pt.out.x + dx, y: pt.out.y + dy } } : {}) };
-    }) }));
-  };
-  const endDrag = () => {
-    if ((dragIndex.current !== null || dragHandle.current !== null) && dragStart.current) {
-      setHistory(items => [...items.slice(-39), dragStart.current!]); setFuture([]);
-    }
-    dragIndex.current = null; dragHandle.current = null; dragStart.current = null;
-  };
-  const startHandleDrag = (e: React.PointerEvent<SVGCircleElement>, index: number, side: 'in' | 'out') => {
-    e.stopPropagation(); e.preventDefault(); setSelected(index);
-    dragHandle.current = { index, side }; dragStart.current = shape;
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  const onBoardDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (tool !== 'Pen') return;
-    const p = pointAt(e);
-    const continuing = shape.name === 'Custom path' && shape.kind === 'path' && !shape.closed;
-    const points = continuing ? [...shape.points, p] : [p];
-    const index = points.length - 1;
-    dragStart.current = shape;
-    dragHandle.current = { index, side: 'out' };
-    setShape({ ...shape, name: 'Custom path', kind: 'path', points, closed: false });
-    setSelected(index);
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
+
+  /* ───── export ───── */
+  const deferredShape = useDeferredValue(shape);
+  const wantCode = !isPhone || sheet === 'code';
+  const code = useMemo(() => (wantCode ? exportCode({ ...deferredShape, fill }, format, precision, tolerance, unit) : ''), [wantCode, deferredShape, fill, format, precision, tolerance, unit]);
+  const polygonPoints = useMemo(() => (format === 'POLYGON' && deferredShape.kind === 'path' ? simplify(samplePath(deferredShape.points, deferredShape.closed, 12), tolerance).map(p => `${p.x},${p.y}`).join(' ') : null), [format, deferredShape, tolerance]);
+
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(code); setCopied(true); announce('Copied to clipboard'); setTimeout(() => setCopied(false), 1500); }
     catch { announce('Clipboard unavailable in this browser'); }
@@ -137,47 +164,26 @@ function App() {
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `shapeforge.${ext}`; link.click(); URL.revokeObjectURL(link.href);
     announce('Export downloaded');
   };
-  const convert = () => {
-    if (shape.kind === 'polygon') {
-      update({ kind: 'path', name: `${shape.name} · smoothed` });
-      announce('Polygon converted to a smooth path');
-    } else {
-      update({ kind: 'polygon', points: simplify(samplePath(shape.points, shape.closed), tolerance), name: `${shape.name} · polygon` });
-      announce('Path converted to editable polygon');
-    }
-  };
-  const toggleClosed = () => update({ closed: !shape.closed, name: shape.closed ? 'Open path' : shape.name });
-  const mirror = (axis: 'x' | 'y') => {
-    const reflect = (p: Point): Point => axis === 'x' ? { x: W - p.x, y: p.y } : { x: p.x, y: H - p.y };
-    const pts = shape.points.map(p => ({ ...p, ...reflect(p), ...(p.out ? { in: reflect(p.out) } : {}), ...(p.in ? { out: reflect(p.in) } : {}) })).reverse();
-    commit({ ...shape, points: pts });
-  };
-  const rotate = () => {
-    const cx = shape.points.reduce((a, p) => a + p.x, 0) / shape.points.length, cy = shape.points.reduce((a, p) => a + p.y, 0) / shape.points.length;
-    const turn = (p: Point): Point => ({ x: cx - (p.y - cy), y: cy + (p.x - cx) });
-    commit({ ...shape, points: shape.points.map(p => ({ ...turn(p), ...(p.in ? { in: turn(p.in) } : {}), ...(p.out ? { out: turn(p.out) } : {}) })) });
-  };
-  const reset = () => { commit(makeShape('Blob', 23)); setFill('#69dfb5'); setFormat('SVG'); announce('New shape created'); };
-  const addPoint = () => { const pts = [...shape.points]; const a = pts[0], b = pts[1] || { x: 700, y: 300 }; pts.splice(1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); commit({ ...shape, points: pts }); setSelected(1); };
   const saveJson = () => {
-    const content = exportCode({ ...shape, fill }, 'JSON', precision, tolerance);
+    const content = exportCode({ ...shape, fill }, 'JSON', precision, tolerance, unit);
     const blob = new Blob([content], { type: 'application/json' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'shapeforge-shape.json'; link.click(); URL.revokeObjectURL(link.href);
     announce('Shape saved as JSON');
   };
-  const adjustWave = (key: 'amplitude' | 'cycles', value: number) => {
-    if (key === 'amplitude') setAmplitude(value); else setCycles(value);
-    const amp = key === 'amplitude' ? value : amplitude, cycleCount = key === 'cycles' ? value : cycles;
-    if (shape.name.toLowerCase().includes('wave')) update({ points: Array.from({ length: 13 }, (_, i) => ({ x: 35 + i * 77.5, y: 300 + Math.sin(i / 12 * Math.PI * 2 * cycleCount) * amp })) });
-  };
+  const showCode = () => { if (isPhone) setSheet('code'); else document.getElementById('output-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
 
-  const showCode = () => {
-    if (window.matchMedia('(max-width: 640px)').matches) {
-      setSheet('code');
-    } else {
-      document.getElementById('output-panel')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+  /* ───── panels ───── */
+  const panelProps = { shape, settings, setSettings, onCommit: commit, announce };
+  const renderTab = (t: Tab) => {
+    if (t === 'node') return <PrecisionPanel {...panelProps} selection={selection} onSelect={setSelection} />;
+    if (t === 'shape') return <ShapePanel {...panelProps} fill={fill} setFill={setFill} tolerance={tolerance} setTolerance={setTolerance} precision={precision} setPrecision={setPrecision} unit={unit} setUnit={setUnit} />;
+    if (t === 'wave') return <WavePanel params={waveParams} active={!!shape.wave} fill={fill} setFill={setFill} unit={unit} setUnit={setUnit} onLive={p => applyWave(p, 'live')} onLiveEnd={liveEnd} onApply={p => applyWave(p, 'apply')} />;
+    if (t === 'outer') return <BoundaryPanel shape={shape} precision={precision} onApply={s => { commit(s); setSelection(NONE); }} onLive={s => { live(s); setSelection(NONE); }} onLiveEnd={liveEnd} announce={announce} />;
+    return <EditorPanel settings={settings} set={setSettings} />;
   };
+  const tabBar = (cls: string) => <div className={cls} role="tablist" aria-label="Editor panels">
+    {TABS.map(x => <button key={x.id} role="tab" aria-selected={tab === x.id} className={`ptab ${tab === x.id ? 'active' : ''}`} onClick={() => setTab(x.id)} data-testid={`tab-panel-${x.id}`}>{x.label}</button>)}
+  </div>;
 
   const outputContent = <>
     <div className="output-top">
@@ -190,74 +196,30 @@ function App() {
     <div className="output-body"><pre className="code" data-testid="code-output">{code}</pre></div>
   </>;
 
-  const propertyPanel = <div>
-    <h2 className="properties-title">Shape properties</h2>
-    <div className="property-block">
-      <div className="property-head"><span>Geometry</span><small>{shape.points.length} nodes</small></div>
-      <label className="field-label" htmlFor="shape-name">Name</label>
-      <input className="generate-select" id="shape-name" value={shape.name} onChange={e => update({ name: e.target.value })} data-testid="input-shape-name" />
-      <div className="field-row">
-        <button className="btn" onClick={convert} data-testid="button-convert">{shape.kind === 'path' ? <Pentagon /> : <Waves />}{shape.kind === 'path' ? 'To polygon' : 'To path'}</button>
-        <button className="btn" onClick={toggleClosed} data-testid="button-close-path">{shape.closed ? 'Open path' : 'Close path'}</button>
-      </div>
-      <p className="hint">Drag an anchor on the artboard to edit geometry. Press Delete to remove a selected node.</p>
-    </div>
-    {shape.name.toLowerCase().includes('wave') && <div className="property-block">
-      <div className="property-head"><span>Wave generator</span><small>procedural</small></div>
-      <label className="field-label" htmlFor="wave-amplitude">Amplitude <span>{amplitude}px</span></label>
-      <input id="wave-amplitude" type="range" min="20" max="220" value={amplitude} onChange={e => adjustWave('amplitude', Number(e.target.value))} data-testid="range-wave-amplitude" />
-      <label className="field-label" htmlFor="wave-cycles" style={{ marginTop: 12 }}>Cycles <span>{cycles}</span></label>
-      <input id="wave-cycles" type="range" min="1" max="5" value={cycles} onChange={e => adjustWave('cycles', Number(e.target.value))} data-testid="range-wave-cycles" />
-    </div>}
-    <div className="property-block">
-      <div className="property-head"><span>Transform</span><small>normalized</small></div>
-      <div className="field-row">
-        <button className="btn" onClick={() => mirror('x')} data-testid="button-flip-x">Flip horizontal</button>
-        <button className="btn" onClick={() => mirror('y')} data-testid="button-flip-y">Flip vertical</button>
-      </div>
-      <div className="field-row">
-        <button className="btn" onClick={rotate} data-testid="button-rotate">Rotate 90°</button>
-        <button className="btn" onClick={addPoint} data-testid="button-add-node"><Plus /> Add node</button>
-      </div>
-    </div>
-    <div className="property-block">
-      <div className="property-head"><span>Appearance</span><small>live preview</small></div>
-      <div className="field-label">Fill color <span>{fill}</span></div>
-      <div className="swatch-row"><input aria-label="Shape fill color" type="color" value={fill} onChange={e => { setFill(e.target.value); }} data-testid="input-fill-color" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} data-testid="input-fill-hex" /></div>
-    </div>
-    <div className="property-block">
-      <div className="property-head"><span>Polygon conversion</span><small>{shape.points.length} → {simplified.length}</small></div>
-      <label className="field-label" htmlFor="tolerance">Simplify tolerance <span>{tolerance}</span></label>
-      <input id="tolerance" type="range" min="0" max="30" value={tolerance} onChange={e => setTolerance(Number(e.target.value))} data-testid="range-tolerance" />
-      <label className="field-label" htmlFor="precision" style={{ marginTop: 12 }}>Code precision</label>
-      <select id="precision" className="generate-select" value={precision} onChange={e => setPrecision(Number(e.target.value))} data-testid="select-precision"><option value="0">0 decimals</option><option value="1">1 decimal</option><option value="2">2 decimals</option><option value="3">3 decimals</option></select>
-    </div>
-  </div>;
-
   const toolsContent = <div>
-    <div className="panel-heading">Tools <span>01—03</span></div>
+    <div className="panel-heading">Tools <span>01—04</span></div>
     <div className="section-label">DRAW</div>
     <div className="tool-list">
-      {[['Select', MousePointer2], ['Pen', Plus]].map(([name, Icon]: any) => <button key={name} className={`tool-button ${tool === name ? 'active' : ''}`} onClick={() => setTool(name)} data-testid={`tool-${String(name).toLowerCase()}`}><Icon /><span className="tool-label">{name}</span></button>)}
+      {([['Select', MousePointer2], ['Pen', PenTool], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`tool-button ${tool === name ? 'active' : ''}`} onClick={() => { setTool(name); setSheet(null); }} data-testid={`tool-${name.toLowerCase()}`}><Icon /><span className="tool-label">{name}</span></button>)}
     </div>
     <div className="section-label">GENERATE</div>
     <div className="tool-list">
-      <button className="tool-button" onClick={() => generate('Wave')} data-testid="tool-wave"><Waves /><span className="tool-label">Wave generator</span></button>
+      <button className="tool-button" onClick={() => generate('Wave')} data-testid="tool-wave"><Waves /><span className="tool-label">Wave maker</span></button>
       <button className="tool-button" onClick={randomize} data-testid="tool-random-blob"><Sparkles /><span className="tool-label">Random blob</span></button>
+      <button className="tool-button" onClick={() => { openTab('outer'); setSheet(null); }} data-testid="tool-outer"><ScanLine /><span className="tool-label">Outer shape</span></button>
     </div>
     <div className="section-label">SHAPE LIBRARY</div>
     <div className="library-grid">{LIBRARY.map((item, i) => <button key={item} className="library-item" onClick={() => generate(item)} data-testid={`library-${item.toLowerCase()}`}><Shapes style={{ transform: `rotate(${i * 9}deg)` }} />{item}</button>)}</div>
     <div className="section-label">MODIFY</div>
     <div className="tool-list">
-      <button className="tool-button" onClick={convert} data-testid="tool-convert"><Scissors /><span className="tool-label">Path ↔ polygon</span></button>
-      <button className="tool-button" onClick={addPoint} data-testid="tool-add-node"><Plus /><span className="tool-label">Add node</span></button>
-      <button className="tool-button" onClick={toggleClosed} data-testid="tool-close-path"><RotateCcw /><span className="tool-label">{shape.closed ? 'Open path' : 'Close path'}</span></button>
+      <button className="tool-button" onClick={() => { setSelection({ kind: 'shape' }); setTool('Select'); setSheet(null); }} data-testid="tool-transform"><Move /><span className="tool-label">Transform shape</span></button>
+      <button className="tool-button" onClick={() => { convert(); setSheet(null); }} data-testid="tool-convert"><Crosshair /><span className="tool-label">Path ↔ polygon</span></button>
+      <button className="tool-button" onClick={() => { commit({ ...shape, closed: !shape.closed, name: shape.closed ? 'Open path' : shape.name }); setSheet(null); }} data-testid="tool-close-path"><Plus /><span className="tool-label">{shape.closed ? 'Open path' : 'Close path'}</span></button>
     </div>
     <p className="hint" style={{ margin: '16px 8px' }}>One shape. Every format. Geometry stays editable as you work.</p>
   </div>;
 
-  const svgD = pathFromPoints(shape.points, shape.closed, shape.kind === 'path');
-  const polygonOverlay = shape.kind === 'path' && format === 'POLYGON';
+  const hint = tool === 'Hand' ? 'DRAG TO PAN' : tool === 'Pen' ? 'TAP = NODE · DRAG = CURVE' : isNarrow ? 'PINCH ZOOM · TWO FINGERS PAN' : 'CTRL+WHEEL ZOOM · SPACE+DRAG PAN';
 
   return <main className="app-shell">
     <header className="topbar">
@@ -273,51 +235,47 @@ function App() {
       </div>
     </header>
     <section className="workspace">
-      <aside className="left-panel" aria-label="Shape tools">{toolsContent}</aside>
+      {!isPhone && <aside className="left-panel" aria-label="Shape tools">{toolsContent}</aside>}
       <section className="canvas-column" aria-label="Shape preview">
         <div className="canvas-toolbar">
           <div className="canvas-meta"><span className="live-dot" /><span>ARTBOARD</span><span style={{ color: '#58636e' }}>/</span><span>1000 × 600</span></div>
           <div className="canvas-actions">
+            <button className={`icon-btn ${settings.snapOn ? 'active' : ''}`} aria-label="Toggle snapping" aria-pressed={settings.snapOn} title="Snapping" onClick={() => setSettings({ snapOn: !settings.snapOn })} data-testid="button-toggle-snap"><Magnet /></button>
             <button className={`icon-btn ${grid ? 'active' : ''}`} aria-label="Toggle grid" title="Toggle grid" onClick={() => setGrid(!grid)} data-testid="button-toggle-grid"><Grid2X2 /></button>
+            <button className={`icon-btn ${selection.kind === 'shape' ? 'active' : ''}`} aria-label="Transform whole shape" title="Transform shape" onClick={() => { setSelection(selection.kind === 'shape' ? NONE : { kind: 'shape' }); setTool('Select'); }} data-testid="button-transform"><Move /></button>
             <button className="icon-btn" aria-label="Undo" title="Undo" onClick={undo} disabled={!history.length} data-testid="button-undo-canvas"><Undo2 /></button>
             <button className="icon-btn" aria-label="Redo" title="Redo" onClick={redo} disabled={!future.length} data-testid="button-redo-canvas"><Redo2 /></button>
           </div>
         </div>
         <div className="artboard-wrap">
-          <div className="artboard" style={{ backgroundImage: grid ? undefined : 'none' }}>
-            <svg ref={svgRef} className="shape-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${shape.name} shape preview`} onPointerMove={movePoint} onPointerUp={endDrag} onPointerCancel={endDrag} onPointerDown={onBoardDown} data-testid="shape-preview">
-              {polygonOverlay ? <polygon className="shape-fill" style={{ fill }} points={simplified.map(p => `${p.x},${p.y}`).join(' ')} /> :
-                <path className="shape-fill" d={svgD} style={{ fill }} />}
-              {shape.points.map((p, i) => <g key={i}>
-                {selected === i && <circle cx={p.x} cy={p.y} r="12" fill="none" stroke="#83edc8" strokeDasharray="2 3" opacity=".8" />}
-                {selected === i && shape.kind === 'path' && (() => {
-                  const handles = getHandles(shape.points, i, shape.closed);
-                  return <g>
-                    <line className="node-line" x1={p.x} y1={p.y} x2={handles.in.x} y2={handles.in.y} />
-                    <line className="node-line" x1={p.x} y1={p.y} x2={handles.out.x} y2={handles.out.y} />
-                    <circle cx={handles.in.x} cy={handles.in.y} r="4" fill="#283b34" stroke="#b8f6df" strokeWidth="1.5" onPointerDown={e => startHandleDrag(e, i, 'in')} data-testid={`handle-in-${i}`} />
-                    <circle cx={handles.out.x} cy={handles.out.y} r="4" fill="#283b34" stroke="#b8f6df" strokeWidth="1.5" onPointerDown={e => startHandleDrag(e, i, 'out')} data-testid={`handle-out-${i}`} />
-                  </g>;
-                })()}
-                <circle className={`node ${selected === i ? 'selected' : ''}`} cx={p.x} cy={p.y} r="5.5" onPointerDown={e => startDrag(e, i)} onClick={() => setSelected(i)} data-testid={`node-${i}`} />
-              </g>)}
-            </svg>
-          </div>
+          <Stage ref={stageRef} shape={shape} fill={fill} tool={tool} selection={selection} settings={settings} showGrid={grid} polygonPoints={polygonPoints}
+            onSelect={setSelection} onPreview={setShape} onGestureEnd={pushHistory} onCommit={commit} />
         </div>
-        <div className="canvas-foot"><span>↗ DRAG NODES TO EDIT</span><span>{shape.kind.toUpperCase()} · {shape.points.length} POINTS</span></div>
+        <div className="canvas-foot"><span>{hint}</span><span>{shape.kind.toUpperCase()} · {shape.points.length} POINTS</span></div>
       </section>
-      <aside className="right-panel" aria-label="Shape properties">{propertyPanel}</aside>
+      {!isNarrow && <aside className="right-panel" aria-label="Shape properties">{tabBar('panel-tabs')}<div className="panel-body">{renderTab(tab)}</div></aside>}
     </section>
-    <nav className="mobile-tools" aria-label="Mobile editing controls">
-      <button className="btn" onClick={() => setSheet(sheet === 'tools' ? null : 'tools')} data-testid="button-open-tools"><Shapes /> Shapes</button>
-      <button className="btn" onClick={() => setSheet(sheet === 'properties' ? null : 'properties')} data-testid="button-open-properties"><SlidersHorizontal /> Edit</button>
-      <button className="btn" onClick={undo} disabled={!history.length} data-testid="button-mobile-undo"><Undo2 /> Undo</button>
-      <button className="btn primary" onClick={() => setSheet(sheet === 'code' ? null : 'code')} data-testid="button-mobile-copy"><Copy /> Code</button>
+    {isNarrow && dockOpen && <section className={`dock ${dockTall ? 'tall' : ''}`} aria-label="Editor panel">
+      <div className="dock-bar">
+        {tabBar('dock-tabs')}
+        <button className="icon-btn" onClick={() => setDockTall(!dockTall)} aria-label={dockTall ? 'Shrink panel' : 'Expand panel'} data-testid="dock-size"><ChevronUp style={{ transform: dockTall ? 'rotate(180deg)' : undefined }} /></button>
+        <button className="icon-btn" onClick={() => { setDockOpen(false); autoDock.current = false; }} aria-label="Close panel" data-testid="dock-close"><X /></button>
+      </div>
+      <div className="dock-body">{renderTab(tab)}</div>
+    </section>}
+    <nav className="mobile-tools" aria-label="Editing controls">
+      {([['Select', MousePointer2], ['Pen', PenTool], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`mt-btn ${tool === name ? 'active' : ''}`} onClick={() => setTool(name)} aria-pressed={tool === name} data-testid={`mobile-tool-${name.toLowerCase()}`}><Icon /><span>{name}</span></button>)}
+      <i className="mt-sep" />
+      <button className="mt-btn" onClick={undo} disabled={!history.length} data-testid="button-mobile-undo"><Undo2 /><span>Undo</span></button>
+      <button className="mt-btn" onClick={redo} disabled={!future.length} data-testid="button-mobile-redo"><Redo2 /><span>Redo</span></button>
+      <i className="mt-sep" />
+      <button className={`mt-btn ${dockOpen && tab === 'node' ? 'active' : ''}`} onClick={() => { if (dockOpen && tab === 'node') { setDockOpen(false); autoDock.current = false; } else { setTab('node'); setDockOpen(true); autoDock.current = true; } }} data-testid="button-open-node"><Crosshair /><span>Node</span></button>
+      <button className="mt-btn" onClick={() => setSheet(sheet === 'tools' ? null : 'tools')} data-testid="button-open-tools"><Shapes /><span>Shapes</span></button>
+      <button className={`mt-btn ${dockOpen && tab !== 'node' ? 'active' : ''}`} onClick={() => { if (dockOpen && tab !== 'node') { setDockOpen(false); autoDock.current = false; } else { setTab(tab === 'node' ? 'shape' : tab); setDockOpen(true); } }} data-testid="button-open-properties"><SlidersHorizontal /><span>Edit</span></button>
+      <button className="mt-btn accent" onClick={() => setSheet(sheet === 'code' ? null : 'code')} data-testid="button-mobile-copy"><Code2 /><span>Code</span></button>
     </nav>
-    <section className="output-panel" id="output-panel" aria-label="Code output">
-      {outputContent}
-    </section>
-    {sheet && <div className="sheet-backdrop" onClick={() => setSheet(null)} role="presentation"><section className={`mobile-sheet ${sheet === 'code' ? 'code-sheet' : ''}`} role="dialog" aria-modal="true" aria-label={sheet === 'tools' ? 'Shape tools' : sheet === 'properties' ? 'Shape properties' : 'Code output'} onClick={e => e.stopPropagation()}><div className="sheet-grab" /><button className="icon-btn sheet-close" onClick={() => setSheet(null)} aria-label="Close panel" data-testid="button-close-sheet"><X /></button>{sheet === 'tools' ? toolsContent : sheet === 'properties' ? propertyPanel : <div className="mobile-code-sheet">{outputContent}</div>}</section></div>}
+    {!isPhone && <section className="output-panel" id="output-panel" aria-label="Code output">{outputContent}</section>}
+    {sheet && <div className="sheet-backdrop" onClick={() => setSheet(null)} role="presentation"><section className={`mobile-sheet ${sheet === 'code' ? 'code-sheet' : ''}`} role="dialog" aria-modal="true" aria-label={sheet === 'tools' ? 'Shape tools' : 'Code output'} onClick={e => e.stopPropagation()}><div className="sheet-grab" /><button className="icon-btn sheet-close" onClick={() => setSheet(null)} aria-label="Close panel" data-testid="button-close-sheet"><X /></button>{sheet === 'tools' ? toolsContent : <div className="mobile-code-sheet">{outputContent}</div>}</section></div>}
     {toast && <div className="toast-note" role="status" data-testid="status-toast">{toast}</div>}
   </main>;
 }
