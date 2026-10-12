@@ -1,0 +1,1 @@
+- [Type-safe segmented controls](segmented-controls.md) — Keep option IDs aligned with the selected value's literal union; narrow mixed model types to the valid options.

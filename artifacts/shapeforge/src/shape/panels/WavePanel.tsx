@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { RotateCcw, Shuffle } from 'lucide-react';
-import { UNITS, type Unit } from '../geometry';
+import { UNITS, type Unit } from '../../lib/shape/geometry';
 import {
   ARCH_SHAPES, AUTO_STYLES, DEFAULT_WAVE, ENVELOPES, WAVE_RANGES, WAVE_TYPES, autoPointCount, autoWaveParams, waveLine, type WaveParams,
-} from '../wave';
-import { Section, Seg, Switch, ValueControl } from './controls';
+} from '../../lib/shape/wave';
+import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
 
 type Props = {
   params: WaveParams; active: boolean;
@@ -49,7 +49,7 @@ export default function WavePanel({ params, active, fill, setFill, unit, setUnit
       <h2 className="properties-title">Wave maker</h2>
       <span className={`pill ${active ? 'on' : ''}`}>{active ? 'live' : 'not applied'}</span>
     </div>
-    <Seg<'auto' | 'manual'> value={tab} label="Wave mode" testId="wave-tabs" options={[{ id: 'auto', label: 'Auto' }, { id: 'manual', label: 'Manual' }]} onChange={setTab} />
+    <Seg value={tab} label="Wave mode" testId="wave-tabs" options={[{ id: 'auto', label: 'Auto' }, { id: 'manual', label: 'Manual' }]} onChange={setTab} />
 
     {tab === 'auto' && <div className="wave-auto">
       <div className="style-grid" role="radiogroup" aria-label="Wave style">

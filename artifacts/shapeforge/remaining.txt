@@ -1,0 +1,76 @@
+SHAPEFORGE — REMAINING WORK
+===========================
+
+WHAT IS DONE AND WIRED IN (works in the app today)
+--------------------------------------------------
+Gradient Studio  (src/gradient/…)  — opened from the "Create Gradient" button in the top bar
+  - Layers (linear / radial / conic / MESH / GRAIN), per-layer opacity + 17 blend modes, drag-reorder, duplicate, hide
+  - Mesh gradients with movable colour points (drag on canvas, resize handle, double-tap empty canvas to add a point,
+    colour/opacity/size per point, core/falloff, layouts, random colours, "Float points" drift animation)
+  - Noise / grain overlay layer (SVG feTurbulence tile; presets; works in CSS, SVG and PNG)
+  - Conic gradients: start-angle handle + dial, "Spin" switch (continuous rotation via @property), animation tracks
+  - Multi-layer Aurora builder, Atmosphere builder (sky, sun glow, haze, clouds, rays, grain), Mesh builder  (Scenes tab)
+  - Colour stops: add by tapping the bar, drag, hard edges, midpoint hints, reverse, distribute, OKLab/OKLCH interpolation
+  - Effects (blur, brightness, contrast, saturation, hue, grayscale, SVG distortion) and per-layer animation tracks
+  - 300 presets (Repeating = 100 background patterns) with small live preview cards, search, categories
+  - Output: CSS (Full rule / Properties only), HTML + CSS (Copy all / Copy CSS / Copy HTML), Variables, SVG (+PNG), Keyframes, JSON
+    * organised, commented, multi-line code; your own class / id / attribute name and layer prefix
+    * manual width / height (units + height or min-height) instead of hard-coded sizes
+    * LIVE CSS for every layer (Layers tab) — identical to the exported code
+  - "Apply to Shape" → SVG fill / SVG stroke / CSS background; shape exports (SVG, HTML+CSS, React) include the gradient
+
+ShapeForge library work finished (src/lib/shape/…)
+  - Compound paths (extra rings + fill-rule evenodd) supported by every export format:
+    SVG, SVG PATH, CSS PATH (path(evenodd,…)), POLYGON (polygon(evenodd,…) with a zero-width bridge), REACT, HTML + CSS, JSON
+  - compound.ts → computeOuterPath(): "outer path" = page rectangle minus the shapes (exact path with holes when shapes are
+    inside the page, computed polygon when they touch/cross the page edge or each other) + outerShape() helper
+  - Point.locked, multi-selection helpers (toggleInSelection, selectAllNodes, setNodesLocked, deleteNodes, moveNodesBy)
+  - Multi-select + "Lock this node" in the node panel (PrecisionPanel) already work for the multi-node selection state
+
+WRITTEN BUT NOT WIRED INTO THE UI YET
+-------------------------------------
+  - src/shape/state/document.ts + useDocument.ts      pages -> shapes document with undo/redo (pure, ready)
+  - src/shape/canvas/StaticShape.tsx                  draws the non-active shapes of a page
+  - src/shape/canvas/NodeMenu.tsx / NodeBar.tsx       compact double-tap node menu + multi-select bar (components only)
+  - src/lib/shape/paintMarkup.ts                      per-shape unique gradient ids for many painted shapes
+
+REMAINING FUNCTIONALITY (in priority order)
+-------------------------------------------
+1. MULTIPLE SHAPES ON ONE PAGE + ADD PAGE
+   - Replace the single `shape` state in App.tsx with useDocument() (shape = active shape, page, doc).
+   - Stage.tsx: add props `others`, `onPickShape`, `onAddShape`; render others with <StaticShape/>; tapping another shape's
+     body selects it (pointInShape() already exists in lib/shape/edit.ts); remove the global `fill` prop and use shape.fill.
+   - Page tabs row above the canvas: Page 1 | Page 2 | + (rename on double-click, delete).
+   - "Page" panel: list of shapes on the page (select, hide, lock, duplicate, delete, reorder) + add shape from the library.
+   - Generators (library / wave / blob) must ADD a new shape to the page instead of replacing the current one.
+   - Pen tool: starting a new path must add a new shape (use onAddShape) instead of replacing the active shape.
+   - New export format "PAGE SVG" (all shapes of the page in one SVG).
+2. NODE OPTIONS ON DOUBLE-CLICK / DOUBLE-TAP
+   - Stage.tsx handleTap: on a double tap of a node open <NodeMenu/> (select/unselect, lock/unlock, corner↔smooth, delete).
+   - Multi-select: Shift/Ctrl+click and a "multi" toggle (NodeBar) to add/remove nodes; selection kind 'nodes' rings on canvas.
+   - Group drag (move all selected unlocked nodes together — moveNodesBy() is ready), locked nodes drawn with an amber ring,
+     locked nodes ignore drag/delete (pan instead), Delete/Backspace applies to the whole selection, Ctrl+A selects all.
+   - CSS for .node-menu / .node-bar / .nm-btn / .nm-count / .nb-count (small icon-only buttons) in index.css.
+3. OUTER PATH PANEL (UI for the already-finished maths)
+   - Panel/section: "Outer path of this page" — source: all shapes / selected shape, option to hide sources, button
+     "Create outer path" → computeOuterPath(shapes) → outerShape() → add as a new shape (derived:'outer', evenodd).
+   - Show the notes returned (exact vs computed). All export formats already work for the result.
+   - Derived shapes: hide node dots/handles (read-only geometry), allow move/scale/rotate only.
+   - Stage.tsx + StaticShape: render compound paths with pathOfShape() and fillRule instead of pathFromPoints(shape.points).
+   - Rename the existing "Outer" tab (paste polygon()/SVG → outline) to "Outline" so the two features are not confused.
+4. FOLDER CLEAN-UP OF App.tsx
+   - Split App.tsx into src/shape/ShapeEditor.tsx + layout/ (TopBar, ToolsPanel, OutputPanel, MobileBar, EditorDock, PageTabs)
+     + state hooks (useShortcuts, useStudioRoute, useToast). App.tsx should only mount <ShapeEditor/>.
+5. VERIFY ON YOUR MACHINE
+   - Run `npm run typecheck` and `npm run build` — the code was type-checked here with stand-in React/lucide typings and
+     bundled with esbuild; the real project build was not run. Fix any strict-mode typing nits that appear.
+   - The last additions (compound exports, document model, NodeMenu/NodeBar) were NOT browser-tested.
+   - Check conic gradients + CSS @property animation in Safari/Firefox (supported in current versions); PNG export of conic
+     needs createConicGradient (Safari 16.4+).
+
+NOTES
+-----
+  - Folder layout:  src/lib/shape/ (pure logic) · src/shape/ (ShapeForge UI) · src/gradient/engine/ (gradient logic)
+                    src/gradient/components/ (studio UI) · src/shared/ (controls, hooks)
+  - Gradient Studio is lazy-loaded (separate chunk) and reachable at the URL hash #gradient (browser Back closes it).
+  - Studio project autosaves in localStorage ("shapeforge.gradient.v1"); editor settings in "shapeforge.editor.v1".

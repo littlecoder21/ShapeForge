@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Check, Copy, ScanLine } from 'lucide-react';
-import { H, W } from '../constants';
-import { extractOuterShape, nodesToRing, parseShapeInput, ringsToPath, roundCorners, type CompoundPath } from '../boundary';
-import { fmt, pathFromPoints, type Point, type ShapeModel } from '../geometry';
-import { ValueControl } from './controls';
+import { H, W } from '../../lib/shape/constants';
+import { extractOuterShape, nodesToRing, parseShapeInput, ringsToPath, roundCorners, type CompoundPath } from '../../lib/shape/boundary';
+import { fmt, pathFromPoints, type Point, type ShapeModel } from '../../lib/shape/geometry';
+import { ValueControl } from '../../shared/controls';
 
 const EXAMPLE = 'polygon(\n  0 0,\n  85% 0,\n  85% 50%,\n  100% 50%,\n  100% 100%,\n  0 100%\n)';
 const RADII = [0, 10, 25, 50];

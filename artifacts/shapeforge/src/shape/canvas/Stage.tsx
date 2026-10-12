@@ -1,14 +1,15 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
-import { H, W } from '../constants';
-import { fmt, getHandles, isStraightSegment, pathFromPoints, shapeBounds, type Box, type Point, type ShapeModel } from '../geometry';
+import { H, W } from '../../lib/shape/constants';
+import { fmt, frameOf, getHandles, isStraightSegment, pathFromPoints, shapeBounds, translatePoints, type Box, type Point, type ShapeModel } from '../../lib/shape/geometry';
+import { paintShowsFill, paintSvgParts } from '../../lib/shape/paint';
 import {
   angleDeg, boundsCenter, dist, handlePolar, hitTest, insertOnSegment, matRotateAbout, matTranslate, moveHandle, moveNodeTo, neighborOf,
   partPoint, partOffsetPx, scaleFromHandle, selectedNode, setNodeMode, snapHandle, snapNode, snapTranslate, transformShape, BBOX_PARTS,
   type BBoxPart, type Guide, type Hit, type PointerKind, type Selection, type Tool,
-} from '../edit';
-import type { EditorSettings } from '../settings';
-import { clampViewport, fitViewport, fitZoom, nextStop, pinchViewport, screenToCanvas, zoomAt, type V2, type Viewport } from '../viewport';
+} from '../../lib/shape/edit';
+import type { EditorSettings } from '../../lib/shape/settings';
+import { clampViewport, fitViewport, fitZoom, nextStop, pinchViewport, screenToCanvas, zoomAt, type V2, type Viewport } from '../../lib/shape/viewport';
 
 export type StageHandle = { zoomIn(): void; zoomOut(): void; reset(): void; fit(): void };
 
@@ -62,9 +63,12 @@ const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor }: { s
   </g>;
 });
 
-const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, dots, nodeSize }: { d: string; polygonPoints: string | null; dots: string; nodeSize: number }) {
+type Painted = { defs: string; body: string; x: number; y: number };
+const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, dots, nodeSize, painted }: { d: string; polygonPoints: string | null; dots: string; nodeSize: number; painted: Painted | null }) {
+  const cls = `shape-fill${painted ? ' painted' : ''}`;
   return <g>
-    {polygonPoints ? <polygon className="shape-fill" points={polygonPoints} /> : <path className="shape-fill" d={d} />}
+    {painted && <g transform={`translate(${painted.x} ${painted.y})`} pointerEvents="none"><defs dangerouslySetInnerHTML={{ __html: painted.defs }} /><g dangerouslySetInnerHTML={{ __html: painted.body }} /></g>}
+    {polygonPoints ? <polygon className={cls} points={polygonPoints} /> : <path className={cls} d={d} />}
     <path className="dots-ring" d={dots} style={{ strokeWidth: nodeSize + 4 }} />
     <path className="dots-fill" d={dots} style={{ strokeWidth: nodeSize }} />
   </g>;
@@ -386,6 +390,12 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   const d = useMemo(() => pathFromPoints(shape.points, shape.closed, shape.kind === 'path'), [shape.points, shape.closed, shape.kind]);
   const dots = useMemo(() => shape.points.map(p => `M${p.x} ${p.y}h.01`).join(''), [shape.points]);
   const bounds = useMemo(() => (selection.kind === 'shape' ? shapeBounds(shape) : null), [selection.kind, shape]);
+  const painted = useMemo<Painted | null>(() => {
+    const pa = shape.paint;
+    if (!pa || !(paintShowsFill(pa) || pa.stroke)) return null;
+    const frame = frameOf(shape), local = translatePoints(shape.points, -frame.x, -frame.y);
+    return { ...paintSvgParts(pa, pathFromPoints(local, shape.closed, shape.kind === 'path'), frame, shape.strokeWidth), x: frame.x, y: frame.y };
+  }, [shape.paint, shape.points, shape.closed, shape.kind, shape.box, shape.frame, shape.strokeWidth]); // eslint-disable-line react-hooks/exhaustive-deps
   const selIdx = selectedNode(selection);
   const selPoint = selIdx !== null ? shape.points[selIdx] : undefined;
   const handles = selPoint && shape.kind === 'path' ? getHandles(shape.points, selIdx!, shape.closed) : null;
@@ -398,7 +408,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
       <g ref={gRef}>
         <ArtboardLayer showGrid={props.showGrid} step={gridStep} minor={showMinor} />
         {shape.box && (shape.frame ?? 'box') === 'box' && <rect className="frame-box" x={shape.box.x} y={shape.box.y} width={shape.box.w} height={shape.box.h} />}
-        <ShapeLayer d={d} polygonPoints={props.polygonPoints} dots={dots} nodeSize={settings.nodeSize} />
+        <ShapeLayer d={d} polygonPoints={props.polygonPoints} dots={dots} nodeSize={settings.nodeSize} painted={painted} />
         {selection.kind === 'segment' && shape.points[selection.index] && <path className="seg-sel" d={segmentPath(shape, selection.index)} />}
         {bounds && <g>
           <rect className="bbox" x={bounds.x} y={bounds.y} width={bounds.w} height={bounds.h} />

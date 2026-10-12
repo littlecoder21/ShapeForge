@@ -246,3 +246,10 @@ input[type=range] { accent-color:#69dfb5; width:100%; height:3px; }
 }
 @media (min-width: 901px) and (max-width: 1180px) { .workspace { grid-template-columns:176px minmax(0,1fr) 280px; } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
+
+/* ───── gradient entry + painted shapes ───── */
+.shape-fill.painted { fill: transparent; }
+.gradient-btn { gap: 7px; background: linear-gradient(135deg, #4f46e5, #db2777); border-color: #ffffff30; color: #fff; }
+.gradient-btn svg { width: 15px; height: 15px; }
+.gs-loading { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: #181b20; color: #8a949f; font: 12px var(--app-font-mono, monospace); }
+@media (max-width: 460px) { .cg-long { display: none; } .gradient-btn { padding: 0 11px; } }

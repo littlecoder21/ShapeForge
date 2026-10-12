@@ -210,7 +210,7 @@ function ringSegments(ring: Ring, closed: boolean): [V, V][] {
 }
 
 /** Parameter t on (a,b) where it meets (c,d); returns every t in [0,1] (two for collinear overlap). */
-function splitParams(a: V, b: V, c: V, d: V): number[] {
+export function splitParams(a: V, b: V, c: V, d: V): number[] {
   const r = { x: b.x - a.x, y: b.y - a.y }, s = { x: d.x - c.x, y: d.y - c.y };
   const den = r.x * s.y - r.y * s.x, ac = { x: c.x - a.x, y: c.y - a.y };
   const len2 = r.x * r.x + r.y * r.y;

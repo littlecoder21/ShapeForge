@@ -1,6 +1,6 @@
 import { RotateCcw } from 'lucide-react';
-import { DEFAULT_SETTINGS, type EditorSettings } from '../settings';
-import { Section, Seg, Switch, ValueControl } from './controls';
+import { DEFAULT_SETTINGS, type EditorSettings } from '../../lib/shape/settings';
+import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
 
 const STEPS = [5, 10, 15, 22.5, 30, 45, 90];
 

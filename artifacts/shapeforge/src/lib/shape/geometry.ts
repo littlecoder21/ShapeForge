@@ -1,6 +1,8 @@
 import { H, W } from './constants';
 import { buildWaveShape, DEFAULT_WAVE } from './wave';
 import type { WaveParams } from './wave';
+import { paintCss, paintShowsFill, paintSvgParts } from './paint';
+import type { ShapePaint } from './paint';
 
 export { H, W };
 
@@ -15,13 +17,16 @@ export { H, W };
  *  free      – explicit handles, fully independent
  */
 export type NodeMode = 'auto' | 'corner' | 'smooth' | 'symmetric' | 'free';
-export type Point = { x: number; y: number; in?: Point; out?: Point; mode?: NodeMode };
+export type Point = { x: number; y: number; in?: Point; out?: Point; mode?: NodeMode; /** a locked node cannot be dragged, nudged or deleted */ locked?: boolean };
 export type ShapeKind = 'path' | 'polygon';
 export type Box = { x: number; y: number; w: number; h: number };
 /** Which rectangle exports are measured against. */
 export type FrameMode = 'artboard' | 'bounds' | 'box';
 export type Unit = '%' | 'px' | 'rem' | 'em' | 'vw' | 'vh';
+export type FillRule = 'nonzero' | 'evenodd';
 export type ShapeModel = {
+  /** assigned by the document when the shape is added to a page */
+  id?: string;
   name: string;
   kind: ShapeKind;
   points: Point[];
@@ -34,7 +39,20 @@ export type ShapeModel = {
   frame?: FrameMode;
   /** Parameters of the procedural wave this shape was generated from (cleared once edited by hand). */
   wave?: WaveParams;
+  /** gradient applied from Gradient Studio */
+  paint?: ShapePaint;
+  /** hidden on the canvas (still on the page) */
+  hidden?: boolean;
+  /** shape-level lock: no node editing or transforming */
+  locked?: boolean;
+  /** further sub-paths (holes). `points` is the main ring; the shape is one compound path. */
+  extra?: Point[][];
+  fillRule?: FillRule;
+  /** 'outer' = computed complement of the page's shapes (read-only geometry) */
+  derived?: 'outer';
 };
+
+export const ringsOf = (s: Pick<ShapeModel, 'points' | 'extra'>): Point[][] => [s.points, ...(s.extra ?? [])];
 
 export const UNITS: Unit[] = ['%', 'px', 'rem', 'em', 'vw', 'vh'];
 
@@ -148,14 +166,22 @@ export function shapeOutline(shape: Pick<ShapeModel, 'points' | 'closed' | 'kind
   return shape.kind === 'path' ? samplePath(shape.points, shape.closed, steps) : shape.points.map(p => ({ x: p.x, y: p.y }));
 }
 
+/** One SVG path string for all rings of a shape. */
+export function pathOfShape(shape: Pick<ShapeModel, 'points' | 'extra' | 'closed' | 'kind'>, precision = 1) {
+  return ringsOf(shape).map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');
+}
+
 export function boundsOf(pts: { x: number; y: number }[]): Box {
   if (!pts.length) return { x: 0, y: 0, w: 0, h: 0 };
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of pts) { if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x; if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
-export function shapeBounds(shape: Pick<ShapeModel, 'points' | 'closed' | 'kind'>): Box {
-  return boundsOf(shapeOutline(shape, 16));
+export function outlineRings(shape: Pick<ShapeModel, 'points' | 'closed' | 'kind' | 'extra'>, steps = 12): Point[][] {
+  return ringsOf(shape).map(r => (shape.kind === 'path' ? samplePath(r, shape.closed, steps) : r.map(p => ({ x: p.x, y: p.y }))));
+}
+export function shapeBounds(shape: Pick<ShapeModel, 'points' | 'closed' | 'kind' | 'extra'>): Box {
+  return boundsOf(outlineRings(shape, 16).flat());
 }
 
 export function mapPoints(points: Point[], fn: (p: { x: number; y: number }) => { x: number; y: number }): Point[] {
@@ -207,30 +233,49 @@ export function frameOf(shape: ShapeModel): Box {
 export function polygonToCss(points: Point[], percentage = true, precision = 1) {
   return `clip-path: polygon(${points.map(p => `${fmt(percentage ? p.x / W * 100 : p.x, precision)}${percentage ? '%' : 'px'} ${fmt(percentage ? p.y / H * 100 : p.y, precision)}${percentage ? '%' : 'px'}`).join(', ')});`;
 }
-export function polygonToCssUnits(points: Point[], frame: Box, unit: Unit, precision = 1) {
+export function polygonToCssUnits(points: Point[], frame: Box, unit: Unit, precision = 1, evenodd = false) {
   const conv = (v: number, size: number) => {
     if (unit === '%') return `${fmt(v / size * 100, precision)}%`;
     if (unit === 'vw' || unit === 'vh') return `${fmt(v / size * 100, precision)}${unit}`;
     if (unit === 'rem' || unit === 'em') return `${fmt(v / 16, Math.max(precision, 2))}${unit}`;
     return `${fmt(v, precision)}px`;
   };
-  return `clip-path: polygon(${points.map(p => `${conv(p.x, frame.w)} ${conv(p.y, frame.h)}`).join(', ')});`;
+  return `clip-path: polygon(${evenodd ? 'evenodd, ' : ''}${points.map(p => `${conv(p.x, frame.w)} ${conv(p.y, frame.h)}`).join(', ')});`;
+}
+
+/** One polygon from several rings: each extra ring is joined to the first by a zero-width bridge (use fill-rule evenodd). */
+export function chainRings<T extends { x: number; y: number }>(rings: T[][]): T[] {
+  if (rings.length <= 1) return rings[0] ?? [];
+  const main = rings[0], out: T[] = [...main, main[0]];
+  for (let i = 1; i < rings.length; i++) out.push(...rings[i], rings[i][0], main[0]);
+  return out;
 }
 
 export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 8, unit: Unit = '%') {
   const frame = frameOf(shape);
-  const local = translatePoints(shape.points, -frame.x, -frame.y);
-  const d = pathFromPoints(local, shape.closed, shape.kind === 'path', precision);
-  const sampled = simplify(shape.kind === 'path' ? samplePath(local, shape.closed, 12) : local, tolerance);
-  const poly = polygonToCssUnits(sampled, frame, unit, precision);
+  const rings = ringsOf(shape).map(r => translatePoints(r, -frame.x, -frame.y));
+  const smooth = shape.kind === 'path', evenodd = shape.fillRule === 'evenodd';
+  const d = rings.map(r => pathFromPoints(r, shape.closed, smooth, precision)).join(' ');
+  const sampled = chainRings(rings.map(r => simplify(smooth ? samplePath(r, shape.closed, 12) : r, tolerance)));
+  const poly = polygonToCssUnits(sampled, frame, unit, precision, evenodd);
   const vb = `0 0 ${fmt(frame.w, precision)} ${fmt(frame.h, precision)}`;
   const par = shape.wave ? ' preserveAspectRatio="none"' : '';
-  const svg = `<svg viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}" />\n</svg>`;
+  const rule = evenodd ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
+  let svg = `<svg viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
+  if (shape.paint && (paintShowsFill(shape.paint) || shape.paint.stroke)) {
+    const pp = paintSvgParts(shape.paint, d, frame, shape.strokeWidth);
+    const outline = shape.paint.stroke ? '' : '';
+    svg = `<svg viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(shape.paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
+  }
   const ratio = `${fmt(frame.w, 1)} / ${fmt(frame.h, 1)}`;
   if (format === 'SVG') return svg;
-  if (format === 'SVG PATH') return `d="${d}"`;
-  if (format === 'CSS PATH') return `/* path() is px-based and does not scale: size the element ${fmt(frame.w, 0)}×${fmt(frame.h, 0)}px, or use POLYGON for fluid sizing */\nclip-path: path("${d}");`;
+  if (format === 'SVG PATH') return evenodd ? `d="${d}"\nfill-rule="evenodd"` : `d="${d}"`;
+  if (format === 'CSS PATH') return `/* path() is px-based and does not scale: size the element ${fmt(frame.w, 0)}×${fmt(frame.h, 0)}px, or use POLYGON for fluid sizing */\nclip-path: path(${evenodd ? 'evenodd, ' : ''}"${d}");`;
   if (format === 'POLYGON') return poly;
+  if (shape.paint?.css && (format === 'REACT' || format === 'HTML + CSS')) {
+    const pc = paintCss(shape.paint, ratio, poly);
+    return format === 'REACT' ? `export function Shape() {\n  return (\n${pc.html.split('\n').map(l => `    ${l.replace('class=', 'className=')}`).join('\n')}\n  );\n}\n\n/* shape.css */\n${pc.css}` : `${pc.html}\n\n<style>\n${pc.css}\n</style>`;
+  }
   if (format === 'REACT') return `export function Shape() {\n  return <div className="shape" />;\n}\n\n/* shape.css */\n.shape {\n  width: 100%;\n  aspect-ratio: ${ratio};\n  ${poly}\n  background: ${shape.fill};\n}`;
   if (format === 'HTML + CSS') return `<div class="shape"></div>\n\n<style>\n.shape {\n  width: 100%;\n  aspect-ratio: ${ratio};\n  ${poly}\n  background: ${shape.fill};\n}\n</style>`;
   if (format === 'JSON') {
@@ -238,9 +283,11 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
     const pt = (p: Point) => ({ x: r(p.x), y: r(p.y) });
     return JSON.stringify({
       name: shape.name, kind: shape.kind, viewBox: [W, H], closed: shape.closed, fill: shape.fill, stroke: shape.stroke, strokeWidth: shape.strokeWidth,
+      ...(shape.fillRule ? { fillRule: shape.fillRule } : {}), ...(shape.derived ? { derived: shape.derived } : {}),
       ...(shape.box ? { box: { x: r(shape.box.x), y: r(shape.box.y), w: r(shape.box.w), h: r(shape.box.h) } } : {}),
       ...(shape.wave ? { wave: shape.wave } : {}),
-      points: shape.points.map(p => ({ ...pt(p), ...(p.mode ? { mode: p.mode } : {}), ...(p.in ? { in: pt(p.in) } : {}), ...(p.out ? { out: pt(p.out) } : {}) })),
+      points: shape.points.map(p => ({ ...pt(p), ...(p.mode ? { mode: p.mode } : {}), ...(p.locked ? { locked: true } : {}), ...(p.in ? { in: pt(p.in) } : {}), ...(p.out ? { out: pt(p.out) } : {}) })),
+      ...(shape.extra?.length ? { extra: shape.extra.map(ring => ring.map(p => ({ ...pt(p), ...(p.mode ? { mode: p.mode } : {}), ...(p.in ? { in: pt(p.in) } : {}), ...(p.out ? { out: pt(p.out) } : {}) }))) } : {}),
     }, null, 2);
   }
   return svg;

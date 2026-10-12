@@ -19,14 +19,14 @@ export const pxToUnits = (v: Viewport, px: number) => px / v.zoom;
 
 export const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-export function fitZoom(sw: number, sh: number) {
+export function fitZoom(sw: number, sh: number, aw = W, ah = H) {
   if (sw <= 0 || sh <= 0) return 1;
   const pad = Math.min(28, Math.max(10, sw * 0.04));
-  return clampZoom(Math.min((sw - pad * 2) / W, (sh - pad * 2) / H));
+  return clampZoom(Math.min((sw - pad * 2) / aw, (sh - pad * 2) / ah));
 }
-export function fitViewport(sw: number, sh: number): Viewport {
-  const zoom = fitZoom(sw, sh);
-  return { zoom, x: (sw - W * zoom) / 2, y: (sh - H * zoom) / 2 };
+export function fitViewport(sw: number, sh: number, aw = W, ah = H): Viewport {
+  const zoom = fitZoom(sw, sh, aw, ah);
+  return { zoom, x: (sw - aw * zoom) / 2, y: (sh - ah * zoom) / 2 };
 }
 
 /** Zoom keeping the canvas point under (sx, sy) fixed on screen. */
@@ -37,13 +37,13 @@ export function zoomAt(v: Viewport, sx: number, sy: number, nextZoom: number): V
 }
 
 /** Keep part of the artboard on screen so the canvas can never be lost. */
-export function clampViewport(v: Viewport, sw: number, sh: number): Viewport {
+export function clampViewport(v: Viewport, sw: number, sh: number, aw = W, ah = H): Viewport {
   if (sw <= 0 || sh <= 0) return v;
   const zoom = clampZoom(v.zoom);
-  const mx = Math.min(Math.max(48, Math.min(W * zoom, sw) * 0.35), 220);
-  const my = Math.min(Math.max(48, Math.min(H * zoom, sh) * 0.35), 220);
-  const x = Math.min(sw - mx, Math.max(mx - W * zoom, v.x));
-  const y = Math.min(sh - my, Math.max(my - H * zoom, v.y));
+  const mx = Math.min(Math.max(48, Math.min(aw * zoom, sw) * 0.35), 220);
+  const my = Math.min(Math.max(48, Math.min(ah * zoom, sh) * 0.35), 220);
+  const x = Math.min(sw - mx, Math.max(mx - aw * zoom, v.x));
+  const y = Math.min(sh - my, Math.max(my - ah * zoom, v.y));
   return { x, y, zoom };
 }
 

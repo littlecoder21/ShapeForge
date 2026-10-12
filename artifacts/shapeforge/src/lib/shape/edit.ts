@@ -1,6 +1,6 @@
 import { W, H } from './constants';
 import {
-  autoHandles, bezierAt, flattenSegment, getHandles, isStraightSegment, mapPoints, shapeBounds, shapeOutline, toPathExact,
+  autoHandles, bezierAt, flattenSegment, getHandles, isStraightSegment, mapPoints, outlineRings, shapeBounds, toPathExact,
   type Box, type NodeMode, type Point, type ShapeModel,
 } from './geometry';
 import { roundCorners } from './boundary';
@@ -18,9 +18,12 @@ export type Selection =
   | { kind: 'node'; index: number }
   | { kind: 'handle'; index: number; side: 'in' | 'out' }
   | { kind: 'segment'; index: number; t: number }
+  | { kind: 'nodes'; indices: number[] }
   | { kind: 'shape' };
 export const NONE: Selection = { kind: 'none' };
 export const selectedNode = (s: Selection) => (s.kind === 'node' || s.kind === 'handle' ? s.index : null);
+/** Every node the selection refers to (single, handle's node, or a multi-selection). */
+export const selectedIndices = (s: Selection): number[] => (s.kind === 'node' || s.kind === 'handle' ? [s.index] : s.kind === 'nodes' ? s.indices : []);
 
 /* ───────────────────────────── angles ───────────────────────────── */
 
@@ -45,10 +48,12 @@ export function moveNodeTo(shape: ShapeModel, i: number, p: V2): ShapeModel {
 }
 export function nudgeNode(shape: ShapeModel, i: number, dx: number, dy: number) {
   const pt = shape.points[i];
+  if (pt.locked) return shape;
   return moveNodeTo(shape, i, { x: pt.x + dx, y: pt.y + dy });
 }
 
 export function deleteNode(shape: ShapeModel, i: number): ShapeModel | null {
+  if (shape.points[i]?.locked) return null;
   const min = shape.closed ? 3 : 2;
   if (shape.points.length <= min) return null;
   return { ...shape, points: shape.points.filter((_, k) => k !== i) };
@@ -178,7 +183,7 @@ export const matRotateAbout = (cx: number, cy: number, rad: number): Mat => {
   return [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy];
 };
 export const applyMat = (m: Mat, p: V2): V2 => ({ x: m[0] * p.x + m[2] * p.y + m[4], y: m[1] * p.x + m[3] * p.y + m[5] });
-export const transformShape = (shape: ShapeModel, m: Mat): ShapeModel => ({ ...shape, points: mapPoints(shape.points, p => applyMat(m, p)) });
+export const transformShape = (shape: ShapeModel, m: Mat): ShapeModel => ({ ...shape, points: mapPoints(shape.points, p => applyMat(m, p)), ...(shape.extra ? { extra: shape.extra.map(r => mapPoints(r, p => applyMat(m, p))) } : {}) });
 export const boundsCenter = (b: Box): V2 => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
 export function setBounds(shape: ShapeModel, from: Box, to: Box): ShapeModel {
   const sx = from.w > 1e-6 ? to.w / from.w : 1, sy = from.h > 1e-6 ? to.h / from.h : 1;
@@ -252,6 +257,12 @@ function pointInRing(p: V2, ring: V2[]) {
   }
   return inside;
 }
+/** Even-odd point-in-shape across every ring (so holes of a compound path are respected). */
+export function pointInShape(shape: ShapeModel, p: V2): boolean {
+  let inside = false;
+  for (const ring of outlineRings(shape, 10)) if (pointInRing(p, ring)) inside = !inside;
+  return inside;
+}
 function distToSeg(p: V2, a: V2, b: V2) {
   const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
   const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
@@ -271,7 +282,7 @@ export function hitTest(a: { screen: V2; vp: Viewport; fit: number; shape: Shape
   const push = (distPx: number, radiusPx: number, pri: number, hit: Hit) => { const score = distPx / radiusPx; if (score <= 1) cands.push({ score, pri, hit }); };
 
   const sel = selectedNode(selection);
-  if (sel !== null && shape.kind === 'path' && shape.points[sel]) {
+  if (sel !== null && shape.kind === 'path' && shape.points[sel] && !shape.points[sel].locked) {
     const hs = getHandles(shape.points, sel, shape.closed), p = shape.points[sel];
     for (const side of ['in', 'out'] as const) {
       if (dist(p, hs[side]) < 0.5 / z) continue;
@@ -303,7 +314,7 @@ export function hitTest(a: { screen: V2; vp: Viewport; fit: number; shape: Shape
     }
   }
   if (best && best.d * z <= R.seg) return { kind: 'segment', index: best.index, t: best.t };
-  if (shape.closed && pointInRing(c, shapeOutline(shape, 10))) return { kind: 'shape' };
+  if (shape.closed && pointInShape(shape, c)) return { kind: 'shape' };
   return null;
 }
 
@@ -463,3 +474,39 @@ export const scaleShape = (shape: ShapeModel, factor: number): ShapeModel => {
   const c = boundsCenter(shapeBounds(shape));
   return transformShape(shape, matScaleAbout(c.x, c.y, factor, factor));
 };
+
+
+/* ───────────────────────────── multi-select · lock · delete ───────────────────────────── */
+
+/** Toggle one node in the selection (Select / Unselect). One node stays 'node', two or more become 'nodes'. */
+export function toggleInSelection(sel: Selection, index: number): Selection {
+  const cur = selectedIndices(sel);
+  const next = cur.includes(index) ? cur.filter(i => i !== index) : [...cur, index].sort((a, b) => a - b);
+  return next.length === 0 ? NONE : next.length === 1 ? { kind: 'node', index: next[0] } : { kind: 'nodes', indices: next };
+}
+export const selectAllNodes = (shape: ShapeModel): Selection => (shape.points.length > 1 ? { kind: 'nodes', indices: shape.points.map((_, i) => i) } : NONE);
+
+export function setNodesLocked(shape: ShapeModel, indices: number[], locked: boolean): ShapeModel {
+  const set = new Set(indices);
+  return { ...shape, points: shape.points.map((p, i) => (set.has(i) ? { ...p, locked: locked || undefined } : p)) };
+}
+
+/** Delete several nodes. Locked nodes are skipped; returns null when too few nodes would remain. */
+export function deleteNodes(shape: ShapeModel, indices: number[]): { shape: ShapeModel | null; skipped: number; removed: number } {
+  const set = new Set(indices.filter(i => !shape.points[i]?.locked)), skipped = indices.length - set.size;
+  const min = shape.closed ? 3 : 2;
+  if (!set.size) return { shape: shape, skipped, removed: 0 };
+  if (shape.points.length - set.size < min) return { shape: null, skipped, removed: 0 };
+  return { shape: { ...shape, points: shape.points.filter((_, i) => !set.has(i)) }, skipped, removed: set.size };
+}
+
+/** Move several nodes by the same delta (locked nodes stay). */
+export function moveNodesBy(shape: ShapeModel, origin: ShapeModel, indices: number[], dx: number, dy: number): ShapeModel {
+  let next = shape;
+  for (const i of indices) {
+    const o = origin.points[i];
+    if (!o || o.locked) continue;
+    next = moveNodeTo(next, i, clampArt({ x: o.x + dx, y: o.y + dy }));
+  }
+  return next;
+}

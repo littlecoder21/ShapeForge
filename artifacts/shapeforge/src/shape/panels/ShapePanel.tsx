@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
 import { Pentagon, Plus, Spline, Waves } from 'lucide-react';
-import { UNITS, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../geometry';
-import { insertOnSegment, type Selection } from '../edit';
-import type { EditorSettings } from '../settings';
+import { UNITS, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../../lib/shape/geometry';
+import { insertOnSegment, type Selection } from '../../lib/shape/edit';
+import type { EditorSettings } from '../../lib/shape/settings';
 import { TransformBlock } from './PrecisionPanel';
-import { Section, Seg, ValueControl } from './controls';
+import { Section, Seg, ValueControl } from '../../shared/controls';
 
 type Props = {
   shape: ShapeModel; fill: string; setFill: (c: string) => void;

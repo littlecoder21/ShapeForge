@@ -17,7 +17,7 @@ export function Switch({ label, checked, onChange, testId }: { label: string; ch
   </button>;
 }
 
-export function Seg<T extends string | number>({ value, options, onChange, label, testId }: { value: T; options: { id: T; label: ReactNode; disabled?: boolean }[]; onChange: (v: T) => void; label?: string; testId?: string }) {
+export function Seg<T extends string | number>({ value, options, onChange, label, testId }: { value: T; options: { id: NoInfer<T>; label: ReactNode; disabled?: boolean }[]; onChange: (v: NoInfer<T>) => void; label?: string; testId?: string }) {
   return <div className="seg" role="radiogroup" aria-label={label} data-testid={testId}>
     {options.map(o => <button key={String(o.id)} type="button" role="radio" aria-checked={value === o.id} disabled={o.disabled} className={value === o.id ? 'active' : ''} onClick={() => onChange(o.id)}>{o.label}</button>)}
   </div>;

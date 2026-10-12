@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { ChevronsLeftRight, FlipHorizontal, FlipVertical, Plus, RotateCcw, RotateCw, Trash2 } from 'lucide-react';
-import { fmt, getHandles, shapeBounds, type NodeMode, type ShapeModel } from '../geometry';
+import { fmt, getHandles, shapeBounds, type NodeMode, type ShapeModel } from '../../lib/shape/geometry';
 import {
-  cornerInfo, deleteNode, dist, flipShape, handlePolar, insertOnSegment, rotateShape, roundNode, scaleShape, setBounds, setCorner, setHandlePolar,
+  cornerInfo, deleteNode, deleteNodes, setNodesLocked, dist, flipShape, handlePolar, insertOnSegment, rotateShape, roundNode, scaleShape, setBounds, setCorner, setHandlePolar,
   setNodeMode, setSegmentCurve, moveNodeTo, NONE, type Selection,
-} from '../edit';
-import type { EditorSettings } from '../settings';
-import { NumField, Seg, Switch } from './controls';
+} from '../../lib/shape/edit';
+import type { EditorSettings } from '../../lib/shape/settings';
+import { NumField, Seg, Switch } from '../../shared/controls';
 
 type Common = { shape: ShapeModel; settings: EditorSettings; setSettings: (p: Partial<EditorSettings>) => void; onCommit: (next: ShapeModel, sel?: Selection) => void; announce: (m: string) => void };
 
@@ -71,6 +71,19 @@ export default function PrecisionPanel(props: Common & { selection: Selection; o
     <TransformBlock shape={shape} settings={settings} setSettings={setSettings} onCommit={onCommit} />
   </div>;
 
+  if (selection.kind === 'nodes') {
+    const idx = selection.indices, locked = idx.filter(i => shape.points[i]?.locked).length, allLocked = locked === idx.length;
+    return <div data-testid="multi-panel">
+      <div className="prec-title"><b>{idx.length} NODES</b><small>{locked} locked</small></div>
+      <div className="btn-row">
+        <button className="btn" onClick={() => onCommit(setNodesLocked(shape, idx, !allLocked), selection)} data-testid="multi-lock">{allLocked ? 'Unlock' : 'Lock'} all</button>
+        <button className="btn danger" onClick={() => { const r = deleteNodes(shape, idx); if (!r.shape) announce('A shape needs at least ' + (shape.closed ? 3 : 2) + ' nodes'); else { onCommit(r.shape, NONE); if (r.skipped) announce(`${r.skipped} locked node${r.skipped > 1 ? 's' : ''} kept`); } }} data-testid="multi-delete"><Trash2 />Delete all</button>
+        <button className="btn" onClick={() => onSelect(NONE)} data-testid="multi-clear">Clear</button>
+      </div>
+      <p className="hint">Drag any selected node to move them together. Locked nodes stay put and are skipped when deleting.</p>
+    </div>;
+  }
+
   if (selection.kind === 'segment') {
     const i = selection.index, n = shape.points.length, a = shape.points[i], b = shape.points[(i + 1) % n];
     if (!a || !b) return null;
@@ -108,6 +121,7 @@ export default function PrecisionPanel(props: Common & { selection: Selection; o
       <NumField label="X" value={pt.x} onCommit={v => onCommit(moveNodeTo(shape, i, { x: v, y: pt.y }), setSel)} testId="node-x" />
       <NumField label="Y" value={pt.y} onCommit={v => onCommit(moveNodeTo(shape, i, { x: pt.x, y: v }), setSel)} testId="node-y" />
     </div>
+    <Switch label="Lock this node" checked={!!pt.locked} onChange={v => onCommit(setNodesLocked(shape, [i], v), setSel)} testId="node-lock" />
     <div className="prec-sub">Type</div>
     <Seg value={mode} label="Node type" testId="node-type" options={MODES.map(m => ({ id: m.id, label: m.label }))} onChange={m => onCommit(setNodeMode(shape, i, m), setSel)} />
     {isPath && selection.kind === 'node' && <>

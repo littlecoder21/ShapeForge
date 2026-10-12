@@ -1,19 +1,22 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine, Check, ChevronUp, Code2, Copy, Download, Grid2X2, Hand, Magnet, MousePointer2, Move, PenTool, Plus, Redo2, ScanLine, Shapes, SlidersHorizontal,
-  Sparkles, Undo2, Waves, X, Crosshair,
+  Palette, Sparkles, Undo2, Waves, X, Crosshair,
 } from 'lucide-react';
-import { exportCode, makeShape, samplePath, simplify, type ShapeModel, type Unit } from './geometry';
-import { NONE, nudgeNode, deleteNode, type Selection, type Tool } from './edit';
-import { DEFAULT_WAVE, buildWaveShape, clampWave, type WaveParams } from './wave';
-import { loadSettings, saveSettings, type EditorSettings } from './settings';
-import Stage, { type StageHandle } from './components/Stage';
-import PrecisionPanel from './components/PrecisionPanel';
-import ShapePanel from './components/ShapePanel';
-import WavePanel from './components/WavePanel';
-import BoundaryPanel from './components/BoundaryPanel';
-import EditorPanel from './components/EditorPanel';
+import { exportCode, makeShape, samplePath, simplify, type ShapeModel, type Unit } from './lib/shape/geometry';
+import { NONE, nudgeNode, deleteNode, type Selection, type Tool } from './lib/shape/edit';
+import { DEFAULT_WAVE, buildWaveShape, clampWave, type WaveParams } from './lib/shape/wave';
+import { loadSettings, saveSettings, type EditorSettings } from './lib/shape/settings';
+import Stage, { type StageHandle } from './shape/canvas/Stage';
+import PrecisionPanel from './shape/panels/PrecisionPanel';
+import ShapePanel from './shape/panels/ShapePanel';
+import WavePanel from './shape/panels/WavePanel';
+import BoundaryPanel from './shape/panels/BoundaryPanel';
+import EditorPanel from './shape/panels/EditorPanel';
 import './index.css';
+
+/** Gradient Studio is a separate workspace: loaded on demand so ShapeForge itself stays light. */
+const GradientStudio = lazy(() => import('./gradient/GradientStudio'));
 
 const FORMATS = ['SVG', 'SVG PATH', 'CSS PATH', 'POLYGON', 'REACT', 'HTML + CSS', 'JSON'];
 const LIBRARY = ['Triangle', 'Diamond', 'Pentagon', 'Hexagon', 'Octagon', 'Star', 'Circle'];
@@ -51,6 +54,7 @@ function App() {
   const [sheet, setSheet] = useState<'tools' | 'code' | null>(null);
   const [toast, setToast] = useState('');
   const [copied, setCopied] = useState(false);
+  const [studio, setStudio] = useState(() => typeof location !== 'undefined' && location.hash === '#gradient');
 
   const isNarrow = useMedia('(max-width: 900px)');
   const isPhone = useMedia('(max-width: 640px)');
@@ -68,6 +72,15 @@ function App() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(''), 2200);
   }, []);
+
+  /* ───── Gradient Studio navigation (browser back closes it) ───── */
+  useEffect(() => {
+    const sync = () => setStudio(location.hash === '#gradient');
+    window.addEventListener('popstate', sync); window.addEventListener('hashchange', sync);
+    return () => { window.removeEventListener('popstate', sync); window.removeEventListener('hashchange', sync); };
+  }, []);
+  const openStudio = () => { try { window.history.pushState({ gs: 1 }, '', '#gradient'); } catch { /* sandboxed */ } setStudio(true); };
+  const closeStudio = () => { if (window.history.state && window.history.state.gs) window.history.back(); else { setStudio(false); try { window.history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ } } };
 
   /* ───── history ───── */
   const pushHistory = useCallback((before: ShapeModel) => { setHistory(h => [...h.slice(-39), before]); setFuture([]); }, []);
@@ -231,6 +244,7 @@ function App() {
         </div>
         <button className="btn desktop-action" onClick={reset} data-testid="button-new"><Plus /> New</button>
         <button className="btn desktop-action" onClick={saveJson} data-testid="button-save"><ArrowDownToLine /> Save</button>
+        <button className="btn gradient-btn" onClick={openStudio} data-testid="button-create-gradient"><Palette /><span><span className="cg-long">Create </span>Gradient</span></button>
         <button className="btn primary" onClick={showCode} data-testid="button-export"><Code2 /> Export</button>
       </div>
     </header>
@@ -277,6 +291,11 @@ function App() {
     {!isPhone && <section className="output-panel" id="output-panel" aria-label="Code output">{outputContent}</section>}
     {sheet && <div className="sheet-backdrop" onClick={() => setSheet(null)} role="presentation"><section className={`mobile-sheet ${sheet === 'code' ? 'code-sheet' : ''}`} role="dialog" aria-modal="true" aria-label={sheet === 'tools' ? 'Shape tools' : 'Code output'} onClick={e => e.stopPropagation()}><div className="sheet-grab" /><button className="icon-btn sheet-close" onClick={() => setSheet(null)} aria-label="Close panel" data-testid="button-close-sheet"><X /></button>{sheet === 'tools' ? toolsContent : <div className="mobile-code-sheet">{outputContent}</div>}</section></div>}
     {toast && <div className="toast-note" role="status" data-testid="status-toast">{toast}</div>}
+    {studio && <Suspense fallback={<div className="gs-loading" role="status">Loading Gradient Studio…</div>}>
+      <GradientStudio onClose={closeStudio} initial={shape.paint?.project ?? null} shapeName={shape.name} hasPaint={!!shape.paint}
+        onApply={(project, o) => { commit({ ...shape, paint: { project, ...o } }); announce(`Gradient applied to “${shape.name}”`); closeStudio(); }}
+        onRemovePaint={() => { commit({ ...shape, paint: undefined }); announce('Gradient removed'); closeStudio(); }} />
+    </Suspense>}
   </main>;
 }
 
