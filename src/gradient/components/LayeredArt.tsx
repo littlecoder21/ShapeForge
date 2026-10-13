@@ -14,7 +14,8 @@ interface Props { project: GradientProject; rootClass: string; playing?: boolean
 /** The live DOM composition of a project — the same CSS the Output panel exports, scoped to `.rootClass`. */
 function LayeredArt({ project, rootClass, playing = false, className = '', testId }: Props) {
   const visible = project.layers.filter(l => l.visible);
-  const defs = useMemo(() => effectDefs(project, stableNames), [project]);
+  const effectKey = JSON.stringify([project.canvas, visible.map(l => [l.id, l.effects])]);
+  const defs = useMemo(() => effectDefs(project, stableNames), [effectKey]);
   const rootSel = `.${rootClass}`;
   return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} />)}

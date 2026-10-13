@@ -237,6 +237,7 @@ export type Hit =
   | { kind: 'node'; index: number }
   | { kind: 'segment'; index: number; t: number }
   | { kind: 'bbox'; part: BBoxPart }
+  | { kind: 'other'; id: string }
   | { kind: 'shape' };
 export type PointerKind = 'touch' | 'pen' | 'mouse';
 

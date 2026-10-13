@@ -157,7 +157,7 @@ export function effectDefs(project: GradientProject, names: Names): string {
   project.layers.filter(l => l.visible).forEach(l => activeEffects(l.effects).forEach(e => {
     const id = `fx-${names.scope}-${names.cls(l)}-${e.id}`;
     const filter = EFFECTS[e.type].css(e.params, id);
-    const def = EFFECTS[e.type].defs?.(e.params, id)
+    const def = EFFECTS[e.type].defs?.(e.params, id, project.canvas)
       ?? (filter.startsWith('url(#') ? `<filter id="${id}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">${EFFECTS[e.type].svg(e.params)}</filter>` : '');
     if (def) out.push(def);
   }));

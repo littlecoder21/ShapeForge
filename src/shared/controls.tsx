@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 
 /* Small touch-friendly form controls shared by every panel. */
@@ -34,7 +34,10 @@ export function ValueControl({ label, value, min, max, step = 1, unit = '', def,
   const sliderActive = useRef(false);
   const dp = decimals(step);
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
-  const beginSlider = () => { if (!sliderActive.current) { sliderActive.current = true; onBegin?.(); } };
+  const beginSlider = (e?: RPointerEvent<HTMLInputElement>) => {
+    if (!sliderActive.current) { sliderActive.current = true; onBegin?.(); }
+    if (e && e.currentTarget.hasPointerCapture(e.pointerId) === false) e.currentTarget.setPointerCapture(e.pointerId);
+  };
   const endSlider = () => { if (sliderActive.current) { sliderActive.current = false; onCommit?.(); } };
   const commitDraft = () => {
     if (draft === null) return;
@@ -61,6 +64,7 @@ export function ValueControl({ label, value, min, max, step = 1, unit = '', def,
         onPointerDown={beginSlider}
         onPointerUp={endSlider}
         onPointerCancel={endSlider}
+        onLostPointerCapture={endSlider}
         onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) beginSlider(); }}
         onKeyUp={endSlider}
         onBlur={endSlider}

@@ -7,6 +7,7 @@ type Action =
   | { t: 'commit'; fn: (d: Doc) => Doc }                 // change + history entry
   | { t: 'preview'; fn: (d: Doc) => Doc }                // change, no history (live drags)
   | { t: 'push'; snap: (d: Doc) => Doc }                 // history entry for a change that was previewed
+  | { t: 'navigate'; fn: (d: Doc) => Doc }
   | { t: 'undo' } | { t: 'redo' } | { t: 'reset'; doc: Doc };
 
 const LIMIT = 60;
@@ -15,6 +16,7 @@ function reducer(s: State, a: Action): State {
     case 'commit': { const doc = a.fn(s.doc); return doc === s.doc ? s : { doc, past: [...s.past.slice(-(LIMIT - 1)), s.doc], future: [] }; }
     case 'preview': { const doc = a.fn(s.doc); return doc === s.doc ? s : { ...s, doc }; }
     case 'push': return { ...s, past: [...s.past.slice(-(LIMIT - 1)), a.snap(s.doc)], future: [] };
+    case 'navigate': { const doc = a.fn(s.doc); return doc === s.doc ? s : { ...s, doc }; }
     case 'undo': return s.past.length ? { doc: s.past[s.past.length - 1], past: s.past.slice(0, -1), future: [s.doc, ...s.future] } : s;
     case 'redo': return s.future.length ? { doc: s.future[0], past: [...s.past, s.doc], future: s.future.slice(1) } : s;
     case 'reset': return { doc: a.doc, past: [...s.past.slice(-(LIMIT - 1)), s.doc], future: [] };
@@ -38,6 +40,7 @@ export function useDocument() {
 
   /** change the document (one undo step) */
   const apply = useCallback((fn: (d: Doc) => Doc) => dispatch({ t: 'commit', fn }), []);
+  const navigate = useCallback((fn: (d: Doc) => Doc) => dispatch({ t: 'navigate', fn }), []);
   /** replace the active shape (one undo step) */
   const commit = useCallback((next: ShapeModel) => dispatch({ t: 'commit', fn: d => replaceShape(d, { ...next, id: next.id ?? d.shapeId }) }), []);
   /** replace a shape while a gesture runs (no undo step) */
@@ -50,7 +53,7 @@ export function useDocument() {
 
   return {
     doc, page, shape, canUndo: state.past.length > 0, canRedo: state.future.length > 0,
-    apply, commit, preview, pushGesture, live, liveEnd,
+    apply, navigate, commit, preview, pushGesture, live, liveEnd,
     undo: useCallback(() => dispatch({ t: 'undo' }), []), redo: useCallback(() => dispatch({ t: 'redo' }), []),
     reset: useCallback((d?: Doc) => dispatch({ t: 'reset', doc: d ?? newDoc() }), []),
   };

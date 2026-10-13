@@ -13,7 +13,7 @@ export interface EffectDef {
   /** CSS filter fragment, '' = nothing. `fid` is a unique id for url() filters. */
   css(p: Record<string, number>, fid: string): string;
   /** standalone <filter> definition when css() references url(#fid) */
-  defs?(p: Record<string, number>, fid: string): string;
+  defs?(p: Record<string, number>, fid: string, canvas?: { w: number; h: number }): string;
   /** SVG filter primitives (chained). */
   svg(p: Record<string, number>): string;
   /** canvas ctx.filter fragment (not all effects can be rasterised) */
@@ -73,7 +73,11 @@ export const EFFECTS: Record<string, EffectDef> = {
     id: 'distort', label: 'Distortion', hint: 'Turbulence displacement — bends edges like drifting curtains. Renders in CSS/SVG, not in PNG.',
     params: [p('scale', 'Strength', 0, 200, 1, 'px', 60), p('freq', 'Frequency', 1, 60, 1, '‰', 8), p('seed', 'Seed', 1, 99, 1, '', 3)],
     css: (_v, fid) => `url(#${fid})`,
-    defs: (v, fid) => `<filter id="${fid}" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${num(v.freq / 1000)}" numOctaves="2" seed="${Math.round(v.seed)}" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="${num(v.scale)}" xChannelSelector="R" yChannelSelector="G"/></filter>`,
+    defs: (v, fid, canvas) => {
+      const padX = ((Math.max(0, v.scale) / 2 + 1) / Math.max(1, canvas?.w ?? 1)) * 100;
+      const padY = ((Math.max(0, v.scale) / 2 + 1) / Math.max(1, canvas?.h ?? 1)) * 100;
+      return `<filter id="${fid}" x="-${num(padX)}%" y="-${num(padY)}%" width="${num(100 + 2 * padX)}%" height="${num(100 + 2 * padY)}%" color-interpolation-filters="sRGB"><feTurbulence type="fractalNoise" baseFrequency="${num(v.freq / 1000)}" numOctaves="2" seed="${Math.round(v.seed)}" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="${num(v.scale)}" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+    },
     svg: v => `<feTurbulence type="fractalNoise" baseFrequency="${num(v.freq / 1000)}" numOctaves="2" seed="${Math.round(v.seed)}" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="${num(v.scale)}" xChannelSelector="R" yChannelSelector="G"/>`,
     canvas: () => '',
     rasterUnsupported: true,

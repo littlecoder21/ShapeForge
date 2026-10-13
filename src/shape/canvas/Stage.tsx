@@ -1,12 +1,15 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
 import { H, W } from '../../lib/shape/constants';
-import { fmt, frameOf, getHandles, isStraightSegment, pathFromPoints, shapeBounds, translatePoints, type Box, type Point, type ShapeModel } from '../../lib/shape/geometry';
-import { paintShowsFill, paintSvgParts } from '../../lib/shape/paint';
+import { fmt, getHandles, isStraightSegment, pathFromPoints, pathOfShape, shapeBounds, type Box, type Point, type ShapeModel } from '../../lib/shape/geometry';
+import { paintedMarkup, type Painted } from '../../lib/shape/paintMarkup';
+import StaticShape from './StaticShape';
+import NodeMenu from './NodeMenu';
+import NodeBar from './NodeBar';
 import {
-  angleDeg, boundsCenter, dist, handlePolar, hitTest, insertOnSegment, matRotateAbout, matTranslate, moveHandle, moveNodeTo, neighborOf,
+  angleDeg, boundsCenter, deleteNode, deleteNodes, dist, handlePolar, hitTest, insertOnSegment, matRotateAbout, matTranslate, moveHandle, moveNodeTo, moveNodesBy, neighborOf, pointInShape,
   partPoint, partOffsetPx, scaleFromHandle, selectedNode, setNodeMode, snapHandle, snapNode, snapTranslate, transformShape, BBOX_PARTS,
-  type BBoxPart, type Guide, type Hit, type PointerKind, type Selection, type Tool,
+  selectedIndices, setNodesLocked, toggleInSelection, type BBoxPart, type Guide, type Hit, type PointerKind, type Selection, type Tool,
 } from '../../lib/shape/edit';
 import type { EditorSettings } from '../../lib/shape/settings';
 import { clampViewport, fitViewport, fitZoom, nextStop, pinchViewport, screenToCanvas, zoomAt, type V2, type Viewport } from '../../lib/shape/viewport';
@@ -14,7 +17,8 @@ import { clampViewport, fitViewport, fitZoom, nextStop, pinchViewport, screenToC
 export type StageHandle = { zoomIn(): void; zoomOut(): void; reset(): void; fit(): void };
 
 type Props = {
-  shape: ShapeModel; fill: string; tool: Tool; selection: Selection; settings: EditorSettings; showGrid: boolean; polygonPoints: string | null;
+  shape: ShapeModel; others: ShapeModel[]; shapeOrder: string[]; tool: Tool; selection: Selection; settings: EditorSettings; showGrid: boolean; polygonPoints: string | null;
+  multiSelect: boolean; onMultiSelect: (enabled: boolean) => void; pageBackground: string;
   onSelect: (s: Selection) => void;
   /** live update while a gesture runs (no history entry) */
   onPreview: (s: ShapeModel) => void;
@@ -22,6 +26,9 @@ type Props = {
   onGestureEnd: (before: ShapeModel) => void;
   /** a discrete edit: push history and apply */
   onCommit: (next: ShapeModel, sel?: Selection) => void;
+  onPickShape: (id: string) => void;
+  onAddShape: (shape: ShapeModel, sel?: Selection) => void;
+  onAnnounce: (message: string) => void;
 };
 
 type G =
@@ -30,6 +37,7 @@ type G =
   | { t: 'pan'; id: number; s: V2; vp: Viewport }
   | { t: 'pinch'; ids: [number, number]; vp: Viewport; mid: V2; dist: number }
   | { t: 'node'; id: number; index: number; before: ShapeModel; startNode: V2; startC: V2; dirty: boolean }
+  | { t: 'nodes'; id: number; indices: number[]; before: ShapeModel; startC: V2; dirty: boolean }
   | { t: 'handle'; id: number; index: number; side: 'in' | 'out'; before: ShapeModel; startH: V2; startC: V2; dirty: boolean }
   | { t: 'pen'; id: number; index: number; before: ShapeModel; origin: V2; startC: V2; dirty: boolean }
   | { t: 'bbox'; id: number; part: BBoxPart | 'move'; before: ShapeModel; bounds: Box; startC: V2; g0: V2; dirty: boolean };
@@ -49,7 +57,7 @@ function segmentPath(shape: ShapeModel, i: number) {
 
 /* ─────────── static layers (re-render only when their own inputs change, never on viewport changes) ─────────── */
 
-const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor }: { showGrid: boolean; step: number; minor: boolean }) {
+const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor, background }: { showGrid: boolean; step: number; minor: boolean; background: string }) {
   const grid = useMemo(() => {
     let d = '';
     for (let x = step; x < W; x += step) d += `M${x} 0V${H}`;
@@ -57,20 +65,17 @@ const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor }: { s
     return d;
   }, [step]);
   return <g>
-    <rect className="art-rect" width={W} height={H} />
+    <rect className="art-rect" width={W} height={H} style={{ fill: background === 'transparent' ? '#21262d' : background }} />
     {showGrid && minor && <path className="art-grid" d={grid} />}
     <path className="art-center" d={`M${W / 2} 0V${H}M0 ${H / 2}H${W}`} />
   </g>;
 });
 
-type Painted = { defs: string; body: string; x: number; y: number };
-const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, dots, nodeSize, painted }: { d: string; polygonPoints: string | null; dots: string; nodeSize: number; painted: Painted | null }) {
+const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, painted, fill, fillRule }: { d: string; polygonPoints: string | null; painted: Painted | null; fill: string; fillRule?: ShapeModel['fillRule'] }) {
   const cls = `shape-fill${painted ? ' painted' : ''}`;
   return <g>
     {painted && <g transform={`translate(${painted.x} ${painted.y})`} pointerEvents="none"><defs dangerouslySetInnerHTML={{ __html: painted.defs }} /><g dangerouslySetInnerHTML={{ __html: painted.body }} /></g>}
-    {polygonPoints ? <polygon className={cls} points={polygonPoints} /> : <path className={cls} d={d} />}
-    <path className="dots-ring" d={dots} style={{ strokeWidth: nodeSize + 4 }} />
-    <path className="dots-fill" d={dots} style={{ strokeWidth: nodeSize }} />
+    {polygonPoints ? <polygon className={cls} points={polygonPoints} fillRule={fillRule} style={painted ? undefined : { fill }} /> : <path className={cls} d={d} fillRule={fillRule} style={painted ? undefined : { fill }} />}
   </g>;
 });
 
@@ -95,6 +100,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   const lastTap = useRef<{ time: number; s: V2; hit: Hit | null } | null>(null);
   const [pct, setPct] = useState(100);
   const [guides, setGuides] = useState<Guide[]>([]);
+  const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number; index: number } | null>(null);
 
   /* ───── viewport (imperative: never goes through React state while a gesture runs) ───── */
   const applyView = useCallback((v: Viewport) => {
@@ -175,11 +181,29 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   const local = (e: { clientX: number; clientY: number }): V2 => { const r = wrapRef.current!.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   const setHud = (text: string | null) => { const el = hudRef.current; if (!el) return; if (text === null) { el.classList.remove('on'); } else { el.textContent = text; el.classList.add('on'); } };
   const showGuides = (next: Guide[]) => setGuides(prev => (!prev.length && !next.length ? prev : next));
-  const doHit = (s: V2, p: PointerKind) => { const P = propsRef.current; return hitTest({ screen: s, vp: vpRef.current, fit: fitRef.current, shape: P.shape, selection: P.selection, settings: P.settings, pointer: p }); };
+  const doHit = (s: V2, p: PointerKind): Hit | null => {
+    const P = propsRef.current;
+    const active = !P.shape.locked && !P.shape.hidden
+      ? hitTest({ screen: s, vp: vpRef.current, fit: fitRef.current, shape: P.shape, selection: P.selection, settings: P.settings, pointer: p })
+      : null;
+    if (active && active.kind !== 'shape') return active;
+    const c = screenToCanvas(vpRef.current, s.x, s.y);
+    const byId = new Map(P.others.map(other => [other.id, other]));
+    for (let i = P.shapeOrder.length - 1; i >= 0; i--) {
+      const id = P.shapeOrder[i];
+      if (id === P.shape.id) {
+        if (!P.shape.hidden && pointInShape(P.shape, c)) return active ?? { kind: 'shape' };
+      } else {
+        const other = byId.get(id);
+        if (other && !other.hidden && pointInShape(other, c)) return { kind: 'other', id };
+      }
+    }
+    return active;
+  };
 
   /** Cancel an in-flight edit without touching history (used when a second finger lands). */
   const revert = (g: G) => {
-    if (g.t === 'node' || g.t === 'handle' || g.t === 'pen' || g.t === 'bbox') { if (g.dirty) propsRef.current.onPreview(g.before); }
+    if (g.t === 'node' || g.t === 'nodes' || g.t === 'handle' || g.t === 'pen' || g.t === 'bbox') { if (g.dirty) propsRef.current.onPreview(g.before); }
     showGuides([]); setHud(null);
   };
 
@@ -202,7 +226,9 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     const node: Point = { x: snapped.x, y: snapped.y, mode: P.settings.penMode === 'smooth' ? 'auto' : 'corner' };
     const points = [...pts, node];
     const base = continuing ? s : { name: 'Custom path', kind: 'path' as const, points: [], closed: false, fill: s.fill, stroke: s.stroke, strokeWidth: s.strokeWidth };
-    P.onCommit({ ...base, name: 'Custom path', kind: 'path', points, closed: false }, { kind: 'node', index: points.length - 1 });
+    const next = { ...base, name: 'Custom path', kind: 'path' as const, points, closed: false };
+    if (continuing) P.onCommit(next, { kind: 'node', index: points.length - 1 });
+    else P.onAddShape(next, { kind: 'node', index: points.length - 1 });
   };
 
   const handleTap = (g: Extract<G, { t: 'pending' }>) => {
@@ -213,11 +239,13 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     if (P.tool === 'Pen') { penCommitNode(c, g.hit); return; }
     const hit = g.hit;
     if (!hit) { P.onSelect({ kind: 'none' }); return; }
+    if (hit.kind === 'other') { P.onPickShape(hit.id); return; }
     if (hit.kind === 'node') {
-      if (dbl && prevTap?.hit?.kind === 'node' && prevTap.hit.index === hit.index && P.shape.kind === 'path') {
-        const pt = P.shape.points[hit.index], sharp = pt.mode === 'corner' && !pt.in && !pt.out;
-        P.onCommit(setNodeMode(P.shape, hit.index, sharp ? 'smooth' : 'corner'), { kind: 'node', index: hit.index });
-      } else P.onSelect({ kind: 'node', index: hit.index });
+      if (dbl && prevTap?.hit?.kind === 'node' && prevTap.hit.index === hit.index) {
+        P.onSelect({ kind: 'node', index: hit.index });
+        setNodeMenu({ x: g.s.x, y: g.s.y, index: hit.index });
+      } else if (P.multiSelect || mods.current.shift) P.onSelect(toggleInSelection(P.selection, hit.index));
+      else P.onSelect({ kind: 'node', index: hit.index });
     } else if (hit.kind === 'handle') P.onSelect({ kind: 'handle', index: hit.index, side: hit.side });
     else if (hit.kind === 'segment') {
       if (dbl && prevTap?.hit?.kind === 'segment' && prevTap.hit.index === hit.index) { const r = insertOnSegment(P.shape, hit.index, hit.t); P.onCommit(r.shape, { kind: 'node', index: r.index }); }
@@ -236,12 +264,14 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
       const node: Point = { x: sn.x, y: sn.y, mode: 'smooth', in: { ...sn }, out: { ...sn } };
       const points = [...pts, node];
       const base = continuing ? before : { name: 'Custom path', kind: 'path' as const, points: [], closed: false, fill: before.fill, stroke: before.stroke, strokeWidth: before.strokeWidth };
-      P.onPreview({ ...base, name: 'Custom path', kind: 'path', points, closed: false });
+      const next = { ...base, name: 'Custom path', kind: 'path' as const, points, closed: false };
+      if (continuing) P.onPreview(next); else P.onAddShape(next, { kind: 'node', index: points.length - 1 });
       P.onSelect({ kind: 'node', index: points.length - 1 });
       gest.current = { t: 'pen', id: g.id, index: points.length - 1, before, origin: sn, startC: c0, dirty: true };
       return;
     }
     if (!hit || hit.kind === 'segment') return panIt();
+    if (hit.kind === 'other') return panIt();
     if (hit.kind === 'shape') {
       if (P.selection.kind !== 'shape') return panIt();
       gest.current = { t: 'bbox', id: g.id, part: 'move', before, bounds: shapeBounds(before), startC: c0, g0: c0, dirty: false };
@@ -253,6 +283,14 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
       return;
     }
     if (hit.kind === 'node') {
+      const indices = selectedIndices(P.selection);
+      if (before.points[hit.index]?.locked) return panIt();
+      if (P.multiSelect || mods.current.shift || indices.length > 1 && indices.includes(hit.index)) {
+        const group = [...new Set([...indices, hit.index])].sort((a, b) => a - b);
+        P.onSelect(group.length > 1 ? { kind: 'nodes', indices: group } : { kind: 'node', index: hit.index });
+        gest.current = { t: 'nodes', id: g.id, indices: group, before, startC: c0, dirty: false };
+        return;
+      }
       P.onSelect({ kind: 'node', index: hit.index });
       const p = before.points[hit.index];
       gest.current = { t: 'node', id: g.id, index: hit.index, before, startNode: { x: p.x, y: p.y }, startC: c0, dirty: false };
@@ -289,7 +327,10 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     const c = screenToCanvas(vp, cur.x, cur.y), m = mods.current;
     const st = P.settings;
 
-    if (g.t === 'node') {
+    if (g.t === 'nodes') {
+      P.onPreview(moveNodesBy(g.before, g.before, g.indices, c.x - g.startC.x, c.y - g.startC.y)); g.dirty = true;
+      setHud(`${g.indices.length} nodes · ${f1(c.x - g.startC.x)}, ${f1(c.y - g.startC.y)}`);
+    } else if (g.t === 'node') {
       const raw = { x: g.startNode.x + c.x - g.startC.x, y: g.startNode.y + c.y - g.startC.y };
       const { p, guides: gd } = snapNode(raw, { index: g.index, points: g.before.points, closed: g.before.closed, zoom: vp.zoom, settings: st, shift: m.shift, alt: m.alt });
       P.onPreview(moveNodeTo(g.before, g.index, p)); g.dirty = true; showGuides(gd);
@@ -339,6 +380,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     const el = wrapRef.current!;
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const s = local(e), type = ptr(e);
+    if (nodeMenu) setNodeMenu(null);
     pointers.current.set(e.pointerId, { ...s, type });
     mods.current = { shift: e.shiftKey, alt: e.altKey };
     cancelAnim();
@@ -387,29 +429,31 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   };
 
   /* ───── render ───── */
-  const d = useMemo(() => pathFromPoints(shape.points, shape.closed, shape.kind === 'path'), [shape.points, shape.closed, shape.kind]);
-  const dots = useMemo(() => shape.points.map(p => `M${p.x} ${p.y}h.01`).join(''), [shape.points]);
-  const bounds = useMemo(() => (selection.kind === 'shape' ? shapeBounds(shape) : null), [selection.kind, shape]);
-  const painted = useMemo<Painted | null>(() => {
-    const pa = shape.paint;
-    if (!pa || !(paintShowsFill(pa) || pa.stroke)) return null;
-    const frame = frameOf(shape), local = translatePoints(shape.points, -frame.x, -frame.y);
-    return { ...paintSvgParts(pa, pathFromPoints(local, shape.closed, shape.kind === 'path'), frame, shape.strokeWidth), x: frame.x, y: frame.y };
-  }, [shape.paint, shape.points, shape.closed, shape.kind, shape.box, shape.frame, shape.strokeWidth]); // eslint-disable-line react-hooks/exhaustive-deps
-  const selIdx = selectedNode(selection);
+  const d = useMemo(() => pathOfShape(shape), [shape.points, shape.extra, shape.closed, shape.kind]);
+  const dots = useMemo(() => shape.hidden || shape.locked ? '' : shape.points.map(p => `M${p.x} ${p.y}h.01`).join(''), [shape.points, shape.hidden, shape.locked]);
+  const otherById = useMemo(() => new Map(props.others.map(other => [other.id, other])), [props.others]);
+  const bounds = useMemo(() => (selection.kind === 'shape' && !shape.locked && !shape.hidden ? shapeBounds(shape) : null), [selection.kind, shape]);
+  const painted = useMemo(() => paintedMarkup(shape), [shape.paint, shape.points, shape.extra, shape.closed, shape.kind, shape.box, shape.frame, shape.strokeWidth, shape.fillRule, shape.id]);
+  const selIdx = shape.hidden || shape.locked ? null : selectedNode(selection);
   const selPoint = selIdx !== null ? shape.points[selIdx] : undefined;
   const handles = selPoint && shape.kind === 'path' ? getHandles(shape.points, selIdx!, shape.closed) : null;
+  const nodeIndices = selectedIndices(selection);
+  const allNodesLocked = nodeIndices.length > 0 && nodeIndices.every(index => !!shape.points[index]?.locked);
+  const menuPoint = nodeMenu ? shape.points[nodeMenu.index] : undefined;
   const gridStep = settings.snapGrid ? settings.gridSize : 50;
   const showMinor = gridStep * (pct / 100) >= 6;
 
   return <div className="stage" ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={e => finish(e, false)} onPointerCancel={e => finish(e, true)} onContextMenu={e => e.preventDefault()}
-    style={{ '--shape-fill': props.fill } as CSSProperties} data-tool={tool} data-testid="stage">
+    data-tool={tool} data-testid="stage">
     <svg ref={svgRef} className="stage-svg" role="img" aria-label={`${shape.name} shape preview`} style={{ '--inv': 1 } as CSSProperties} data-testid="shape-preview">
       <g ref={gRef}>
-        <ArtboardLayer showGrid={props.showGrid} step={gridStep} minor={showMinor} />
-        {shape.box && (shape.frame ?? 'box') === 'box' && <rect className="frame-box" x={shape.box.x} y={shape.box.y} width={shape.box.w} height={shape.box.h} />}
-        <ShapeLayer d={d} polygonPoints={props.polygonPoints} dots={dots} nodeSize={settings.nodeSize} painted={painted} />
-        {selection.kind === 'segment' && shape.points[selection.index] && <path className="seg-sel" d={segmentPath(shape, selection.index)} />}
+        <ArtboardLayer showGrid={props.showGrid} step={gridStep} minor={showMinor} background={props.pageBackground} />
+        {!shape.hidden && shape.box && (shape.frame ?? 'box') === 'box' && <rect className="frame-box" x={shape.box.x} y={shape.box.y} width={shape.box.w} height={shape.box.h} />}
+        {props.shapeOrder.map(id => id === shape.id
+          ? (!shape.hidden && <ShapeLayer key={id} d={d} polygonPoints={props.polygonPoints} painted={painted} fill={shape.fill} fillRule={shape.fillRule} />)
+          : (() => { const other = otherById.get(id); return other && !other.hidden ? <StaticShape key={id} shape={other} /> : null; })())}
+        {dots && <><path className="dots-ring" d={dots} style={{ strokeWidth: settings.nodeSize + 4 }} /><path className="dots-fill" d={dots} style={{ strokeWidth: settings.nodeSize }} /></>}
+        {!shape.hidden && !shape.locked && selection.kind === 'segment' && shape.points[selection.index] && <path className="seg-sel" d={segmentPath(shape, selection.index)} />}
         {bounds && <g>
           <rect className="bbox" x={bounds.x} y={bounds.y} width={bounds.w} height={bounds.h} />
           {[...BBOX_PARTS, 'rotate' as const].map(part => {
@@ -424,6 +468,13 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
           {settings.showTouch && <circle className="touch-halo" r={settings.touchSize / 2} style={INV} />}
           <circle className="node-sel" r={settings.nodeSize / 2 + 1} style={INV} />
         </g>}
+        {selection.kind === 'nodes' && selection.indices.map(index => {
+          const point = shape.points[index];
+          return point ? <circle key={index} className="node-multi-sel" cx={point.x} cy={point.y} r={settings.nodeSize / 2 + 3} style={INV} /> : null;
+        })}
+        {!shape.hidden && shape.points.map((point, index) => point.locked
+          ? <circle key={`locked-${index}`} className="node-locked" cx={point.x} cy={point.y} r={settings.nodeSize / 2 + 2} style={INV} />
+          : null)}
         {handles && selPoint && (['in', 'out'] as const).map(side => {
           const h = handles[side];
           if (dist(h, selPoint) < 1e-6) return null;
@@ -444,6 +495,28 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
         </g>)}
       </g>
     </svg>
+    {(nodeIndices.length > 0 || props.multiSelect) && <NodeBar count={nodeIndices.length} multi={props.multiSelect} allLocked={allNodesLocked}
+      onMulti={() => props.onMultiSelect(!props.multiSelect)} onAll={() => props.onSelect({ kind: 'nodes', indices: shape.points.map((_, index) => index) })}
+      onLock={() => props.onCommit(setNodesLocked(shape, nodeIndices, !allNodesLocked), selection)}
+      onDelete={() => {
+        const result = deleteNodes(shape, nodeIndices);
+        if (result.shape && result.removed) props.onCommit(result.shape, { kind: 'none' });
+        if (result.skipped) props.onAnnounce(`${result.skipped} locked node${result.skipped > 1 ? 's' : ''} kept`);
+        else if (!result.shape) props.onAnnounce(`A shape needs at least ${shape.closed ? 3 : 2} nodes`);
+      }} onClear={() => props.onSelect({ kind: 'none' })} />}
+    {nodeMenu && menuPoint && <NodeMenu x={nodeMenu.x} y={nodeMenu.y} width={wrapRef.current?.clientWidth ?? 0} height={wrapRef.current?.clientHeight ?? 0}
+      count={nodeIndices.length || 1} selected={nodeIndices.includes(nodeMenu.index)} locked={!!menuPoint.locked}
+      smooth={shape.kind === 'polygon' ? null : (menuPoint.mode ?? 'auto') !== 'corner'} onSelect={() => { props.onSelect(toggleInSelection(selection, nodeMenu.index)); setNodeMenu(null); }}
+      onLock={() => { props.onCommit(setNodesLocked(shape, [nodeMenu.index], !menuPoint.locked), selection); setNodeMenu(null); }}
+      onToggleType={() => { props.onCommit(setNodeMode(shape, nodeMenu.index, (menuPoint.mode ?? 'auto') === 'corner' ? 'smooth' : 'corner'), { kind: 'node', index: nodeMenu.index }); setNodeMenu(null); }}
+      onDelete={() => {
+        const selected = selectedIndices(selection).includes(nodeMenu.index) ? selectedIndices(selection) : [nodeMenu.index];
+        const result = deleteNodes(shape, selected);
+        if (result.shape && result.removed) props.onCommit(result.shape, { kind: 'none' });
+        else if (!result.shape) props.onAnnounce(`A shape needs at least ${shape.closed ? 3 : 2} nodes`);
+        if (result.skipped) props.onAnnounce(`${result.skipped} locked node${result.skipped > 1 ? 's' : ''} kept`);
+        setNodeMenu(null);
+      }} onClose={() => setNodeMenu(null)} />}
     <div className="hud" ref={hudRef} aria-live="off" />
     <div className="zoom-hud" onPointerDown={e => e.stopPropagation()} role="group" aria-label="Zoom">
       <button type="button" onClick={() => zoomStep(-1)} aria-label="Zoom out" data-testid="zoom-out"><Minus /></button>

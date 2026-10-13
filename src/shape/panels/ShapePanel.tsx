@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Pentagon, Plus, Spline, Waves } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Combine, Pentagon, Plus, Spline, Waves } from 'lucide-react';
 import { UNITS, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../../lib/shape/geometry';
 import { insertOnSegment, type Selection } from '../../lib/shape/edit';
 import type { EditorSettings } from '../../lib/shape/settings';
@@ -11,9 +11,11 @@ type Props = {
   tolerance: number; setTolerance: (n: number) => void; precision: number; setPrecision: (n: number) => void; unit: Unit; setUnit: (u: Unit) => void;
   settings: EditorSettings; setSettings: (p: Partial<EditorSettings>) => void;
   onCommit: (next: ShapeModel, sel?: Selection) => void; announce: (m: string) => void;
+  shapes: ShapeModel[]; onUnify: (ids: string[]) => void;
 };
 
-export default function ShapePanel({ shape, fill, setFill, tolerance, setTolerance, precision, setPrecision, unit, setUnit, settings, setSettings, onCommit, announce }: Props) {
+export default function ShapePanel({ shape, fill, setFill, tolerance, setTolerance, precision, setPrecision, unit, setUnit, settings, setSettings, onCommit, announce, shapes, onUnify }: Props) {
+  const [unifyIds, setUnifyIds] = useState<string[]>([]);
   const simplifiedCount = useMemo(() => simplify(shape.kind === 'path' ? samplePath(shape.points, shape.closed, 8) : shape.points, tolerance).length, [shape.points, shape.closed, shape.kind, tolerance]);
   const frame: FrameMode = shape.frame ?? (shape.box ? 'box' : 'artboard');
   const convert = () => {
@@ -42,6 +44,17 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
     <Section title="Appearance" hint="live preview">
       <div className="field-label">Fill color <span>{fill}</span></div>
       <div className="swatch-row"><input aria-label="Shape fill color" type="color" value={fill} onChange={e => setFill(e.target.value)} data-testid="input-fill-color" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} data-testid="input-fill-hex" /></div>
+    </Section>
+    <Section title="Unify shapes" hint="boolean union">
+      <div className="unify-list">
+        {shapes.map(item => <label key={item.id} className={`unify-item ${!item.closed || item.derived ? 'disabled' : ''}`}>
+          <input type="checkbox" checked={unifyIds.includes(item.id ?? '')} disabled={!item.closed || !!item.derived}
+            onChange={event => setUnifyIds(current => event.target.checked ? [...current, item.id!] : current.filter(id => id !== item.id))} />
+          <i style={{ background: item.fill }} /><span>{item.name}</span>
+        </label>)}
+      </div>
+      <button type="button" className="btn primary" disabled={unifyIds.length < 2} onClick={() => { onUnify(unifyIds); setUnifyIds([]); }} data-testid="button-unify-shapes"><Combine />Unify selected</button>
+      <p className="hint">Closed shapes become one editable outline. Curves are flattened for the union.</p>
     </Section>
     <Section title="Export" hint={`${shape.points.length} → ${simplifiedCount}`}>
       <div className="field-label">Frame</div>

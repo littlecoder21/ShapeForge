@@ -203,6 +203,34 @@ export function makeShape(kind: string, seed = 9): ShapeModel {
     return { name: 'Seeded blob', kind: 'path', points: pts, closed: true, ...base };
   }
   if (kind === 'Circle') return { name: 'Circle', kind: 'path', points: polygonPoints(16, 180), closed: true, ...base };
+  if (kind === 'Ellipse') return { name: 'Ellipse', kind: 'path', points: Array.from({ length: 32 }, (_, i) => ({ x: 500 + Math.cos(i * Math.PI / 16) * 245, y: 300 + Math.sin(i * Math.PI / 16) * 165 })), closed: true, ...base };
+  if (kind === 'Rectangle') return { name: 'Rectangle', kind: 'polygon', points: [{ x: 250, y: 120 }, { x: 750, y: 120 }, { x: 750, y: 480 }, { x: 250, y: 480 }], closed: true, ...base };
+  if (kind === 'Rounded rectangle') {
+    const points: Point[] = [];
+    const corners = [{ x: 320, y: 180, a: Math.PI }, { x: 680, y: 180, a: -Math.PI / 2 }, { x: 680, y: 420, a: 0 }, { x: 320, y: 420, a: Math.PI / 2 }];
+    for (const corner of corners) for (let i = 0; i <= 6; i++) {
+      const a = corner.a + i * Math.PI / 12;
+      points.push({ x: corner.x + Math.cos(a) * 70, y: corner.y + Math.sin(a) * 70 });
+    }
+    return { name: 'Rounded rectangle', kind: 'polygon', points, closed: true, ...base };
+  }
+  if (kind === 'Half circle') return { name: 'Half circle', kind: 'polygon', points: Array.from({ length: 25 }, (_, i) => {
+    const a = Math.PI - i * Math.PI / 24;
+    return { x: 500 + Math.cos(a) * 230, y: 360 - Math.sin(a) * 230 };
+  }), closed: true, ...base };
+  if (kind === 'Trapezoid') return { name: 'Trapezoid', kind: 'polygon', points: [{ x: 350, y: 120 }, { x: 650, y: 120 }, { x: 790, y: 480 }, { x: 210, y: 480 }], closed: true, ...base };
+  if (kind === 'Parallelogram') return { name: 'Parallelogram', kind: 'polygon', points: [{ x: 370, y: 120 }, { x: 790, y: 120 }, { x: 630, y: 480 }, { x: 210, y: 480 }], closed: true, ...base };
+  if (kind === 'Arrow') return { name: 'Arrow', kind: 'polygon', points: [{ x: 120, y: 245 }, { x: 610, y: 245 }, { x: 610, y: 120 }, { x: 880, y: 300 }, { x: 610, y: 480 }, { x: 610, y: 355 }, { x: 120, y: 355 }], closed: true, ...base };
+  if (kind === 'Cross') return { name: 'Cross', kind: 'polygon', points: [{ x: 400, y: 100 }, { x: 600, y: 100 }, { x: 600, y: 230 }, { x: 730, y: 230 }, { x: 730, y: 370 }, { x: 600, y: 370 }, { x: 600, y: 500 }, { x: 400, y: 500 }, { x: 400, y: 370 }, { x: 270, y: 370 }, { x: 270, y: 230 }, { x: 400, y: 230 }], closed: true, ...base };
+  if (kind === 'Heart') {
+    const points: Point[] = [];
+    for (let i = 0; i < 64; i++) {
+      const t = i * Math.PI * 2 / 64;
+      const x = 16 * Math.sin(t) ** 3, y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+      points.push({ x: 500 + x * 15, y: 285 - y * 15 });
+    }
+    return { name: 'Heart', kind: 'polygon', points, closed: true, ...base };
+  }
   if (kind === 'Triangle') return { name: 'Triangle', kind: 'polygon', points: polygonPoints(3), closed: true, ...base };
   if (kind === 'Diamond') return { name: 'Diamond', kind: 'polygon', points: [{ x: 500, y: 70 }, { x: 760, y: 300 }, { x: 500, y: 530 }, { x: 240, y: 300 }], closed: true, ...base };
   if (kind === 'Star') {
@@ -251,7 +279,7 @@ export function chainRings<T extends { x: number; y: number }>(rings: T[][]): T[
   return out;
 }
 
-export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 8, unit: Unit = '%') {
+export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 8, unit: Unit = '%', pageSize?: { width: number; height: number; unit: string }) {
   const frame = frameOf(shape);
   const rings = ringsOf(shape).map(r => translatePoints(r, -frame.x, -frame.y));
   const smooth = shape.kind === 'path', evenodd = shape.fillRule === 'evenodd';
@@ -259,14 +287,18 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
   const sampled = chainRings(rings.map(r => simplify(smooth ? samplePath(r, shape.closed, 12) : r, tolerance)));
   const poly = polygonToCssUnits(sampled, frame, unit, precision, evenodd);
   const vb = `0 0 ${fmt(frame.w, precision)} ${fmt(frame.h, precision)}`;
-  const par = shape.wave ? ' preserveAspectRatio="none"' : '';
+  const pageAttrs = pageSize && (shape.frame ?? (shape.box ? 'box' : 'artboard')) === 'artboard'
+    ? ` width="${fmt(pageSize.width, precision)}${pageSize.unit}" height="${fmt(pageSize.height, precision)}${pageSize.unit}"`
+    : '';
+  const par = shape.wave || pageSize ? ' preserveAspectRatio="none"' : '';
   const rule = evenodd ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
-  let svg = `<svg viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
+  let svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
   if (shape.paint && (paintShowsFill(shape.paint) || shape.paint.stroke)) {
     const pp = paintSvgParts(shape.paint, d, frame, shape.strokeWidth);
     const outline = shape.paint.stroke ? '' : '';
-    svg = `<svg viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(shape.paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
+    svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(shape.paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
   }
+
   const ratio = `${fmt(frame.w, 1)} / ${fmt(frame.h, 1)}`;
   if (format === 'SVG') return svg;
   if (format === 'SVG PATH') return evenodd ? `d="${d}"\nfill-rule="evenodd"` : `d="${d}"`;
@@ -291,4 +323,29 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
     }, null, 2);
   }
   return svg;
+}
+
+/** Export every visible shape on a page in artboard coordinates, preserving each shape's SVG paint and compound rings. */
+export function exportPageSvg(shapes: ShapeModel[], precision = 1, page: { width: number; height: number; unit: string; background?: string } = { width: W, height: H, unit: 'px' }) {
+  const defs: string[] = [], body: string[] = [];
+  if (page.background && page.background !== 'transparent') body.push(`<rect width="${W}" height="${H}" fill="${page.background}" />`);
+  for (const shape of shapes) {
+    if (shape.hidden) continue;
+    const rings = ringsOf(shape);
+    const d = rings.map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');
+    const rule = shape.fillRule === 'evenodd' ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
+    const paint = shape.paint;
+    if (paint && (paintShowsFill(paint) || paint.stroke)) {
+      const frame = frameOf(shape), local = rings.map(r => translatePoints(r, -frame.x, -frame.y));
+      const localD = local.map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');
+      const markup = paintSvgParts(paint, localD, frame, shape.strokeWidth, `sfp-${shape.id ?? 'shape'}`, shape.fillRule === 'evenodd');
+      defs.push(markup.defs);
+      body.push(`<g transform="translate(${fmt(frame.x, precision)} ${fmt(frame.y, precision)})">${markup.body}</g>`);
+      if (!paintShowsFill(paint)) body.push(`<path d="${d}" fill="${shape.fill}"${rule} />`);
+    } else {
+      const stroke = shape.stroke && shape.stroke !== 'none' ? ` stroke="${shape.stroke}" stroke-width="${fmt(shape.strokeWidth, precision)}"` : '';
+      body.push(`<path d="${d}" fill="${shape.fill}"${rule}${stroke} />`);
+    }
+  }
+  return `<svg width="${fmt(page.width, precision)}${page.unit}" height="${fmt(page.height, precision)}${page.unit}" viewBox="0 0 ${fmt(W, precision)} ${fmt(H, precision)}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">\n${defs.length ? `  <defs>${defs.join('')}</defs>\n` : ''}${body.map(markup => `  ${markup}`).join('\n')}\n</svg>`;
 }

@@ -26,25 +26,18 @@ ShapeForge library work finished (src/lib/shape/…)
     inside the page, computed polygon when they touch/cross the page edge or each other) + outerShape() helper
   - Point.locked, multi-selection helpers (toggleInSelection, selectAllNodes, setNodesLocked, deleteNodes, moveNodesBy)
   - Multi-select + "Lock this node" in the node panel (PrecisionPanel) already work for the multi-node selection state
+  - Multiple shapes per page are wired through the document state: page tabs, rename/delete/add page, shape visibility/lock,
+    duplicate/delete/reorder, additive library/wave/blob/Pen generation, canvas picking, and PAGE SVG export
 
 WRITTEN BUT NOT WIRED INTO THE UI YET
 -------------------------------------
-  - src/shape/state/document.ts + useDocument.ts      pages -> shapes document with undo/redo (pure, ready)
-  - src/shape/canvas/StaticShape.tsx                  draws the non-active shapes of a page
   - src/shape/canvas/NodeMenu.tsx / NodeBar.tsx       compact double-tap node menu + multi-select bar (components only)
-  - src/lib/shape/paintMarkup.ts                      per-shape unique gradient ids for many painted shapes
 
 REMAINING FUNCTIONALITY (in priority order)
 -------------------------------------------
-1. MULTIPLE SHAPES ON ONE PAGE + ADD PAGE
-   - Replace the single `shape` state in App.tsx with useDocument() (shape = active shape, page, doc).
-   - Stage.tsx: add props `others`, `onPickShape`, `onAddShape`; render others with <StaticShape/>; tapping another shape's
-     body selects it (pointInShape() already exists in lib/shape/edit.ts); remove the global `fill` prop and use shape.fill.
-   - Page tabs row above the canvas: Page 1 | Page 2 | + (rename on double-click, delete).
-   - "Page" panel: list of shapes on the page (select, hide, lock, duplicate, delete, reorder) + add shape from the library.
-   - Generators (library / wave / blob) must ADD a new shape to the page instead of replacing the current one.
-   - Pen tool: starting a new path must add a new shape (use onAddShape) instead of replacing the active shape.
-   - New export format "PAGE SVG" (all shapes of the page in one SVG).
+1. MULTIPLE SHAPES ON ONE PAGE + ADD PAGE — COMPLETED
+   - The editor now uses the document model, with page tabs and page/shape management; generated shapes and new Pen paths
+     are additive, and PAGE SVG exports all visible shapes on the active page.
 2. NODE OPTIONS ON DOUBLE-CLICK / DOUBLE-TAP
    - Stage.tsx handleTap: on a double tap of a node open <NodeMenu/> (select/unselect, lock/unlock, corner↔smooth, delete).
    - Multi-select: Shift/Ctrl+click and a "multi" toggle (NodeBar) to add/remove nodes; selection kind 'nodes' rings on canvas.
