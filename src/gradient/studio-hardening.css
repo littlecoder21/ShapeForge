@@ -1,0 +1,17 @@
+/* Zoom/play controls: no backdrop-filter over heavy art */
+.gs .zoom-hud,
+.gs .gs-play-btn {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: #1b2025;
+}
+
+/* Don't hold GPU textures for paused animated layers */
+.gs-art-root:not(.gs-play) :where(.g-layer) { will-change: auto !important; }
+
+/* Contain the preview and stack the chrome above it */
+.gs .gs-stage { contain: paint; }
+.gs .gs-top,
+.gs .gs-tabrow,
+.gs .gs-dock,
+.gs .gs-outbar { position: relative; z-index: 2; }
