@@ -11,7 +11,7 @@ import { mulberry } from './rng';
 
 const r2 = (v: number, d = 2) => { const k = 10 ** d; return String(Math.round(v * k) / k).replace(/^-0$/, '0'); };
 
-export const newMeshPoint = (x: number, y: number, color: string, alpha = 1, size = 48): MeshPoint => ({ id: uid('m'), x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, color, alpha, size });
+export const newMeshPoint = (x: number, y: number, color: string, alpha = 1, size = 48): MeshPoint => ({ id: uid('m'), x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, color, alpha, size, locked: false });
 
 export type MeshPattern = 'scatter' | 'grid' | 'diagonal' | 'ring' | 'corners';
 export const MESH_PATTERNS: { id: MeshPattern; label: string }[] = [{ id: 'scatter', label: 'Scatter' }, { id: 'grid', label: 'Grid' }, { id: 'diagonal', label: 'Diagonal' }, { id: 'ring', label: 'Ring' }, { id: 'corners', label: 'Corners' }];
@@ -53,10 +53,10 @@ export const meshCoord = (v: number, s: number) => (v + (100 * (s - 1)) / 2) / s
 /** One radial gradient per point (top-first), ready to be printed on one line or neatly over several. */
 export function meshParts(layer: GradientLayer, project: GradientProject, o: MeshCtx): GradientParts[] {
   const space = layer.space !== 'srgb' ? `in ${layer.space} ` : '';
-  const mid = 25 + layer.mesh.core * 0.5;
   return layer.mesh.points.map(p => {
     const { rx, ry } = pointRadii(p, project.canvas), v = o.vars?.get(p.id);
     const x = v?.x ?? `${r2(meshCoord(p.x, o.s))}%`, y = v?.y ?? `${r2(meshCoord(p.y, o.s))}%`;
+    const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
     const stops = [`${rgbaString(p.color, p.alpha * o.alphaMul)} 0%`, ...(Math.abs(mid - 50) > 0.5 ? [`${r2(mid, 1)}%`] : []), `${rgbaString(p.color, 0)} 100%`];
     return { fn: 'radial-gradient', head: `${space}ellipse ${r2(rx / o.s)}% ${r2(ry / o.s)}% at ${x} ${y}`, stops };
   });

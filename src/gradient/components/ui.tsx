@@ -15,6 +15,7 @@ export function ColorInput({ color, alpha, onChange, onCommit, showAlpha = true,
   color: string; alpha: number; onChange: (c: string, a: number) => void; onCommit?: () => void; showAlpha?: boolean; label?: string; testId?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const pickerColor = parseColor(color)?.hex ?? '#000000';
   const commit = () => {
     if (draft === null) return;
     const p = parseColor(draft); setDraft(null);
@@ -23,7 +24,7 @@ export function ColorInput({ color, alpha, onChange, onCommit, showAlpha = true,
   return <div className="gs-color">
     <label className="gs-swatch" style={{ background: CHECKER }} aria-label={label ?? 'Colour'}>
       <span style={{ background: color, opacity: Math.max(0.12, alpha) }} />
-      <input type="color" value={color} onChange={e => onChange(e.target.value, alpha)} onBlur={() => onCommit?.()} onPointerUp={() => onCommit?.()} data-testid={testId} />
+      <input type="color" value={pickerColor} onChange={e => onChange(e.target.value, alpha)} onBlur={() => onCommit?.()} onPointerUp={() => onCommit?.()} data-testid={testId} />
     </label>
     <input className="gs-hex" aria-label={`${label ?? 'Colour'} hex`} value={draft ?? color} spellCheck={false}
       onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} data-testid={testId ? `${testId}-hex` : undefined} />

@@ -37,6 +37,9 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
   const a = layer.anim;
   const setAnim = (patch: Partial<LayerAnimation>, key?: string) => store.updateLayer(layerId, l => ({ ...l, anim: { ...l.anim, ...patch } }), { coalesce: key });
   const setTrack = (id: string, patch: Partial<AnimTrack>, key?: string) => setAnim({ tracks: a.tracks.map(t => (t.id === id ? { ...t, ...patch } : t)) }, key);
+  const setPointMotion = (stopId: string, patch: Pick<AnimTrack, 'duration' | 'direction'>, key: string) => setAnim({
+    tracks: a.tracks.map(t => t.stopId === stopId && (t.prop === 'meshX' || t.prop === 'meshY') ? { ...t, ...patch } : t),
+  }, key);
   const addTrack = (prop: AnimProp) => {
     const stopId = prop === 'stopPos' || prop === 'stopColor' ? layer.stops[0]?.id : prop === 'meshX' || prop === 'meshY' ? layer.mesh.points[0]?.id : undefined;
     setAnim({ enabled: true, tracks: [...a.tracks.filter(t => !(t.prop === prop && t.stopId === stopId)), { id: uid('t'), prop, stopId, ...defaults(layer, prop, stopId) }] });
@@ -95,8 +98,9 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
     <Section title="Tracks" hint={`${a.tracks.length}`}>
       <div className="gs-chips gs-addchips" role="group" aria-label="Add track">{avail.map(p => <button key={p.id} type="button" className="chip" onClick={() => addTrack(p.id)} data-testid={`anim-add-${p.id}`}><Plus />{p.label}</button>)}</div>
       {!a.tracks.length && <Empty>Add a track, or start from a motion preset. The play button over the canvas previews it.</Empty>}
-      {a.tracks.map(tr => {
+      {a.tracks.map((tr, trackIndex) => {
         const def = PROPS.find(p => p.id === tr.prop)!, isStop = tr.prop === 'stopPos' || tr.prop === 'stopColor', isPt = tr.prop === 'meshX' || tr.prop === 'meshY';
+        const showPointTiming = isPt && a.tracks.findIndex(t => t.stopId === tr.stopId && (t.prop === 'meshX' || t.prop === 'meshY')) === trackIndex;
         return <div key={tr.id} className="gs-fxcard" data-testid="anim-track">
           <div className="gs-fxhead"><b>{def.label}</b>
             <button type="button" className="icon-btn" aria-label={`Remove ${def.label} track`} onClick={() => setAnim({ tracks: a.tracks.filter(x => x.id !== tr.id) })}><Trash2 /></button></div>
@@ -108,6 +112,10 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
           </> : <>
             <ValueControl label="From" value={Number(tr.from)} min={def.min} max={def.max} step={def.step} unit={def.unit} onChange={v => setTrack(tr.id, { from: v }, `tr-${tr.id}f`)} />
             <ValueControl label="To" value={Number(tr.to)} min={def.min} max={def.max} step={def.step} unit={def.unit} onChange={v => setTrack(tr.id, { to: v }, `tr-${tr.id}t`)} />
+          </>}
+          {showPointTiming && tr.stopId && <>
+            <ValueControl label="Point speed" value={tr.duration ?? a.duration} min={1} max={90} step={0.5} unit="s" def={a.duration} onChange={v => setPointMotion(tr.stopId!, { duration: v }, `pt-duration-${tr.stopId}`)} testId={`anim-point-duration-${tr.stopId}`} />
+            <Seg value={tr.direction ?? a.direction} label="Point direction" options={[{ id: 'alternate', label: 'Ping-pong' }, { id: 'normal', label: 'Loop' }, { id: 'reverse', label: 'Reverse' }, { id: 'alternate-reverse', label: 'Reverse ping-pong' }]} onChange={v => setPointMotion(tr.stopId!, { direction: v }, `pt-direction-${tr.stopId}`)} />
           </>}
         </div>;
       })}

@@ -8,7 +8,7 @@ import type { GradientLayer } from './model';
  */
 
 export type HandleKind = 'origin' | 'move' | 'angle' | 'from' | 'rx' | 'ry' | 'stop' | 'tf-move' | 'tf-scale' | 'tf-rotate' | 'point' | 'psize';
-export interface Handle { id: string; kind: HandleKind; x: number; y: number; stopId?: string; color?: string; r: number; pri: number; label?: string }
+export interface Handle { id: string; kind: HandleKind; x: number; y: number; stopId?: string; color?: string; r: number; pri: number; label?: string; locked?: boolean }
 export interface Overlay {
   /** matrix applied to `local` geometry (layer space → canvas) */
   matrix: Mat;
@@ -44,8 +44,8 @@ export function layerOverlay(layer: GradientLayer, canvas: Canvas, mode: 'gradie
     layer.mesh.points.forEach(p => {
       const c = { x: (p.x / 100) * w, y: (p.y / 100) * h }, rr = pointRadii(p, canvas);
       if (p.id === selectedId) local.push({ kind: 'shape', d: `M${c.x - (rr.rx / 100) * w} ${c.y}a${(rr.rx / 100) * w} ${(rr.ry / 100) * h} 0 1 0 ${(rr.rx / 100) * w * 2} 0a${(rr.rx / 100) * w} ${(rr.ry / 100) * h} 0 1 0 ${-(rr.rx / 100) * w * 2} 0`, dash: true });
-      handles.push({ id: `pt-${p.id}`, kind: 'point', stopId: p.id, ...map(c), r: 14, pri: 3, color: p.color });
-      if (p.id === selectedId) handles.push({ id: `ps-${p.id}`, kind: 'psize', stopId: p.id, ...map({ x: c.x + (rr.rx / 100) * w, y: c.y }), r: 12, pri: 4, color: '#8fb4ff', label: `${Math.round(p.size)}%` });
+      handles.push({ id: `pt-${p.id}`, kind: 'point', stopId: p.id, ...map(c), r: 14, pri: 3, color: p.color, locked: p.locked });
+      if (p.id === selectedId) handles.push({ id: `ps-${p.id}`, kind: 'psize', stopId: p.id, ...map({ x: c.x + (rr.rx / 100) * w, y: c.y }), r: 12, pri: 4, color: '#8fb4ff', label: `${Math.round(p.size)}%`, locked: p.locked });
     });
     return { matrix: M, local, handles };
   }
@@ -88,6 +88,7 @@ export function dragHandle({ start, handle, pointer, startPointer, canvas, shift
   const { w, h } = canvas, M = layerMatrix(start, canvas), inv = invert(M);
   const p = apply(inv, pointer), p0 = apply(inv, startPointer);
   const next: GradientLayer = { ...start, transform: { ...start.transform }, stops: start.stops.map(s => ({ ...s })) };
+  if (handle.locked) return next;
   const dxc = ((pointer.x - startPointer.x) / w) * 100, dyc = ((pointer.y - startPointer.y) / h) * 100;
   const r1 = (v: number) => Math.round(v * 10) / 10;
 

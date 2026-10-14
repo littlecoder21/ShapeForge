@@ -24,16 +24,20 @@ export default function OutputSettingsForm() {
     </div>
     <label className="nf"><span className="nf-label">Download filename</span><input className="generate-select" value={o.downloadName} spellCheck={false} onChange={e => set({ downloadName: e.target.value }, 'out-download-name')} data-testid="out-download-name" placeholder="gradient" /><small className="gs-bar-hint">The extension is added automatically.</small></label>
     <Switch label="Include width / height in the code" checked={o.includeSize} onChange={v => set({ includeSize: v })} testId="out-include-size" />
+    <div>
+      <Switch label="Preserve preview proportions when resized" checked={o.responsive} onChange={v => set({ responsive: v })} testId="out-responsive" />
+      <small className="gs-bar-hint">Adds the preview aspect ratio so colors stay at the same relative positions. The element height follows its width.</small>
+    </div>
     {o.includeSize && <>
       <div className="gs-two">
         <label className="nf"><span className="nf-label">Width</span><span className="gs-unitfield">
           <input inputMode="decimal" disabled={o.width.unit === 'auto'} value={o.width.unit === 'auto' ? '' : o.width.value} onChange={e => set({ width: { ...o.width, value: num(e.target.value) } }, 'out-w')} data-testid="out-width" aria-label="Width value" />
           <select value={o.width.unit} onChange={e => set({ width: { ...o.width, unit: e.target.value as OutputSettings['width']['unit'] } })} aria-label="Width unit" data-testid="out-width-unit">{W_UNITS.map(u => <option key={u}>{u}</option>)}</select></span></label>
-        <label className="nf"><span className="nf-label">Height</span><span className="gs-unitfield">
+        {!o.responsive && <label className="nf"><span className="nf-label">Height</span><span className="gs-unitfield">
           <input inputMode="decimal" disabled={o.height.unit === 'auto'} value={o.height.unit === 'auto' ? '' : o.height.value} onChange={e => set({ height: { ...o.height, value: num(e.target.value) } }, 'out-h')} data-testid="out-height" aria-label="Height value" />
-          <select value={o.height.unit} onChange={e => set({ height: { ...o.height, unit: e.target.value as OutputSettings['height']['unit'] } })} aria-label="Height unit" data-testid="out-height-unit">{H_UNITS.map(u => <option key={u}>{u}</option>)}</select></span></label>
+          <select value={o.height.unit} onChange={e => set({ height: { ...o.height, unit: e.target.value as OutputSettings['height']['unit'] } })} aria-label="Height unit" data-testid="out-height-unit">{H_UNITS.map(u => <option key={u}>{u}</option>)}</select></span></label>}
       </div>
-      <Seg value={o.height.prop} label="Height property" options={[{ id: 'min-height', label: 'min-height' }, { id: 'height', label: 'height' }]} onChange={v => set({ height: { ...o.height, prop: v } })} testId="out-heightprop" />
+      {!o.responsive && <Seg value={o.height.prop} label="Height property" options={[{ id: 'min-height', label: 'min-height' }, { id: 'height', label: 'height' }]} onChange={v => set({ height: { ...o.height, prop: v } })} testId="out-heightprop" />}
     </>}
     <Switch label="Comments in code" checked={o.comments} onChange={v => set({ comments: v })} testId="out-comments" />
     <button type="button" className="btn wide" onClick={() => set({ ...DEFAULT_OUTPUT }, 'out-reset')}>Reset naming &amp; size</button>

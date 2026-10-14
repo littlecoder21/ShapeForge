@@ -8,7 +8,7 @@ import { clamp } from './color';
 export type GradientKind = 'linear' | 'radial' | 'conic' | 'mesh' | 'noise';
 /** Kinds that are true colour-stop gradients (the rest are a mesh of points / a grain texture). */
 export const isStopKind = (k: GradientKind) => k === 'linear' || k === 'radial' || k === 'conic';
-export type ColorSpace = 'srgb' | 'oklab' | 'oklch';
+export type ColorSpace = 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
 
 export const BLEND_MODES = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light',
@@ -52,12 +52,12 @@ export interface TextureData {
 
 export type AnimProp = 'x' | 'y' | 'scale' | 'rotate' | 'opacity' | 'angle' | 'hue' | 'stopPos' | 'stopColor' | 'meshX' | 'meshY';
 /** `stopId` doubles as the mesh-point id for meshX / meshY tracks. */
-export interface AnimTrack { id: string; prop: AnimProp; from: number | string; to: number | string; stopId?: string }
 export type AnimDirection = 'normal' | 'reverse' | 'alternate' | 'alternate-reverse';
+export interface AnimTrack { id: string; prop: AnimProp; from: number | string; to: number | string; stopId?: string; duration?: number; direction?: AnimDirection }
 export interface LayerAnimation { enabled: boolean; duration: number; delay: number; easing: string; direction: AnimDirection; iterations?: number | 'infinite'; tracks: AnimTrack[] }
 
 /** Mesh gradient: soft colour points you can move. Rendered as one radial gradient per point over an optional base colour. */
-export interface MeshPoint { id: string; x: number; y: number; color: string; alpha: number; size: number }
+export interface MeshPoint { id: string; x: number; y: number; color: string; alpha: number; size: number; core?: number; locked?: boolean; group?: string }
 export interface MeshData {
   points: MeshPoint[];
   /** solid colour under the points ('' = none) */
@@ -120,12 +120,13 @@ export interface OutputSettings {
   width: { value: number; unit: 'auto' | '%' | 'px' | 'vw' | 'rem' | 'em' };
   height: { value: number; unit: 'auto' | 'px' | 'vh' | '%' | 'rem' | 'em'; prop: 'height' | 'min-height' };
   includeSize: boolean;
+  responsive: boolean;
   comments: boolean;
 }
 export const DEFAULT_OUTPUT: OutputSettings = {
   selectorType: 'class', selector: 'gradient-canvas', attrValue: 'hero', layerPrefix: 'layer',
   downloadName: 'gradient',
-  width: { value: 100, unit: '%' }, height: { value: 320, unit: 'px', prop: 'min-height' }, includeSize: true, comments: true,
+  width: { value: 100, unit: '%' }, height: { value: 320, unit: 'px', prop: 'min-height' }, includeSize: true, responsive: false, comments: true,
 };
 export const outputOf = (p: { output?: Partial<OutputSettings> }): OutputSettings => ({ ...DEFAULT_OUTPUT, ...(p.output ?? {}), width: { ...DEFAULT_OUTPUT.width, ...(p.output?.width ?? {}) }, height: { ...DEFAULT_OUTPUT.height, ...(p.output?.height ?? {}) } });
 
@@ -223,8 +224,24 @@ export function normalizeProject(raw: unknown): GradientProject {
   const layers = r.layers.map((l, i) => {
     const t = (['linear', 'radial', 'conic', 'mesh', 'noise'] as const).includes(l.type as GradientKind) ? l.type : 'linear';
     const merged = newLayer(t, { ...l, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [] });
+    merged.effects = merged.effects.map(effect => effect.type === 'iridescence' ? {
+      ...effect,
+      params: {
+        ...effect.params,
+        hue: effect.params.hue ?? effect.params.angle ?? 20,
+        intensity: effect.params.intensity ?? effect.params.amount ?? 55,
+        angle: effect.params.hue !== undefined || effect.params.sheen !== undefined ? effect.params.angle ?? 35 : 35,
+        sheen: effect.params.sheen ?? 55,
+      },
+    } : effect);
     if (!Array.isArray(merged.stops) || merged.stops.length < 2) merged.stops = newLayer(t).stops;
-    merged.mesh = { ...DEFAULT_MESH, ...(l.mesh ?? {}), points: (l.mesh?.points ?? []).map(p => ({ ...p, id: p.id || uid('m') })) };
+    merged.mesh = { ...DEFAULT_MESH, ...(l.mesh ?? {}), points: (l.mesh?.points ?? []).map(p => ({
+      ...p,
+      id: p.id || uid('m'),
+      core: p.core === undefined ? undefined : clamp(Number(p.core), 0, 100),
+      locked: p.locked ?? false,
+      group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
+    })) };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
     merged.texture = { ...DEFAULT_TEXTURE, ...(l.texture ?? {}) };
     if (!/^(grain|dots|lines|crosshatch|grid|waves|geometric|woven|paper|material|organic)-(?:[1-9]|[1-9]\d)$/.test(merged.texture.pattern)) merged.texture.pattern = DEFAULT_TEXTURE.pattern;

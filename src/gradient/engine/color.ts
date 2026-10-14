@@ -78,13 +78,19 @@ export function oklabToRgb({ L, a, b }: Lab): RGB {
   };
 }
 
-export type Space = 'srgb' | 'oklab' | 'oklch';
+export type Space = 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
 /** Interpolate two straight (non-premultiplied) colours; premultiplied alpha is applied like CSS. */
 export function mixColors(c1: RGBA, c2: RGBA, t: number, space: Space = 'srgb'): RGBA {
   const a = c1.a + (c2.a - c1.a) * t;
   const w1 = c1.a * (1 - t), w2 = c2.a * t, wsum = w1 + w2;
   const q1 = wsum > 1e-9 ? w1 / wsum : 1 - t, q2 = wsum > 1e-9 ? w2 / wsum : t;
   if (space === 'srgb') return { r: c1.r * q1 + c2.r * q2, g: c1.g * q1 + c2.g * q2, b: c1.b * q1 + c2.b * q2, a };
+  if (space === 'srgb-linear') return {
+    r: fromLin(toLin(c1.r) * q1 + toLin(c2.r) * q2),
+    g: fromLin(toLin(c1.g) * q1 + toLin(c2.g) * q2),
+    b: fromLin(toLin(c1.b) * q1 + toLin(c2.b) * q2),
+    a,
+  };
   const l1 = rgbToOklab(c1), l2 = rgbToOklab(c2);
   if (space === 'oklab') return { ...oklabToRgb({ L: l1.L * q1 + l2.L * q2, a: l1.a * q1 + l2.a * q2, b: l1.b * q1 + l2.b * q2 }), a };
   const C1 = Math.hypot(l1.a, l1.b), C2 = Math.hypot(l2.a, l2.b);

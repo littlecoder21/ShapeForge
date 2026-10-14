@@ -111,7 +111,7 @@ export function gradientFn(layer: GradientLayer, project: GradientProject, o: { 
 }
 
 /** One CSS <image> of a layer. A mesh layer has one per point; grain is a single tiled data-URI. */
-export interface ImageItem { text: string; parts?: GradientParts; label: string; size?: string }
+export interface ImageItem { text: string; parts?: GradientParts; label: string; size?: string; position?: string }
 
 export function layerImages(layer: GradientLayer, project: GradientProject, o: { alphaMul?: number; flat?: boolean; cls?: string } = {}): ImageItem[] {
   const line = (g: GradientParts) => `${g.fn}(${[g.head, ...g.stops].join(', ')})`;
@@ -173,22 +173,23 @@ export function animationCss(layer: GradientLayer, project: GradientProject, cls
   const a = layer.anim;
   if (!a.enabled || !a.tracks.length) return null;
   const T = a.tracks;
+  const pointTracks = T.filter(t => (t.prop === 'meshX' || t.prop === 'meshY') && t.stopId);
+  const sharedTracks = T.filter(t => t.prop !== 'meshX' && t.prop !== 'meshY');
   const val = (t: AnimTrack, which: 'from' | 'to') => t[which];
-  const tf = (which: 'from' | 'to') => {
+  const tf = (which: 'from' | 'to', tracks: AnimTrack[]) => {
     const over: Partial<Record<'x' | 'y' | 'scale' | 'rotate', number>> = {};
-    T.forEach(t => { if (t.prop === 'x' || t.prop === 'y' || t.prop === 'scale' || t.prop === 'rotate') over[t.prop] = Number(val(t, which)); });
+    tracks.forEach(t => { if (t.prop === 'x' || t.prop === 'y' || t.prop === 'scale' || t.prop === 'rotate') over[t.prop] = Number(val(t, which)); });
     return transformCss(layer, 1 + 2 * bleedOf(layer, project.canvas), over);
   };
-  const decl = (which: 'from' | 'to') => {
+  const decl = (which: 'from' | 'to', tracks: AnimTrack[]) => {
     const lines: string[] = [];
-    if (T.some(t => ['x', 'y', 'scale', 'rotate'].includes(t.prop))) lines.push(`transform: ${tf(which) || 'none'}`);
-    const op = T.find(t => t.prop === 'opacity'); if (op) lines.push(`opacity: ${r2(Number(val(op, which)), 3)}`);
-    const hue = T.find(t => t.prop === 'hue'); if (hue) lines.push(`filter: ${filterCss(layer, cls, `hue-rotate(${r2(Number(val(hue, which)))}deg)`)}`);
-    const an = T.find(t => t.prop === 'angle'); if (an) lines.push(`--${cls}-a: ${r2(Number(val(an, which)))}deg`);
+    if (tracks.some(t => ['x', 'y', 'scale', 'rotate'].includes(t.prop))) lines.push(`transform: ${tf(which, tracks) || 'none'}`);
+    const op = tracks.find(t => t.prop === 'opacity'); if (op) lines.push(`opacity: ${r2(Number(val(op, which)), 3)}`);
+    const hue = tracks.find(t => t.prop === 'hue'); if (hue) lines.push(`filter: ${filterCss(layer, cls, `hue-rotate(${r2(Number(val(hue, which)))}deg)`)}`);
+    const an = tracks.find(t => t.prop === 'angle'); if (an) lines.push(`--${cls}-a: ${r2(Number(val(an, which)))}deg`);
     const ctx = makeCtx(layer, project, { cls });
-    T.filter(t => t.prop === 'meshX' || t.prop === 'meshY').forEach(t => lines.push(`--${cls}-m${t.prop === 'meshX' ? 'x' : 'y'}-${t.stopId}: ${r2(meshCoord(Number(val(t, which)), ctx.s))}%`));
-    T.filter(t => t.prop === 'stopPos' && t.stopId).forEach(t => lines.push(`--${cls}-p-${t.stopId}: ${posCss(layer, Number(val(t, which)), ctx)}`));
-    T.filter(t => t.prop === 'stopColor' && t.stopId).forEach(t => lines.push(`--${cls}-c-${t.stopId}: ${String(val(t, which))}`));
+    tracks.filter(t => t.prop === 'stopPos' && t.stopId).forEach(t => lines.push(`--${cls}-p-${t.stopId}: ${posCss(layer, Number(val(t, which)), ctx)}`));
+    tracks.filter(t => t.prop === 'stopColor' && t.stopId).forEach(t => lines.push(`--${cls}-c-${t.stopId}: ${String(val(t, which))}`));
     return lines;
   };
   const props: string[] = [];
@@ -199,11 +200,24 @@ export function animationCss(layer: GradientLayer, project: GradientProject, cls
     if (t.prop === 'stopPos' && t.stopId) { const s = layer.stops.find(x => x.id === t.stopId); if (s) props.push(`@property --${cls}-p-${t.stopId} {\n  syntax: '${propSyntax(layer, t)}';\n  inherits: false;\n  initial-value: ${posCss(layer, s.pos, ctx)};\n}`); }
     if (t.prop === 'stopColor' && t.stopId) { const s = layer.stops.find(x => x.id === t.stopId); if (s) props.push(`@property --${cls}-c-${t.stopId} {\n  syntax: '<color>';\n  inherits: false;\n  initial-value: ${rgbaString(s.color, s.alpha)};\n}`); }
   });
-  const block = (w: 'from' | 'to') => `  ${w} {\n${decl(w).map(d => `    ${d};`).join('\n')}\n  }`;
+  const block = (w: 'from' | 'to', tracks: AnimTrack[]) => `  ${w} {\n${decl(w, tracks).map(d => `    ${d};`).join('\n')}\n  }`;
+  const sharedKeyframes = sharedTracks.length ? `@keyframes ${cls}-kf {\n${block('from', sharedTracks)}\n${block('to', sharedTracks)}\n}` : '';
+  const pointGroups = new Map<string, AnimTrack[]>();
+  pointTracks.forEach(t => { const group = pointGroups.get(t.stopId!) ?? []; group.push(t); pointGroups.set(t.stopId!, group); });
+  const pointKeyframes: string[] = [], pointShorthands: string[] = [];
+  pointGroups.forEach((tracks, stopId) => {
+    const name = `${cls}-point-${stopId.replace(/[^a-zA-Z0-9_-]/g, '-')}-kf`;
+    const pointBlock = (which: 'from' | 'to') => `  ${which} {\n${tracks.map(t => `    --${cls}-m${t.prop === 'meshX' ? 'x' : 'y'}-${stopId}: ${r2(meshCoord(Number(val(t, which)), ctx.s))}%;`).join('\n')}\n  }`;
+    pointKeyframes.push(`@keyframes ${name} {\n${pointBlock('from')}\n${pointBlock('to')}\n}`);
+    pointShorthands.push(`${name} ${r2(tracks[0].duration ?? a.duration)}s ${a.easing} ${r2(a.delay)}s ${a.iterations ?? 'infinite'} ${tracks[0].direction ?? a.direction}`);
+  });
   return {
     props: props.join('\n'),
-    keyframes: `@keyframes ${cls}-kf {\n${block('from')}\n${block('to')}\n}`,
-    shorthand: `${cls}-kf ${r2(a.duration)}s ${a.easing} ${r2(a.delay)}s ${a.iterations ?? 'infinite'} ${a.direction}`,
+    keyframes: [sharedKeyframes, ...pointKeyframes].filter(Boolean).join('\n'),
+    shorthand: [
+      ...(sharedTracks.length ? [`${cls}-kf ${r2(a.duration)}s ${a.easing} ${r2(a.delay)}s ${a.iterations ?? 'infinite'} ${a.direction}`] : []),
+      ...pointShorthands,
+    ].join(', '),
   };
 }
 
@@ -257,12 +271,16 @@ export function sizeDecls(project: GradientProject): string[] {
   if (!out.includeSize) return d;
   const val = (v: number, u: string) => (u === 'auto' ? 'auto' : `${r2(v)}${u}`);
   d.push(`width: ${val(out.width.value, out.width.unit)}`);
-  if (out.height.unit !== 'auto') d.push(`${out.height.prop}: ${val(out.height.value, out.height.unit)}`);
+  if (!out.responsive && out.height.unit !== 'auto') d.push(`${out.height.prop}: ${val(out.height.value, out.height.unit)}`);
   return d;
 }
 
+const responsiveDecls = (project: GradientProject) => outputOf(project).responsive
+  ? [`aspect-ratio: ${project.canvas.w} / ${project.canvas.h}`]
+  : [];
+
 export const rootCss = (project: GradientProject, o: LayeredOptions) => {
-  const decls = ['position: relative', 'isolation: isolate', 'overflow: hidden', ...sizeDecls(project), ...(project.background ? [`background-color: ${project.background}`] : [])];
+  const decls = ['position: relative', 'isolation: isolate', 'overflow: hidden', ...sizeDecls(project), ...responsiveDecls(project), ...(project.background ? [`background-color: ${project.background}`] : [])];
   const prefix = cssIdentifier(outputOf(project).layerPrefix, 'layer');
   return `${o.pretty && o.comments ? '/* Container */\n' : ''}${o.rootSel} {\n${decls.map(x => `  ${x};`).join('\n')}\n}\n\n${o.rootSel} > .${prefix} {\n  position: absolute;\n  inset: 0;\n  pointer-events: none;\n}`;
 };
@@ -333,27 +351,56 @@ export function flatOutput(project: GradientProject) {
   const vis = project.layers.filter(l => l.visible).map(l => ({ src: l, flat: flatten(l, warnings) }));
   const solidBase = vis.length === 1 && vis[0].src.solidColor !== undefined
     && vis[0].src.opacity === 1 && vis[0].src.blend === 'normal'
-    && !vis[0].src.texture.enabled && !activeEffects(vis[0].src.effects).length
+    && !activeEffects(vis[0].src.effects).length
     && !(vis[0].src.anim.enabled && vis[0].src.anim.tracks.length) && isIdentityTransform(vis[0].src)
     ? vis[0].src.solidColor
     : undefined;
   type Row = { item: ImageItem; blend: string; layer: string };
   const rows: Row[] = [];
-  if (solidBase === undefined) vis.forEach(({ src, flat }) => layerImages(flat, project, { alphaMul: src.opacity, flat: true }).forEach(item => rows.push({ item, blend: src.blend, layer: src.name })));
+  vis.forEach(({ src, flat }) => {
+    if (src.texture.enabled) {
+      const texture = src.texture, tile = Math.max(1, texture.scale);
+      const offsetX = Math.round(texture.seed * 13 + texture.offsetX) % Math.round(tile);
+      const offsetY = Math.round(texture.seed * 7 + texture.offsetY) % Math.round(tile);
+      rows.push({
+        item: {
+          text: textureDataUri(texture, texture.opacity * src.opacity),
+          label: `${src.name} texture`,
+          size: `${r2(tile)}px ${r2(tile)}px`,
+          position: `${offsetX}px ${offsetY}px`,
+        },
+        blend: texture.blend,
+        layer: src.name,
+      });
+    }
+    if (solidBase === undefined) {
+      layerImages(flat, project, { alphaMul: src.opacity, flat: true }).forEach(item => rows.push({ item, blend: src.blend, layer: src.name }));
+    }
+  });
   const out = outputOf(project), anyBlend = rows.some(r => r.blend !== 'normal'), anySize = rows.some(r => r.item.size);
+  const anyPosition = rows.some(r => r.item.position);
   const fns = rows.map(r => r.item.text);
+  const sizes = rows.map(r => r.item.size ?? 'auto');
+  const positions = rows.map(r => r.item.position ?? '0% 0%');
   const backgroundColor = solidBase ?? project.background;
   const imageBlock = () => `background-image:\n${rows.map((r, i) => `${out.comments && rows.length > 1 ? `  /* ${i + 1} · ${r.layer}${r.item.label !== r.layer && !r.item.label.startsWith(r.layer) ? ` — ${r.item.label.toLowerCase()}` : ''} */\n` : ''}  ${r.item.parts ? formatGradient(r.item.parts, '  ') : r.item.text}`).join(',\n')};`;
   /** The important properties only: background-color / background-image (+ blend / size when used). */
   const properties = (indent = '') => [
+    ...responsiveDecls(project).map(d => `${d};`),
     ...(backgroundColor ? [`background-color: ${backgroundColor};`] : []),
     ...(rows.length ? [imageBlock()] : []),
-    ...(anySize ? [`background-size: ${rows.map(r => r.item.size ?? 'auto').join(', ')};`] : []),
+    ...(anySize ? [`background-size: ${sizes.join(', ')};`] : []),
+    ...(anyPosition ? [`background-position: ${positions.join(', ')};`] : []),
     ...(anyBlend ? [`background-blend-mode: ${[...rows.map(r => r.blend)].join(', ')};`] : []),
   ].join('\n').split('\n').map(l => (l ? `${indent}${l}` : l)).join('\n') || `${indent}background: transparent;`;
   const sel = selectorFor(project).sel;
   const full = `${sel} {\n${[...sizeDecls(project).map(d => `  ${d};`), properties('  ')].join('\n')}\n}`;
-  return { css: properties(), full, properties: properties(), value: fns.join(', '), fns, blends: rows.map(r => r.blend), backgroundColor, warnings, needsLayers: warnings.length > 0 };
+  return {
+    css: properties(), full, properties: properties(), value: fns.join(', '), fns,
+    blends: rows.map(r => r.blend), sizes, positions, backgroundSize: anySize ? sizes.join(', ') : undefined,
+    backgroundPosition: anyPosition ? positions.join(', ') : undefined,
+    backgroundColor, warnings, needsLayers: warnings.length > 0,
+  };
 }
 
 /** Plain-language notes shown above the code. */
@@ -365,7 +412,13 @@ export function analyseOutput(project: GradientProject) {
 /** Inline-style version of the flat output (used for lightweight thumbnails). */
 export function flatStyle(project: GradientProject) {
   const f = flatOutput(project);
-  return { backgroundImage: f.fns.join(', ') || undefined, backgroundColor: f.backgroundColor || undefined, backgroundBlendMode: f.blends.some(b => b !== 'normal') ? f.blends.join(', ') : undefined };
+  return {
+    backgroundImage: f.fns.join(', ') || undefined,
+    backgroundColor: f.backgroundColor || undefined,
+    backgroundBlendMode: f.blends.some(b => b !== 'normal') ? f.blends.join(', ') : undefined,
+    backgroundSize: f.backgroundSize,
+    backgroundPosition: f.backgroundPosition,
+  };
 }
 
 /** Which output reproduces the preview exactly? */
@@ -381,7 +434,11 @@ export function variablesOutput(project: GradientProject, prefix = 'gradient') {
   const base = flat.backgroundColor ? `  --${prefix}-base: ${flat.backgroundColor};\n` : '';
   const all = [...refs, ...(flat.backgroundColor ? [`var(--${prefix}-base)`] : [])];
   const blendLine = flat.blends.some(b => b !== 'normal') ? `  background-blend-mode: ${flat.blends.join(', ')};\n` : '';
-  return `:root {\n  /* One variable per layer */\n${lines.join('\n')}\n${base}\n  /* All layers together */\n  --${prefix}-primary: ${all.join(',\n    ')};\n}\n\n/* Usage */\n${sel} {\n  background: var(--${prefix}-primary);\n${blendLine}}`;
+  const sizeLine = flat.backgroundSize ? `  background-size: ${flat.backgroundSize};\n` : '';
+  const positionLine = flat.backgroundPosition ? `  background-position: ${flat.backgroundPosition};\n` : '';
+  const responsiveLine = responsiveDecls(project).map(d => `  ${d};\n`).join('');
+  const sizesForRoot = [...sizeDecls(project).map(d => `  ${d};\n`), responsiveLine].join('');
+  return `:root {\n  /* One variable per layer */\n${lines.join('\n')}\n${base}\n  /* All layers together */\n  --${prefix}-primary: ${all.join(',\n    ')};\n}\n\n/* Usage */\n${sel} {\n  background: var(--${prefix}-primary);\n${blendLine}${sizeLine}${positionLine}${sizesForRoot}}`;
 }
 
 export function animationOnly(project: GradientProject) {

@@ -66,9 +66,10 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   if (layer.solidColor !== undefined) {
     inner = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${layer.solidColor}"/>`;
   } else if (layer.type === 'mesh') {
-    const mid = 25 + layer.mesh.core * 0.5, tag = (c: string, a: number, off: number) => `<stop offset="${r2(off, 4)}" stop-color="${c}"${a < 0.999 ? ` stop-opacity="${r2(a, 3)}"` : ''}/>`;
+    const tag = (c: string, a: number, off: number) => `<stop offset="${r2(off, 4)}" stop-color="${c}"${a < 0.999 ? ` stop-opacity="${r2(a, 3)}"` : ''}/>`;
     const sq: string[] = [];
     layer.mesh.points.forEach((p, i) => {
+      const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
       const rr = pointRadii(p, project.canvas), cx = (p.x / 100) * w, cy = (p.y / 100) * h;
       defs.push(`<radialGradient id="${id}-p${i}" gradientUnits="userSpaceOnUse" cx="${r2(cx)}" cy="${r2(cy)}" r="${r2((rr.rx / 100) * w)}" gradientTransform="translate(${r2(cx)} ${r2(cy)}) scale(1 ${r2(rr.ry / 100 * h / ((rr.rx / 100) * w), 4)}) translate(${r2(-cx)} ${r2(-cy)})">${tag(p.color, p.alpha, 0)}${Math.abs(mid - 50) > 0.5 ? tag(p.color, p.alpha * (1 - mid / 100) * 0.9 + 0.0, mid / 100) : ''}${tag(p.color, 0, 1)}</radialGradient>`);
       sq.push(`<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-p${i})"/>`);
@@ -122,7 +123,7 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   if (layer.texture.enabled) {
     const size = Math.max(1, layer.texture.scale), offsetX = Math.round(layer.texture.seed * 13 + layer.texture.offsetX) % Math.round(size), offsetY = Math.round(layer.texture.seed * 7 + layer.texture.offsetY) % Math.round(size);
     const tile = `data:image/svg+xml,${encodeURIComponent(textureTileSvg(layer.texture))}`;
-    defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${offsetX}" y="${offsetY}" width="${r2(size)}" height="${r2(size)}"><image href="${tile}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
+    defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${offsetX}" y="${offsetY}" width="${r2(size)}" height="${r2(size)}"><image href="${tile}" xlink:href="${tile}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
     textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(layer.texture.opacity / 100, 3)}" style="mix-blend-mode:${layer.texture.blend}"/>`;
   }
   return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}>${content}${textureOverlay}</g>` };
@@ -139,7 +140,7 @@ const indent = (s: string) => s.replace(/></g, '>\n  <');
 export function projectSvg(project: GradientProject, opts: { pretty?: boolean; size?: string } = {}): string {
   const { w, h } = project.canvas, parts = projectSvgParts(project);
   const size = opts.size ?? `width="${w}" height="${h}"`;
-  const body = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}"${size ? ` ${size}` : ''} style="isolation:isolate">\n  <defs>${parts.defs}</defs>\n  ${parts.body}\n</svg>`;
+  const body = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${w} ${h}"${size ? ` ${size}` : ''} style="isolation:isolate">\n  <defs>${parts.defs}</defs>\n  ${parts.body}\n</svg>`;
   return opts.pretty === false ? body : body.replace(/<defs>([\s\S]*?)<\/defs>/, (_, d) => `<defs>\n  ${indent(d)}\n  </defs>`).replace(/\n {2}(<rect width|<g)/, '\n  $1').replace(/(<g[^>]*>)(<rect|<g clip)/g, '$1\n    $2').replace(/<\/g><g/g, '</g>\n  <g');
 }
 

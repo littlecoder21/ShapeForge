@@ -24,6 +24,14 @@ export interface EffectDef {
 
 const num = (v: number) => String(Math.round(v * 1000) / 1000);
 const p = (key: string, label: string, min: number, max: number, step: number, unit: string, def: number): ParamDef => ({ key, label, min, max, step, unit, def });
+const iridescenceSvg = (v: Record<string, number>) => {
+  const angle = v.angle ?? 35, hue = v.hue ?? 20, intensity = Math.max(0, Math.min(100, v.intensity ?? 55));
+  const sheen = Math.max(0, Math.min(100, v.sheen ?? 55));
+  const radians = angle * Math.PI / 180, dx = Math.cos(radians) * 50, dy = Math.sin(radians) * 50;
+  const rainbow = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id="spectrum" x1="${num(50 - dx)}%" y1="${num(50 - dy)}%" x2="${num(50 + dx)}%" y2="${num(50 + dy)}%"><stop stop-color="#ff3158"/><stop offset=".16" stop-color="#ffb52e"/><stop offset=".32" stop-color="#f7ff45"/><stop offset=".48" stop-color="#35f28b"/><stop offset=".64" stop-color="#31d9ff"/><stop offset=".8" stop-color="#7655ff"/><stop offset=".92" stop-color="#ff4bd8"/><stop offset="1" stop-color="#ff3158"/></linearGradient></defs><rect width="100" height="100" fill="url(#spectrum)"/></svg>`;
+  const image = `data:image/svg+xml,${encodeURIComponent(rainbow)}`;
+  return `<feTurbulence type="fractalNoise" baseFrequency="0.018 0.045" numOctaves="2" seed="7" result="iridescenceSurface"/><feImage href="${image}" preserveAspectRatio="none" result="spectrum"/><feDisplacementMap in="spectrum" in2="iridescenceSurface" scale="${num(sheen * 0.32)}" xChannelSelector="R" yChannelSelector="G" result="shiftedSpectrum"/><feColorMatrix in="shiftedSpectrum" type="hueRotate" values="${num(hue)}" result="shiftedHue"/><feComposite in="shiftedHue" in2="SourceAlpha" operator="in" result="maskedSpectrum"/><feComponentTransfer in="maskedSpectrum" result="iridescence"><feFuncA type="linear" slope="${num(intensity / 100)}"/></feComponentTransfer><feBlend in="SourceGraphic" in2="iridescence" mode="soft-light" result="coloredReflection"/><feSpecularLighting in="iridescenceSurface" surfaceScale="${num(1 + sheen / 30)}" specularConstant="${num(sheen / 100)}" specularExponent="22" lighting-color="white" result="sheen"><feDistantLight azimuth="${num(angle)}" elevation="55"/></feSpecularLighting><feComposite in="sheen" in2="SourceAlpha" operator="in" result="maskedSheen"/><feBlend in="coloredReflection" in2="maskedSheen" mode="screen"/>`;
+};
 
 export const EFFECTS: Record<string, EffectDef> = {
   blur: {
@@ -144,11 +152,13 @@ export const EFFECTS: Record<string, EffectDef> = {
     rasterUnsupported: true,
   },
   iridescence: {
-    id: 'iridescence', label: 'Iridescence', hint: 'Adds colorful, rainbow-like reflections.',
-    params: [p('angle', 'Hue angle', 0, 360, 1, '°', 150), p('amount', 'Intensity', 0, 100, 1, '%', 42)],
-    css: v => `hue-rotate(${num(v.angle)}deg) saturate(${num(1 + v.amount / 100)})`,
-    svg: v => `<feColorMatrix type="hueRotate" values="${num(v.angle)}"/>`,
-    canvas: v => `hue-rotate(${num(v.angle)}deg) saturate(${num(1 + v.amount / 100)})`,
+    id: 'iridescence', label: 'Iridescence', hint: 'Adds shifting rainbow-like color reflections for futuristic, premium visuals.',
+    params: [p('hue', 'Hue shift', 0, 360, 1, '°', 20), p('intensity', 'Intensity', 0, 100, 1, '%', 55), p('angle', 'Angle', 0, 360, 1, '°', 35), p('sheen', 'Sheen', 0, 100, 1, '%', 55)],
+    css: (_v, fid) => `url(#${fid})`,
+    defs: (v, fid) => `<filter id="${fid}" x="-10%" y="-10%" width="120%" height="120%" color-interpolation-filters="sRGB">${iridescenceSvg(v)}</filter>`,
+    svg: iridescenceSvg,
+    canvas: () => '',
+    rasterUnsupported: true,
   },
   'color-drift': {
     id: 'color-drift', label: 'Color Drift', hint: 'Shifts the mesh palette through neighboring hues.',

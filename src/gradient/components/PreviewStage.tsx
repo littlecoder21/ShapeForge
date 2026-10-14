@@ -1,12 +1,12 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from 'react';
-import { Maximize, Minus, Pause, Play, Plus } from 'lucide-react';
+import { Columns2, Maximize, Minus, Pause, Play, Plus, RotateCcw } from 'lucide-react';
 import { clampViewport, fitViewport, fitZoom, nextStop, pinchViewport, screenToCanvas, zoomAt, type V2, type Viewport } from '../../lib/shape/viewport';
 import { dragHandle, layerOverlay, type Handle } from '../engine/handles';
 import { apply as applyMat, invert, layerMatrix } from '../engine/geom';
 import { newMeshPoint } from '../engine/mesh';
 import { colorAtPos } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
-import type { GradientLayer } from '../engine/model';
+import type { GradientLayer, GradientProject } from '../engine/model';
 import { useStore, type StudioStore } from '../engine/store';
 import { CHECKER } from './ui';
 import LayeredArt from './LayeredArt';
@@ -37,6 +37,9 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
   const vpRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 }), sizeRef = useRef({ w: 0, h: 0 }), fitRef = useRef(1), userMoved = useRef(false);
   const pointers = useRef(new Map<number, V2 & { type: string }>()), gest = useRef<G>({ t: 'idle' }), raf = useRef(0), anim = useRef(0);
   const [pct, setPct] = useState(100);
+  const [beforeProject, setBeforeProject] = useState<GradientProject | null>(null);
+  const [compareSplit, setCompareSplit] = useState(50);
+  const [playEpoch, setPlayEpoch] = useState(0);
 
   const overlay = useMemo(() => (layer && layer.visible && layer.solidColor === undefined ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
@@ -123,6 +126,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
       if (Math.hypot(cur.x - g.s.x, cur.y - g.s.y) < THRESH) return;
       const L = live.current.layer;
       if (g.hit && L) {
+        if (g.hit.locked) { if (g.hit.stopId) store.selectStop(g.hit.stopId); gest.current = { t: 'locked' }; return; }
         store.begin(); if (g.hit.stopId) store.selectStop(g.hit.stopId);
         gest.current = { t: 'drag', id: g.id, handle: g.hit, start: L, p0: screenToCanvas(vp, g.s.x, g.s.y) };
       } else { gest.current = { t: 'pan', id: g.id, s: g.s, vp: { ...vp } }; userMoved.current = true; }
@@ -184,7 +188,15 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
   return <div className="gs-stage" ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={e => finish(e, false)} onPointerCancel={e => finish(e, true)} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
     <div className="gs-world" ref={worldRef} style={{ width: w, height: h }}>
       <div className="gs-checker" style={{ background: CHECKER }} />
-      <LayeredArt project={project} rootClass="gs-art" playing={playing} testId="gs-art" />
+      {beforeProject ? <>
+        <div className="gs-compare-half" style={{ clipPath: `inset(0 ${100 - compareSplit}% 0 0)` }}>
+          <LayeredArt project={beforeProject} rootClass="gs-before-art" testId="gs-before-art" />
+        </div>
+        <div className="gs-compare-half" style={{ clipPath: `inset(0 0 0 ${compareSplit}%)` }}>
+          <LayeredArt key={playEpoch} project={project} rootClass="gs-after-art" playing={playing} testId="gs-after-art" />
+        </div>
+        <div className="gs-compare-divider" style={{ left: `${compareSplit}%` }}><span>Before</span><span>After</span></div>
+      </> : <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing} testId="gs-art" />}
       <svg className="gs-overlay" width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
         {overlay && <>
           <g transform={`matrix(${overlay.matrix.join(' ')})`}>
@@ -213,6 +225,9 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
         <button type="button" className="fit" onClick={() => fit(true)} aria-label="Fit to screen" data-testid="gs-zoom-fit"><Maximize /><span>Fit</span></button>
       </div>
       <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={onTogglePlay} aria-pressed={playing} aria-label={playing ? 'Pause animation preview' : 'Play animation preview'} data-testid="gs-play">{playing ? <Pause /> : <Play />}</button>
+      <button type="button" className="gs-play-btn" onClick={() => setPlayEpoch(epoch => epoch + 1)} aria-label="Reset animation preview" data-testid="gs-animation-reset"><RotateCcw /></button>
+      <button type="button" className={`gs-play-btn ${beforeProject ? 'on' : ''}`} onClick={() => setBeforeProject(beforeProject ? null : store.snapshot())} aria-pressed={!!beforeProject} aria-label={beforeProject ? 'Close before and after comparison' : 'Capture current preview for comparison'} data-testid="gs-compare"><Columns2 />{beforeProject && <span>Compare</span>}</button>
+      {beforeProject && <label className="gs-compare-slider"><span>Split</span><input type="range" min="10" max="90" value={compareSplit} onChange={e => setCompareSplit(Number(e.target.value))} aria-label="Before and after split" data-testid="gs-compare-split" /></label>}
     </div>
   </div>;
 }

@@ -584,7 +584,7 @@ function motif(preset: TexturePreset, texture: TextureData): string {
   return weave;
 }
 
-export function textureTileSvg(texture: TextureData): string {
+export function textureTileSvg(texture: TextureData, opacity = 100): string {
   const preset = TEXTURES.find(item => item.id === texture.pattern) ?? TEXTURES[0];
   const angle = Number.isFinite(texture.angle) ? texture.angle : 0;
   const content = motif(preset, texture);
@@ -593,7 +593,7 @@ export function textureTileSvg(texture: TextureData): string {
     ? `<filter id="appearance" x="-20%" y="-20%" width="140%" height="140%">${texture.softness > 0 ? `<feGaussianBlur stdDeviation="${round(texture.softness)}" result="soft"/>` : ''}${Math.abs(contrast - 1) > 0.001 ? `<feComponentTransfer${texture.softness > 0 ? ' in="soft"' : ''}><feFuncR type="linear" slope="${round(contrast)}" intercept="${round(intercept)}"/><feFuncG type="linear" slope="${round(contrast)}" intercept="${round(intercept)}"/><feFuncB type="linear" slope="${round(contrast)}" intercept="${round(intercept)}"/></feComponentTransfer>` : ''}</filter>`
     : '';
   const base = texture.backgroundEnabled ? `<rect width="64" height="64" fill="${safeColor(texture.backgroundColor)}" opacity="${round(texture.backgroundOpacity / 100)}"/>` : '';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs>${filter}</defs><g${filter ? ' filter="url(#appearance)"' : ''}>${base}<g transform="rotate(${round(angle)} 32 32)">${content}</g></g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><defs>${filter}</defs><g opacity="${round(Math.max(0, Math.min(100, opacity)) / 100)}"><g${filter ? ' filter="url(#appearance)"' : ''}>${base}<g transform="rotate(${round(angle)} 32 32)">${content}</g></g></g></svg>`;
 }
 
-export const textureDataUri = (texture: TextureData) => `url("data:image/svg+xml,${encodeURIComponent(textureTileSvg(texture))}")`;
+export const textureDataUri = (texture: TextureData, opacity = 100) => `url("data:image/svg+xml,${encodeURIComponent(textureTileSvg(texture, opacity))}")`;

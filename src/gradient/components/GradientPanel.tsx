@@ -69,7 +69,7 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
       <Seg value={t} label="Gradient type" options={KINDS.map(k => ({ id: k.id, label: k.label }))} onChange={changeType} testId="gradient-type" />
       <Switch label="Repeating" checked={layer.repeating} onChange={v => set({ repeating: v })} testId="gradient-repeating" />
       <div className="field-label">Colour interpolation</div>
-      <Seg value={layer.space} label="Colour space" options={[{ id: 'srgb', label: 'sRGB' }, { id: 'oklab', label: 'OKLab' }, { id: 'oklch', label: 'OKLCH' }]} onChange={v => set({ space: v })} testId="gradient-space" />
+      <Seg value={layer.space} label="Colour space" options={[{ id: 'srgb', label: 'sRGB' }, { id: 'srgb-linear', label: 'Linear RGB' }, { id: 'oklab', label: 'OKLab' }, { id: 'oklch', label: 'OKLCH' }]} onChange={v => set({ space: v })} testId="gradient-space" />
     </Section>
     {t === 'linear' && <Section title="Direction">
       <div className="gs-anglerow"><Dial value={layer.angle} onChange={a => set({ angle: a }, 'angle')} onCommit={commit} />

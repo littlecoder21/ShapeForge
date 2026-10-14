@@ -14,6 +14,12 @@
 .gs-art-root { position: absolute; inset: 0; isolation: isolate; overflow: hidden; }
 .gs-art-root > :where(.g-layer) { position: absolute; inset: 0; pointer-events: none; }
 .gs-art-root:not(.gs-play) :where(.g-layer) { animation: none !important; }
+.gs-compare-half { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.gs-compare-divider { position: absolute; z-index: 3; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 8px #000; pointer-events: none; }
+.gs-compare-divider span { position: absolute; top: 8px; left: 8px; padding: 3px 6px; border-radius: 4px; background: #111c; color: #fff; font: 10px var(--app-font-mono, monospace); }
+.gs-compare-divider span + span { left: auto; right: 8px; }
+.gs-compare-slider { display: grid; gap: 3px; width: 92px; color: #cfd6dc; font: 9px var(--app-font-mono, monospace); }
+.gs-compare-slider input { width: 100%; margin: 0; accent-color: #69dfb5; }
 .gs-overlay { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .gs-line { fill: none; stroke: #ffffffd0; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .gs-line.shape { stroke: #ffffff90; } .gs-line.dash { stroke-dasharray: 5 4; } .gs-line.box { stroke: #8fb4ff; stroke-dasharray: 6 4; }
@@ -127,7 +133,7 @@
 
 /* output */
 .gs-output { display: grid; gap: 10px; padding-top: 4px; }
-.gs-fmt { display: flex; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid #30353d; position: sticky; top: 0; background: inherit; z-index: 2; }
+.gs-fmt { display: flex; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid #30353d; position: sticky; top: 0; background: #20252b; box-shadow: 0 8px 10px #20252b; z-index: 2; }
 .gs-fmt .ptab.gear { margin-left: auto; color: #9aa4ae; }
 .gs-note { padding: 9px 11px; border-radius: 9px; background: #2b2a1c; border: 1px solid #5a5530; color: #e9d98a; font-size: 11px; line-height: 1.5; } .gs-note .link { margin-left: 6px; background: none; border: 0; color: #75e4bc; text-decoration: underline; font-size: 11px; }
 .gs-outform { display: grid; gap: 10px; padding: 12px; border-radius: 10px; background: #1b1f25; border: 1px solid #343a43; }

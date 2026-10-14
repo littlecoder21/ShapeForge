@@ -30,9 +30,9 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   ctx.beginPath(); ctx.rect(-bx, -by, w + 2 * bx, h + 2 * by); ctx.clip();
   if (layer.type === 'mesh') {
     if (layer.mesh.base) { ctx.fillStyle = layer.mesh.base; ctx.fillRect(-bx, -by, w + 2 * bx, h + 2 * by); }
-    const mid = 25 + layer.mesh.core * 0.5;
     [...layer.mesh.points].reverse().forEach(p => {
       const rr = pointRadii(p, project.canvas), cx = (p.x / 100) * w, cy = (p.y / 100) * h, rx = (rr.rx / 100) * w, ry = (rr.ry / 100) * h;
+      const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
       ctx.save(); ctx.translate(cx, cy); ctx.scale(1, ry / rx);
       const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
       g.addColorStop(0, rgbaCss({ ...hexRgb(p.color), a: p.alpha })); g.addColorStop(mid / 100, rgbaCss({ ...hexRgb(p.color), a: p.alpha * (1 - mid / 100) })); g.addColorStop(1, rgbaCss({ ...hexRgb(p.color), a: 0 }));
