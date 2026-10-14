@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
-import { BLEND_MODES, DEFAULT_TEXTURE, type TextureData } from '../engine/model';
+import { BLEND_MODES, DEFAULT_TEXTURE, newLayer, stop, type TextureData } from '../engine/model';
 import { TEXTURES, textureDataUri } from '../engine/textures';
 import { useStore } from '../engine/store';
 import { ColorInput, Empty, useStudio } from './ui';
@@ -16,7 +16,7 @@ const THUMBNAILS = new Map(TEXTURES.map(item => [item.id, textureDataUri({
 })]));
 
 export default function TexturePanel({ layerId }: { layerId: string }) {
-  const { store } = useStudio();
+  const { store, announce } = useStudio();
   const layer = useStore(store, s => s.project.layers.find(l => l.id === layerId) ?? null);
   const [family, setFamily] = useState<FamilyFilter>('all');
   const [query, setQuery] = useState('');
@@ -29,9 +29,18 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
     ...l,
     texture: { ...DEFAULT_TEXTURE, ...l.texture, ...patch },
   }), { coalesce: key });
-  const choose = (pattern: string) => set({ pattern, enabled: true });
+  const choose = (pattern: string, label: string) => {
+    const textureLayer = newLayer('linear', {
+      name: `${label} Texture`,
+      stops: [stop('#ffffff', 0, 0), stop('#ffffff', 100, 0)],
+      texture: { ...DEFAULT_TEXTURE, pattern, enabled: true },
+    });
+    store.update(project => ({ ...project, layers: [textureLayer, ...project.layers] }));
+    store.select(textureLayer.id);
+    announce(`Added ${textureLayer.name}`);
+  };
   return <div data-testid="texture-panel">
-    <Section title="Texture library" hint={`${TEXTURES.length} patterns · click a card to apply`}>
+    <Section title="Texture library" hint={`${TEXTURES.length} patterns · click a card to add as a layer`}>
       <label className="gs-search">
         <Search aria-hidden="true" />
         <input aria-label="Search textures" placeholder="Search textures" value={query} onChange={e => setQuery(e.target.value)} data-testid="texture-search" />
@@ -50,9 +59,9 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
             type="button"
             className={`gs-texture-card ${texture.pattern === item.id ? 'on' : ''}`}
             aria-pressed={texture.pattern === item.id}
-            onClick={() => choose(item.id)}
+            onClick={() => choose(item.id, item.label)}
             data-testid={`texture-card-${item.id}`}
-            title={`Use ${item.label}`}
+            title={`Add ${item.label} as a layer`}
           >
             <span className="gs-texture-thumb" style={{ backgroundImage: THUMBNAILS.get(item.id) }} aria-hidden="true" />
             <span className="gs-texture-name">{item.label}</span>
