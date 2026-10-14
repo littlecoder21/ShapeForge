@@ -29,7 +29,7 @@ export default function PagePanel({ page, shapeId, onSelect, onAdd, onPatch, onD
             <button type="button" className="icon-btn" aria-label={`Move ${shape.name} backward`} title="Move backward" disabled={actualIndex === 0}
               onClick={() => onMove(shape.id!, -1)}><ArrowDown /></button>
             <button type="button" className="icon-btn" aria-label={`Duplicate ${shape.name}`} title="Duplicate" onClick={() => onDuplicate(shape.id!)}><Copy /></button>
-            <button type="button" className="icon-btn danger" aria-label={`Delete ${shape.name}`} title="Delete" disabled={page.shapes.length <= 1}
+            <button type="button" className="icon-btn danger" aria-label={`Delete ${shape.name}`} title="Delete"
               onClick={() => onDelete(shape.id!)}><Trash2 /></button>
           </li>;
         })}

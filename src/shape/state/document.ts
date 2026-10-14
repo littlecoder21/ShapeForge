@@ -43,9 +43,11 @@ export function addShape(d: Doc, shape: ShapeModel, recolor = true): Doc {
 
 export function removeShape(d: Doc, id: string): Doc {
   const page = pageOf(d);
-  if (page.shapes.length <= 1) return d;
-  const i = page.shapes.findIndex(s => s.id === id), shapes = page.shapes.filter(s => s.id !== id);
-  return { ...mapPage(d, page.id, p => ({ ...p, shapes })), shapeId: d.shapeId === id ? shapes[Math.min(i, shapes.length - 1)].id! : d.shapeId };
+  const i = page.shapes.findIndex(s => s.id === id);
+  if (i < 0) return d;
+  const shapes = page.shapes.filter(s => s.id !== id);
+  const shapeId = d.shapeId === id ? shapes[Math.min(i, shapes.length - 1)]?.id ?? '' : d.shapeId;
+  return { ...mapPage(d, page.id, p => ({ ...p, shapes })), shapeId };
 }
 export function clearPage(d: Doc): Doc {
   const page = pageOf(d);

@@ -120,6 +120,19 @@ function App() {
     animationElapsed.current = 0;
     announce(`${page.name} cleared · Undo to restore`);
   };
+  const deleteShapeFromPage = (id: string) => {
+    const deletedShape = page.shapes.find(item => item.id === id);
+    if (!deletedShape) return;
+    documentState.apply(d => removeShape(d, id));
+    setSelection(NONE);
+    if (shape.id === id) {
+      setAnimationPlaying(false);
+      setAnimationPreviewing(false);
+      setAnimationPlayhead(0);
+      animationElapsed.current = 0;
+      announce(`${deletedShape.name} deleted · Undo to restore`);
+    }
+  };
   const canUndo = documentState.canUndo, canRedo = documentState.canRedo;
 
   const setFill = useCallback((fill: string) => commit({ ...shape, fill }), [commit, shape]);
@@ -364,7 +377,7 @@ function App() {
       onAdd={name => generate(name)}
       onPatch={(id, patch) => documentState.apply(d => patchShape(d, id, patch))}
       onDuplicate={id => documentState.apply(d => duplicateShape(d, id))}
-      onDelete={id => { documentState.apply(d => removeShape(d, id)); setSelection(NONE); }}
+      onDelete={deleteShapeFromPage}
       onMove={(id, dir) => documentState.apply(d => moveShape(d, id, dir))} />;
     if (t === 'node') return <PrecisionPanel {...panelProps} selection={selection} onSelect={setSelection} />;
     if (t === 'shape') return <ShapePanel {...panelProps} fill={shape.fill} setFill={setFill} tolerance={tolerance} setTolerance={setTolerance} precision={precision} setPrecision={setPrecision} unit={unit} setUnit={setUnit} shapes={page.shapes} onUnify={mergeSelectedShapes}
@@ -435,6 +448,7 @@ function App() {
         <div className="action-group">
           <button className="btn quiet desktop-action" onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)" data-testid="button-undo"><Undo2 /></button>
           <button className="btn quiet desktop-action" onClick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" data-testid="button-redo"><Redo2 /></button>
+          <button className="btn quiet danger" onClick={() => deleteShapeFromPage(shape.id!)} disabled={!page.shapes.some(item => item.id === shape.id)} aria-label="Delete current shape" title="Delete current shape" data-testid="button-delete-shape"><Trash2 /></button>
           <button className="btn quiet desktop-action" onClick={clearCurrentPage} disabled={!page.shapes.length} aria-label="Reset page (clear shapes)" title="Reset page · clear current page" data-testid="button-reset-page"><Trash2 /></button>
           <button className="btn quiet page-settings-trigger" onClick={() => setPageSettingsOpen(true)} aria-label="Page settings" title="Page settings" data-testid="button-page-settings"><SlidersHorizontal /></button>
         </div>

@@ -19,6 +19,9 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
   const [unifyIds, setUnifyIds] = useState<string[]>([]);
   const previousFill = useRef(fill === 'none' ? '#69dfb5' : fill);
   useEffect(() => { if (fill !== 'none') previousFill.current = fill; }, [fill]);
+  const unifiableShapes = shapes.filter(item => item.closed && !item.derived && item.points.length >= 3);
+  const selectedUnifiableIds = unifiableShapes.flatMap(item => item.id && unifyIds.includes(item.id) ? [item.id] : []);
+  const allUnifiableSelected = unifiableShapes.length > 0 && selectedUnifiableIds.length === unifiableShapes.length;
   const simplifiedCount = useMemo(() => simplify(shape.kind === 'path' ? samplePath(shape.points, shape.closed, 8) : shape.points, tolerance).length, [shape.points, shape.closed, shape.kind, tolerance]);
   const frame: FrameMode = shape.frame ?? (shape.box ? 'box' : 'artboard');
   const convert = () => {
@@ -50,14 +53,20 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
       <div className="swatch-row"><input aria-label="Shape fill color" type="color" value={fill === 'none' ? previousFill.current : fill} disabled={fill === 'none'} onChange={e => setFill(e.target.value)} data-testid="input-fill-color" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} aria-label="Shape fill color value" data-testid="input-fill-hex" /></div>
     </Section>
     <Section title="Unify shapes" hint="boolean union">
+      <div className="unify-actions">
+        <span className="unify-selection-count">{selectedUnifiableIds.length} selected</span>
+        <button type="button" className="btn" disabled={!unifiableShapes.length}
+          onClick={() => setUnifyIds(allUnifiableSelected ? [] : unifiableShapes.flatMap(item => item.id ? [item.id] : []))}
+          data-testid="button-unify-select-all">{allUnifiableSelected ? 'Deselect all' : 'Select all'}</button>
+      </div>
       <div className="unify-list">
-        {shapes.map(item => <label key={item.id} className={`unify-item ${!item.closed || item.derived ? 'disabled' : ''}`}>
-          <input type="checkbox" checked={unifyIds.includes(item.id ?? '')} disabled={!item.closed || !!item.derived}
+        {shapes.map(item => <label key={item.id} className={`unify-item ${!item.closed || item.derived || item.points.length < 3 ? 'disabled' : ''}`}>
+          <input type="checkbox" checked={unifyIds.includes(item.id ?? '')} disabled={!item.closed || !!item.derived || item.points.length < 3}
             onChange={event => setUnifyIds(current => event.target.checked ? [...current, item.id!] : current.filter(id => id !== item.id))} />
           <i style={{ background: item.fill }} /><span>{item.name}</span>
         </label>)}
       </div>
-      <button type="button" className="btn primary" disabled={unifyIds.length < 2} onClick={() => { onUnify(unifyIds); setUnifyIds([]); }} data-testid="button-unify-shapes"><Combine />Unify selected</button>
+      <button type="button" className="btn primary" disabled={selectedUnifiableIds.length < 2} onClick={() => { onUnify(selectedUnifiableIds); setUnifyIds([]); }} data-testid="button-unify-shapes"><Combine />Unify selected</button>
       <p className="hint">Closed shapes become one editable outline. Curves are flattened for the union.</p>
     </Section>
     <Section title="Export" hint={`${shape.points.length} → ${simplifiedCount}`}>
