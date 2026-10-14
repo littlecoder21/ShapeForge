@@ -1,9 +1,10 @@
 import { rgbaString } from './color';
 import { EFFECTS, activeEffects } from './effects';
-import { bleedOf, linearLine, radii, rad, type Canvas } from './geom';
+import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } from './geom';
 import { meshCoord, meshParts } from './mesh';
 import { outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
 import { noiseDataUri } from './noise';
+import { textureDataUri } from './textures';
 
 /* ═══════════════════════════ CSS generation ═══════════════════════════
  * Three outputs, all produced from the structured project:
@@ -225,7 +226,9 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   if (bleed > 0) decls.push(`inset: -${r2(bleed * 100, 1)}%`);
   const items = layerImages(layer, project, { cls: key });
   if (layer.type === 'mesh' && layer.mesh.base) decls.push(`background-color: ${layer.mesh.base}`);
-  if (o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
+  decls.push('contain: layout');
+  if (layer.solidColor !== undefined) decls.push(`background-color: ${layer.solidColor}`);
+  else if (o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
   else decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
   if (items[0]?.size) decls.push(`background-size: ${items[0].size}`);
   if (layer.opacity < 1) decls.push(`opacity: ${r2(layer.opacity, 3)}`);
@@ -233,9 +236,17 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   const f = filterCss(layer, key); if (f) decls.push(`filter: ${f}`);
   const tf = transformCss(layer, s); if (tf) { const org = originCss(layer, s); if (org) decls.push(`transform-origin: ${org}`); decls.push(`transform: ${tf}`); }
   else if (anim && originCss(layer, s)) decls.push(`transform-origin: ${originCss(layer, s)}`);
-  if (anim) decls.push(`animation: ${anim.shorthand}`, 'will-change: transform');
+  if (anim) {
+    decls.push(`animation: ${anim.shorthand}`);
+    if (layer.anim.tracks.some(t => t.prop === 'x' || t.prop === 'y' || t.prop === 'scale' || t.prop === 'rotate' || t.prop === 'opacity')) decls.push('will-change: transform, opacity');
+  }
   const head = o.pretty && o.comments ? `/* ${cls.replace(/^.*-(\d+)$/, '$1')} · ${layer.name}${bleed > 0 ? ' (blurred layers extend past the edge so the blur stays full)' : ''} */\n` : '';
   let css = `${head}${o.rootSel} .${cls} {\n${decls.map(d => `  ${d};`).join('\n')}\n}`;
+  if (layer.texture.enabled) {
+    const texture = layer.texture;
+    const tile = Math.max(1, texture.scale), offsetX = Math.round(texture.seed * 13 + texture.offsetX) % Math.round(tile), offsetY = Math.round(texture.seed * 7 + texture.offsetY) % Math.round(tile);
+    css += `\n\n${o.rootSel} .${cls}::after {\n  content: "";\n  position: absolute;\n  inset: 0;\n  pointer-events: none;\n      background-image: ${textureDataUri(texture)};\n  background-size: ${r2(texture.scale)}px ${r2(texture.scale)}px;\n  background-position: ${offsetX}px ${offsetY}px;\n  opacity: ${r2(texture.opacity / 100, 3)};\n  mix-blend-mode: ${texture.blend};\n}`;
+  }
   if (anim) css = `${anim.props ? `${anim.props}\n\n` : ''}${css}\n\n${anim.keyframes}`;
   return css;
 }
@@ -290,6 +301,7 @@ function flatten(layer: GradientLayer, warnings: string[]): GradientLayer {
   const l: GradientLayer = JSON.parse(JSON.stringify(layer)), t = l.transform;
   const name = `“${l.name}”`;
   if (activeEffects(l.effects).length) warnings.push(`${name}: effects (blur/filters) need layered output`);
+  if (l.texture.enabled) warnings.push(`${name}: texture overlay needs layered output`);
   if (l.anim.enabled && l.anim.tracks.length) warnings.push(`${name}: animation needs layered output`);
   if (t.skewX || t.skewY) warnings.push(`${name}: skew needs layered output`);
   if (l.type === 'noise') { if (t.rotate || t.x || t.y || t.scale !== 1) warnings.push(`${name}: transforming grain needs layered output`); l.transform = { x: 0, y: 0, scale: 1, rotate: 0, skewX: 0, skewY: 0 }; return l; }
@@ -319,22 +331,29 @@ function flatten(layer: GradientLayer, warnings: string[]): GradientLayer {
 export function flatOutput(project: GradientProject) {
   const warnings: string[] = [];
   const vis = project.layers.filter(l => l.visible).map(l => ({ src: l, flat: flatten(l, warnings) }));
+  const solidBase = vis.length === 1 && vis[0].src.solidColor !== undefined
+    && vis[0].src.opacity === 1 && vis[0].src.blend === 'normal'
+    && !vis[0].src.texture.enabled && !activeEffects(vis[0].src.effects).length
+    && !(vis[0].src.anim.enabled && vis[0].src.anim.tracks.length) && isIdentityTransform(vis[0].src)
+    ? vis[0].src.solidColor
+    : undefined;
   type Row = { item: ImageItem; blend: string; layer: string };
   const rows: Row[] = [];
-  vis.forEach(({ src, flat }) => layerImages(flat, project, { alphaMul: src.opacity, flat: true }).forEach(item => rows.push({ item, blend: src.blend, layer: src.name })));
+  if (solidBase === undefined) vis.forEach(({ src, flat }) => layerImages(flat, project, { alphaMul: src.opacity, flat: true }).forEach(item => rows.push({ item, blend: src.blend, layer: src.name })));
   const out = outputOf(project), anyBlend = rows.some(r => r.blend !== 'normal'), anySize = rows.some(r => r.item.size);
   const fns = rows.map(r => r.item.text);
+  const backgroundColor = solidBase ?? project.background;
   const imageBlock = () => `background-image:\n${rows.map((r, i) => `${out.comments && rows.length > 1 ? `  /* ${i + 1} · ${r.layer}${r.item.label !== r.layer && !r.item.label.startsWith(r.layer) ? ` — ${r.item.label.toLowerCase()}` : ''} */\n` : ''}  ${r.item.parts ? formatGradient(r.item.parts, '  ') : r.item.text}`).join(',\n')};`;
   /** The important properties only: background-color / background-image (+ blend / size when used). */
   const properties = (indent = '') => [
-    ...(project.background ? [`background-color: ${project.background};`] : []),
+    ...(backgroundColor ? [`background-color: ${backgroundColor};`] : []),
     ...(rows.length ? [imageBlock()] : []),
     ...(anySize ? [`background-size: ${rows.map(r => r.item.size ?? 'auto').join(', ')};`] : []),
     ...(anyBlend ? [`background-blend-mode: ${[...rows.map(r => r.blend)].join(', ')};`] : []),
   ].join('\n').split('\n').map(l => (l ? `${indent}${l}` : l)).join('\n') || `${indent}background: transparent;`;
   const sel = selectorFor(project).sel;
   const full = `${sel} {\n${[...sizeDecls(project).map(d => `  ${d};`), properties('  ')].join('\n')}\n}`;
-  return { css: properties(), full, properties: properties(), value: fns.join(', '), fns, blends: rows.map(r => r.blend), warnings, needsLayers: warnings.length > 0 };
+  return { css: properties(), full, properties: properties(), value: fns.join(', '), fns, blends: rows.map(r => r.blend), backgroundColor, warnings, needsLayers: warnings.length > 0 };
 }
 
 /** Plain-language notes shown above the code. */
@@ -346,7 +365,7 @@ export function analyseOutput(project: GradientProject) {
 /** Inline-style version of the flat output (used for lightweight thumbnails). */
 export function flatStyle(project: GradientProject) {
   const f = flatOutput(project);
-  return { backgroundImage: f.fns.join(', ') || undefined, backgroundColor: project.background || undefined, backgroundBlendMode: f.blends.some(b => b !== 'normal') ? f.blends.join(', ') : undefined };
+  return { backgroundImage: f.fns.join(', ') || undefined, backgroundColor: f.backgroundColor || undefined, backgroundBlendMode: f.blends.some(b => b !== 'normal') ? f.blends.join(', ') : undefined };
 }
 
 /** Which output reproduces the preview exactly? */
@@ -359,8 +378,8 @@ export function variablesOutput(project: GradientProject, prefix = 'gradient') {
   const sel = selectorFor(project).sel;
   const lines = flat.fns.map((f, i) => `  --${prefix}-layer-${flat.fns.length - i}: ${f};`).reverse();
   const refs = flat.fns.map((_, i) => `var(--${prefix}-layer-${flat.fns.length - i})`);
-  const base = project.background ? `  --${prefix}-base: ${project.background};\n` : '';
-  const all = [...refs, ...(project.background ? [`var(--${prefix}-base)`] : [])];
+  const base = flat.backgroundColor ? `  --${prefix}-base: ${flat.backgroundColor};\n` : '';
+  const all = [...refs, ...(flat.backgroundColor ? [`var(--${prefix}-base)`] : [])];
   const blendLine = flat.blends.some(b => b !== 'normal') ? `  background-blend-mode: ${flat.blends.join(', ')};\n` : '';
   return `:root {\n  /* One variable per layer */\n${lines.join('\n')}\n${base}\n  /* All layers together */\n  --${prefix}-primary: ${all.join(',\n    ')};\n}\n\n/* Usage */\n${sel} {\n  background: var(--${prefix}-primary);\n${blendLine}}`;
 }

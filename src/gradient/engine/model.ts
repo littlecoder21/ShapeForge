@@ -31,6 +31,24 @@ export interface RepeatSpec { size: number; unit: 'px' | '%' | 'deg'; offset: nu
 export interface Transform { x: number; y: number; scale: number; rotate: number; skewX: number; skewY: number }
 
 export interface EffectInstance { id: string; type: string; enabled: boolean; params: Record<string, number> }
+export interface TextureData {
+  enabled: boolean;
+  pattern: string;
+  scale: number;
+  density: number;
+  opacity: number;
+  angle: number;
+  seed: number;
+  color: string;
+  backgroundEnabled: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  contrast: number;
+  softness: number;
+  offsetX: number;
+  offsetY: number;
+  blend: BlendMode;
+}
 
 export type AnimProp = 'x' | 'y' | 'scale' | 'rotate' | 'opacity' | 'angle' | 'hue' | 'stopPos' | 'stopColor' | 'meshX' | 'meshY';
 /** `stopId` doubles as the mesh-point id for meshX / meshY tracks. */
@@ -53,6 +71,10 @@ export interface MeshData {
 export interface NoiseData { frequency: number; octaves: number; seed: number; mono: boolean; contrast: number; tile: number }
 export const DEFAULT_MESH: MeshData = { points: [], base: '', core: 40, seed: 7 };
 export const DEFAULT_NOISE: NoiseData = { frequency: 80, octaves: 3, seed: 4, mono: true, contrast: 120, tile: 220 };
+export const DEFAULT_TEXTURE: TextureData = {
+  enabled: false, pattern: 'grain-1', scale: 36, density: 50, opacity: 18, angle: 0, seed: 17, color: '#ffffff',
+  backgroundEnabled: false, backgroundColor: '#10131a', backgroundOpacity: 100, contrast: 100, softness: 0, offsetX: 0, offsetY: 0, blend: 'soft-light',
+};
 
 export interface GradientLayer {
   id: string;
@@ -74,11 +96,14 @@ export interface GradientLayer {
   blend: BlendMode;
   transform: Transform;
   effects: EffectInstance[];
+  texture: TextureData;
   anim: LayerAnimation;
   /** used when type === 'mesh' */
   mesh: MeshData;
   /** used when type === 'noise' */
   noise: NoiseData;
+  /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
+  solidColor?: string;
 }
 
 /** How the generated code names and sizes things — all user-editable in the Output panel. */
@@ -132,13 +157,21 @@ export function newLayer(type: GradientKind = 'linear', over: Partial<GradientLa
     angle: type === 'conic' ? 0 : 135, cx: 50, cy: 50,
     shape: 'ellipse', rx: 50, ry: 50,
     repeat: { size: type === 'conic' ? 45 : 40, unit: type === 'conic' ? 'deg' : 'px', offset: 0 },
-    opacity: 1, blend: 'normal', transform: { ...IDENTITY }, effects: [], anim: { ...NO_ANIM, tracks: [] },
+    opacity: 1, blend: 'normal', transform: { ...IDENTITY }, effects: [], texture: { ...DEFAULT_TEXTURE }, anim: { ...NO_ANIM, tracks: [] },
     mesh: { ...DEFAULT_MESH, points: [] }, noise: { ...DEFAULT_NOISE },
   };
   const defined = Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) as Partial<GradientLayer>;
   const layer = { ...base, ...defined };
   if (!layer.name) layer.name = defaultName(layer);
   return layer;
+}
+export function newSolidLayer(color = '#ffffff'): GradientLayer {
+  return newLayer('linear', {
+    name: 'Solid Color',
+    solidColor: color,
+    repeating: false,
+    stops: [stop(color, 0), stop(color, 100)],
+  });
 }
 export const KIND_LABEL: Record<GradientKind, string> = { linear: 'Linear', radial: 'Radial', conic: 'Conic', mesh: 'Mesh', noise: 'Grain' };
 export const defaultName = (l: Pick<GradientLayer, 'type' | 'repeating'>) => `${l.repeating ? 'Repeating ' : ''}${KIND_LABEL[l.type]}`;
@@ -193,7 +226,15 @@ export function normalizeProject(raw: unknown): GradientProject {
     if (!Array.isArray(merged.stops) || merged.stops.length < 2) merged.stops = newLayer(t).stops;
     merged.mesh = { ...DEFAULT_MESH, ...(l.mesh ?? {}), points: (l.mesh?.points ?? []).map(p => ({ ...p, id: p.id || uid('m') })) };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
+    merged.texture = { ...DEFAULT_TEXTURE, ...(l.texture ?? {}) };
+    if (!/^(grain|dots|lines|crosshatch|grid|waves|geometric|woven|paper|material|organic)-(?:[1-9]|[1-9]\d)$/.test(merged.texture.pattern)) merged.texture.pattern = DEFAULT_TEXTURE.pattern;
+    if (merged.solidColor !== undefined && !/^#[0-9a-f]{6}$/i.test(merged.solidColor)) merged.solidColor = '#ffffff';
     merged.stops = merged.stops.map(s => ({ ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100) }));
+    if (merged.solidColor !== undefined) {
+      merged.stops = merged.stops.slice(0, 2);
+      while (merged.stops.length < 2) merged.stops.push(stop(merged.solidColor, 100));
+      merged.stops = merged.stops.map((s, index) => ({ ...s, color: merged.solidColor!, alpha: 1, pos: index === 0 ? 0 : 100 }));
+    }
     if (!merged.name) merged.name = `Layer ${i + 1}`;
     return merged;
   });

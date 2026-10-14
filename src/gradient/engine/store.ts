@@ -25,8 +25,12 @@ export function createStudioStore(initial: GradientProject) {
     selectStop(stopId: string | null) { if (stopId !== state.stopId) set({ stopId }); },
     /** Apply a change. `coalesce` merges rapid consecutive changes with the same key into one undo step. */
     update(fn: (p: GradientProject) => GradientProject, opts: { coalesce?: string } = {}) {
-      const next = fn(state.project);
+      let next = fn(state.project);
       if (next === state.project) return;
+      const placeholder = state.project.layers.length === 1 ? state.project.layers[0] : null;
+      if (placeholder?.solidColor !== undefined && next.layers.some(l => l.id === placeholder.id) && next.layers.some(l => l.id !== placeholder.id)) {
+        next = { ...next, layers: next.layers.filter(l => l.id !== placeholder.id) };
+      }
       const now = performance.now();
       if (gesture) { set({ project: next }); return; }
       const merge = opts.coalesce && opts.coalesce === lastKey && now - lastAt < 700;

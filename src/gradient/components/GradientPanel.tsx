@@ -6,7 +6,7 @@ import MeshPanel from './MeshPanel';
 import NoisePanel from './NoisePanel';
 import StopEditor from './StopEditor';
 import { uid, type AnimTrack } from '../engine/model';
-import { Dial, Empty, useStudio } from './ui';
+import { ColorInput, Dial, Empty, useStudio } from './ui';
 
 type StopGradientKind = Extract<GradientKind, 'linear' | 'radial' | 'conic'>;
 const KINDS: { id: StopGradientKind; label: string }[] = [{ id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'conic', label: 'Conic' }];
@@ -31,6 +31,22 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
   const layer = useStore(store, s => s.project.layers.find(l => l.id === layerId) ?? null);
   const [stripe, setStripe] = useState(24), [gap, setGap] = useState(0);
   if (!layer) return <Empty>Select a layer to edit its gradient.</Empty>;
+  if (layer.solidColor !== undefined) return <div className="gs-gradient" data-testid="gradient-panel">
+    <Section title="Solid color" hint="This base layer is a color, not a gradient.">
+      <ColorInput
+        color={layer.solidColor}
+        alpha={1}
+        showAlpha={false}
+        onChange={color => store.updateLayer(layerId, current => ({
+          ...current,
+          solidColor: color,
+          stops: current.stops.map((item, i) => ({ ...item, color, alpha: 1, pos: i === 0 ? 0 : 100 })),
+        }), { coalesce: 'solid-color' })}
+        label="Solid color"
+        testId="solid-color"
+      />
+    </Section>
+  </div>;
   if (layer.type === 'mesh') return <MeshPanel layerId={layerId} />;
   if (layer.type === 'noise') return <NoisePanel layerId={layerId} />;
 

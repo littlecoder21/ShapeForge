@@ -1,4 +1,5 @@
 import { makeShape, type ShapeModel } from '../../lib/shape/geometry';
+import type { AnimatedShape } from '../../lib/shape/animation';
 
 /* ═══════════ Document model: pages → shapes ═══════════
  * Every page is a 1000 × 600 artboard holding any number of shapes. All operations are pure (Doc → Doc) so history is
@@ -11,6 +12,7 @@ export interface Doc { pages: Page[]; pageId: string; shapeId: string }
 let n = 0;
 export const uid = (p: string) => `${p}${Date.now().toString(36).slice(-4)}${(n++).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 export const SHAPE_COLORS = ['#69dfb5', '#7aa2ff', '#ffb86b', '#f78fb3', '#c4a1ff', '#ffe066', '#7be0e0', '#ff8f8f'];
+const EMPTY_PAGE_SHAPE: ShapeModel = { id: '__empty-page__', name: 'Empty page', kind: 'polygon', points: [], closed: false, fill: 'none', stroke: 'none', strokeWidth: 0 };
 
 export const withId = (s: ShapeModel): ShapeModel => (s.id ? s : { ...s, id: uid('s') });
 
@@ -21,7 +23,7 @@ export function newDoc(first: ShapeModel = makeShape('Blob', 23)): Doc {
 }
 
 export const pageOf = (d: Doc): Page => d.pages.find(p => p.id === d.pageId) ?? d.pages[0];
-export const shapeOf = (d: Doc): ShapeModel => { const p = pageOf(d); return p.shapes.find(s => s.id === d.shapeId) ?? p.shapes[0]; };
+export const shapeOf = (d: Doc): ShapeModel => { const p = pageOf(d); return p.shapes.find(s => s.id === d.shapeId) ?? p.shapes[0] ?? EMPTY_PAGE_SHAPE; };
 
 const mapPage = (d: Doc, id: string, fn: (p: Page) => Page): Doc => ({ ...d, pages: d.pages.map(p => (p.id === id ? fn(p) : p)) });
 
@@ -45,6 +47,11 @@ export function removeShape(d: Doc, id: string): Doc {
   const i = page.shapes.findIndex(s => s.id === id), shapes = page.shapes.filter(s => s.id !== id);
   return { ...mapPage(d, page.id, p => ({ ...p, shapes })), shapeId: d.shapeId === id ? shapes[Math.min(i, shapes.length - 1)].id! : d.shapeId };
 }
+export function clearPage(d: Doc): Doc {
+  const page = pageOf(d);
+  if (!page.shapes.length) return d;
+  return { ...mapPage(d, page.id, current => ({ ...current, shapes: [] })), shapeId: '' };
+}
 export function replaceShapesWithUnion(d: Doc, ids: string[], merged: ShapeModel): Doc {
   const selected = new Set(ids);
   if (selected.size < 2 || selected.size !== ids.length) return d;
@@ -61,6 +68,17 @@ export function duplicateShape(d: Doc, id: string): Doc {
   const copy: ShapeModel = { ...JSON.parse(JSON.stringify(src)), id: uid('s'), name: `${src.name} copy` };
   const shift = (r: ShapeModel['points']) => r.map(p => ({ ...p, x: p.x + 24, y: p.y + 24, ...(p.in ? { in: { ...p.in, x: p.in.x + 24, y: p.in.y + 24 } } : {}), ...(p.out ? { out: { ...p.out, x: p.out.x + 24, y: p.out.y + 24 } } : {}) }));
   copy.points = shift(copy.points); if (copy.extra) copy.extra = copy.extra.map(shift); if (copy.box) copy.box = { ...copy.box, x: copy.box.x + 24, y: copy.box.y + 24 };
+  const animatedCopy = copy as AnimatedShape;
+  if (animatedCopy.animation) animatedCopy.animation = {
+    ...animatedCopy.animation,
+    keyframes: animatedCopy.animation.keyframes.map(frame => ({
+      ...frame,
+      values: {
+        ...frame.values,
+        ...(frame.values.geometry ? { geometry: { rings: frame.values.geometry.rings.map(shift) } } : {}),
+      },
+    })),
+  };
   const i = page.shapes.findIndex(s => s.id === id);
   return { ...mapPage(d, page.id, p => ({ ...p, shapes: [...p.shapes.slice(0, i + 1), copy, ...p.shapes.slice(i + 1)] })), shapeId: copy.id! };
 }
@@ -82,13 +100,13 @@ export function addPage(d: Doc, first?: ShapeModel): Doc {
 export function removePage(d: Doc, id: string): Doc {
   if (d.pages.length <= 1) return d;
   const i = d.pages.findIndex(p => p.id === id), pages = d.pages.filter(p => p.id !== id), next = d.pageId === id ? pages[Math.min(i, pages.length - 1)] : pageOf(d);
-  return { pages, pageId: next.id, shapeId: next.shapes.some(s => s.id === d.shapeId) ? d.shapeId : next.shapes[0].id! };
+  return { pages, pageId: next.id, shapeId: next.shapes.some(s => s.id === d.shapeId) ? d.shapeId : next.shapes[0]?.id ?? '' };
 }
 export const renamePage = (d: Doc, id: string, name: string): Doc => mapPage(d, id, p => ({ ...p, name }));
 export const patchPage = (d: Doc, id: string, patch: Partial<Omit<Page, 'id' | 'shapes'>>): Doc => mapPage(d, id, p => ({ ...p, ...patch }));
 export function selectPage(d: Doc, id: string): Doc {
   const p = d.pages.find(x => x.id === id);
-  return p ? { ...d, pageId: id, shapeId: p.shapes.some(s => s.id === d.shapeId) ? d.shapeId : p.shapes[0].id! } : d;
+  return p ? { ...d, pageId: id, shapeId: p.shapes.some(s => s.id === d.shapeId) ? d.shapeId : p.shapes[0]?.id ?? '' } : d;
 }
 
 /** Parse a stored document, repairing ids; returns null when unusable. */
@@ -98,13 +116,13 @@ export function reviveDoc(raw: unknown): Doc | null {
     if (!r || !Array.isArray(r.pages) || !r.pages.length) return null;
     const pages = r.pages.map((p, i) => ({
       id: p.id || uid('p'), name: p.name || `Page ${i + 1}`,
-      shapes: (p.shapes?.length ? p.shapes : [makeShape('Blob', 23)]).map(withId),
+      shapes: (Array.isArray(p.shapes) ? p.shapes : [makeShape('Blob', 23)]).map(withId),
       width: Number.isFinite(p.width) && p.width > 0 ? p.width : 1000,
       height: Number.isFinite(p.height) && p.height > 0 ? p.height : 600,
       unit: ['px', 'mm', 'cm', 'in'].includes(p.unit) ? p.unit : 'px',
       background: typeof p.background === 'string' ? p.background : '#21262d',
     }));
     const page = pages.find(p => p.id === r.pageId) ?? pages[0];
-    return { pages, pageId: page.id, shapeId: page.shapes.find(s => s.id === r.shapeId)?.id ?? page.shapes[0].id! };
+    return { pages, pageId: page.id, shapeId: page.shapes.find(s => s.id === r.shapeId)?.id ?? page.shapes[0]?.id ?? '' };
   } catch { return null; }
 }

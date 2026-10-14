@@ -1,86 +1,55 @@
-import { useState } from 'react';
-import { Check, Copy, ScanLine } from 'lucide-react';
-import { H, W } from '../../lib/shape/constants';
-import { extractOuterShape, nodesToRing, parseShapeInput, ringsToPath, roundCorners, type CompoundPath } from '../../lib/shape/boundary';
-import { fmt, pathFromPoints, type Point, type ShapeModel } from '../../lib/shape/geometry';
-import { ValueControl } from '../../shared/controls';
-
-const EXAMPLE = 'polygon(\n  0 0,\n  85% 0,\n  85% 50%,\n  100% 50%,\n  100% 100%,\n  0 100%\n)';
-const RADII = [0, 10, 25, 50];
+import { useState, type ChangeEvent } from 'react';
+import { FileUp, ScanLine } from 'lucide-react';
+import { importShapeText } from '../../lib/shape/svgImport';
+import type { ShapeModel } from '../../lib/shape/geometry';
 
 type Props = {
-  shape: ShapeModel; precision: number;
-  onApply: (next: ShapeModel) => void;                  // history entry
-  onLive: (next: ShapeModel) => void; onLiveEnd: () => void;
-  announce: (m: string) => void;
+  onAddShapes: (shapes: ShapeModel[]) => void;
+  onExtractOuter: () => void;
+  announce: (message: string) => void;
 };
 
-/** Text of the current shape, so it can be edited / re-extracted. */
-function shapeToText(shape: ShapeModel, precision: number) {
-  if (shape.kind === 'polygon') return `polygon(${shape.points.map(p => `${fmt(p.x / W * 100, 2)}% ${fmt(p.y / H * 100, 2)}%`).join(', ')})`;
-  return pathFromPoints(shape.points, shape.closed, true, precision);
-}
-
-export default function BoundaryPanel({ shape, precision, onApply, onLive, onLiveEnd, announce }: Props) {
-  const [text, setText] = useState(EXAMPLE);
+export default function BoundaryPanel({ onAddShapes, onExtractOuter, announce }: Props) {
+  const [text, setText] = useState('');
   const [error, setError] = useState('');
-  const [notes, setNotes] = useState<string[]>([]);
-  const [base, setBase] = useState<{ nodes: Point[]; closed: boolean; rings: CompoundPath } | null>(null);
-  const [radius, setRadius] = useState(0);
-  const [copied, setCopied] = useState(false);
+  const [fileName, setFileName] = useState('');
 
-  const build = (nodes: Point[], closed: boolean, r: number, name: string): ShapeModel => {
-    const res = r > 0 ? roundCorners(nodes, closed, r) : { points: nodes.map(p => ({ ...p })), rounded: 0 };
-    return { ...shape, name, kind: 'path', points: res.points, closed, box: undefined, frame: 'artboard', wave: undefined };
-  };
-
-  const extract = () => {
+  const importShapes = () => {
     try {
-      const result = extractOuterShape(parseShapeInput(text));
-      setError(''); setNotes(result.notes);
-      setBase({ nodes: result.nodes, closed: result.closed, rings: result.rings });
-      onApply(build(result.nodes, result.closed, radius, 'Outer shape'));
-      announce('Outer shape extracted as an SVG path');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not read that shape'); }
+      const shapes = importShapeText(text);
+      onAddShapes(shapes);
+      setError('');
+      announce(`Imported ${shapes.length} editable shape${shapes.length === 1 ? '' : 's'}`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not import this shape');
+    }
   };
-  const useCurrent = () => {
-    setText(shapeToText(shape, precision)); setError('');
-    const hasCurves = shape.kind === 'path' && shape.points.some(p => p.in || p.out || p.mode === 'auto' || p.mode === undefined);
-    const nodes = hasCurves ? shape.points.map(p => ({ ...p })) : shape.points.map(p => ({ x: p.x, y: p.y, mode: 'corner' as const }));
-    setBase({ nodes, closed: shape.closed, rings: [nodesToRing(shape.points, shape.closed, 16)] }); setNotes([]);
-    announce('Loaded the current shape');
-  };
-  const changeRadius = (r: number) => {
-    setRadius(r);
-    const b = base ?? (() => {
-      const hasCurves = shape.kind === 'path' && shape.points.some(p => p.in || p.out || p.mode === 'auto' || p.mode === undefined);
-      if (hasCurves) return null;
-      const nodes = shape.points.map(p => ({ x: p.x, y: p.y, mode: 'corner' as const }));
-      const nb = { nodes, closed: shape.closed, rings: [nodesToRing(nodes, shape.closed)] };
-      setBase(nb); return nb;
-    })();
-    if (!b) { announce('Corner radius needs straight corners — extract or convert first'); return; }
-    onLive(build(b.nodes, b.closed, r, shape.name.replace(/ · rounded$/, '') + (r ? ' · rounded' : '')));
+  const loadFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    try {
+      const contents = await file.text();
+      setText(contents);
+      setFileName(file.name);
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not read this SVG file');
+    } finally {
+      event.currentTarget.value = '';
+    }
   };
 
-  const d = base?.rings.length && base.rings.length > 1 ? ringsToPath(base.rings, precision) : pathFromPoints(shape.points, shape.closed, shape.kind === 'path', precision);
-  const copy = async () => { try { await navigator.clipboard.writeText(d); setCopied(true); setTimeout(() => setCopied(false), 1400); } catch { announce('Clipboard unavailable'); } };
-
-  return <div className="boundary-panel">
-    <h2 className="properties-title">Outer shape</h2>
-    <p className="hint" style={{ marginTop: -8 }}>Paste a <code>polygon()</code>, <code>polyline()</code>, SVG path or point list. Percentages resolve against {W} × {H}. Several shapes merge into one outline.</p>
-    <textarea className="boundary-input" value={text} onChange={e => setText(e.target.value)} spellCheck={false} rows={7} aria-label="Shape source" data-testid="boundary-input" />
-    {error && <p className="boundary-error" role="alert" data-testid="boundary-error">{error}</p>}
-    {notes.map((n, i) => <p key={i} className="boundary-note">{n}</p>)}
-    <div className="btn-row">
-      <button className="btn" onClick={useCurrent} data-testid="boundary-current">Use current shape</button>
-      <button className="btn primary" onClick={extract} data-testid="boundary-extract"><ScanLine />Extract outer shape</button>
-    </div>
-    <div className="prec-sub">Corner radius</div>
-    <ValueControl label="Radius" value={radius} min={0} max={200} def={0} unit="px" onChange={changeRadius} onCommit={onLiveEnd} testId="boundary-radius" />
-    <div className="chips">{RADII.map(r => <button key={r} className={`chip ${radius === r ? 'active' : ''}`} onClick={() => { setRadius(r); const b = base; if (b) onApply(build(b.nodes, b.closed, r, 'Outer shape' + (r ? ' · rounded' : ''))); else changeRadius(r); }} data-testid={`boundary-r-${r}`}>{r}px</button>)}</div>
-    <p className="hint">Rounded corners are exact circular fillets (tangent length r ÷ tan(½ · angle)), emitted as Bézier arcs. Sharp corners are never smoothed unless you choose a radius.</p>
-    <div className="prec-sub">SVG path</div>
-    <div className="path-out"><code data-testid="boundary-path">{d}</code><button className="btn" onClick={copy} aria-label="Copy path">{copied ? <Check /> : <Copy />}</button></div>
+  return <div className="boundary-panel" data-testid="import-shape-panel">
+    <h2 className="properties-title">Import Shape</h2>
+    <p className="hint" style={{ marginTop: -8 }}>Import SVG files or paste SVG markup, path data, <code>polygon()</code>, <code>polyline()</code>, or point coordinates. Imported geometry becomes editable nodes on the page.</p>
+    <label className="btn" htmlFor="shape-svg-file"><FileUp />{fileName || 'Choose SVG file'}</label>
+    <input id="shape-svg-file" type="file" accept=".svg,image/svg+xml" onChange={loadFile} data-testid="shape-svg-file" hidden />
+    <textarea className="boundary-input" value={text} onChange={event => setText(event.target.value)} spellCheck={false} rows={10} aria-label="SVG or path data" data-testid="shape-import-input" />
+    {error && <p className="boundary-error" role="alert" data-testid="shape-import-error">{error}</p>}
+    <button className="btn primary wide" onClick={importShapes} disabled={!text.trim()} data-testid="shape-import-submit"><FileUp />Import as editable shapes</button>
+    <hr className="rule" />
+    <h3 className="prec-sub">Extract Outer Shape</h3>
+    <p className="hint">Create an editable full-page mask with all visible filled shapes on this page cut out of it.</p>
+    <button className="btn wide" onClick={onExtractOuter} data-testid="extract-outer-shape"><ScanLine />Extract Outer Shape</button>
   </div>;
 }

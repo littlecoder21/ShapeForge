@@ -279,12 +279,12 @@ export function chainRings<T extends { x: number; y: number }>(rings: T[][]): T[
   return out;
 }
 
-export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 8, unit: Unit = '%', pageSize?: { width: number; height: number; unit: string }) {
+export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 1, unit: Unit = '%', pageSize?: { width: number; height: number; unit: string }, curveSteps = 48) {
   const frame = frameOf(shape);
   const rings = ringsOf(shape).map(r => translatePoints(r, -frame.x, -frame.y));
   const smooth = shape.kind === 'path', evenodd = shape.fillRule === 'evenodd';
   const d = rings.map(r => pathFromPoints(r, shape.closed, smooth, precision)).join(' ');
-  const sampled = chainRings(rings.map(r => simplify(smooth ? samplePath(r, shape.closed, 12) : r, tolerance)));
+  const sampled = chainRings(rings.map(r => simplify(smooth ? samplePath(r, shape.closed, curveSteps) : r, tolerance)));
   const poly = polygonToCssUnits(sampled, frame, unit, precision, evenodd);
   const vb = `0 0 ${fmt(frame.w, precision)} ${fmt(frame.h, precision)}`;
   const pageAttrs = pageSize && (shape.frame ?? (shape.box ? 'box' : 'artboard')) === 'artboard'
@@ -292,11 +292,12 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
     : '';
   const par = shape.wave || pageSize ? ' preserveAspectRatio="none"' : '';
   const rule = evenodd ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
+  const paint = shape.paint && (shape.fill === 'none' ? { ...shape.paint, fill: false, css: false } : shape.paint);
   let svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
-  if (shape.paint && (paintShowsFill(shape.paint) || shape.paint.stroke)) {
-    const pp = paintSvgParts(shape.paint, d, frame, shape.strokeWidth);
-    const outline = shape.paint.stroke ? '' : '';
-    svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(shape.paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
+  if (paint && (paintShowsFill(paint) || paint.stroke)) {
+    const pp = paintSvgParts(paint, d, frame, shape.strokeWidth);
+    const outline = paint.stroke ? '' : '';
+    svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
   }
 
   const ratio = `${fmt(frame.w, 1)} / ${fmt(frame.h, 1)}`;
@@ -304,8 +305,8 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
   if (format === 'SVG PATH') return evenodd ? `d="${d}"\nfill-rule="evenodd"` : `d="${d}"`;
   if (format === 'CSS PATH') return `/* path() is px-based and does not scale: size the element ${fmt(frame.w, 0)}×${fmt(frame.h, 0)}px, or use POLYGON for fluid sizing */\nclip-path: path(${evenodd ? 'evenodd, ' : ''}"${d}");`;
   if (format === 'POLYGON') return poly;
-  if (shape.paint?.css && (format === 'REACT' || format === 'HTML + CSS')) {
-    const pc = paintCss(shape.paint, ratio, poly);
+  if (paint?.css && (format === 'REACT' || format === 'HTML + CSS')) {
+    const pc = paintCss(paint, ratio, poly);
     return format === 'REACT' ? `export function Shape() {\n  return (\n${pc.html.split('\n').map(l => `    ${l.replace('class=', 'className=')}`).join('\n')}\n  );\n}\n\n/* shape.css */\n${pc.css}` : `${pc.html}\n\n<style>\n${pc.css}\n</style>`;
   }
   if (format === 'REACT') return `export function Shape() {\n  return <div className="shape" />;\n}\n\n/* shape.css */\n.shape {\n  width: 100%;\n  aspect-ratio: ${ratio};\n  ${poly}\n  background: ${shape.fill};\n}`;
@@ -334,7 +335,7 @@ export function exportPageSvg(shapes: ShapeModel[], precision = 1, page: { width
     const rings = ringsOf(shape);
     const d = rings.map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');
     const rule = shape.fillRule === 'evenodd' ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
-    const paint = shape.paint;
+    const paint = shape.paint && (shape.fill === 'none' ? { ...shape.paint, fill: false, css: false } : shape.paint);
     if (paint && (paintShowsFill(paint) || paint.stroke)) {
       const frame = frameOf(shape), local = rings.map(r => translatePoints(r, -frame.x, -frame.y));
       const localD = local.map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');

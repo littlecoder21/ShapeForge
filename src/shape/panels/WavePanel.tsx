@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw, Shuffle } from 'lucide-react';
 import { UNITS, type Unit } from '../../lib/shape/geometry';
 import {
@@ -27,6 +27,8 @@ function Spark({ params }: { params: WaveParams }) {
 export default function WavePanel({ params, active, fill, setFill, unit, setUnit, onLive, onLiveEnd, onApply }: Props) {
   const [tab, setTab] = useState<'auto' | 'manual'>('auto');
   const [style, setStyle] = useState('calm');
+  const previousFill = useRef(fill === 'none' ? '#69dfb5' : fill);
+  useEffect(() => { if (fill !== 'none') previousFill.current = fill; }, [fill]);
   const [intensity, setIntensity] = useState(50);
   const [complexity, setComplexity] = useState(40);
   const [seed, setSeed] = useState(7);
@@ -106,7 +108,8 @@ export default function WavePanel({ params, active, fill, setFill, unit, setUnit
         </div>
         {(!params.leftWall || !params.rightWall) && num('sideTaper', 'Side taper', { unit: '%' })}
         <div className="field-label">Preview colour <span>{fill}</span></div>
-        <div className="swatch-row"><input aria-label="Preview colour" type="color" value={fill} onChange={e => setFill(e.target.value)} data-testid="wave-fill" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} aria-label="Preview colour hex" /></div>
+        <label className="animation-check"><input type="checkbox" checked={fill === 'none'} onChange={event => setFill(event.target.checked ? 'none' : previousFill.current)} data-testid="wave-no-fill" />No fill (transparent)</label>
+        <div className="swatch-row"><input aria-label="Preview colour" type="color" value={fill === 'none' ? previousFill.current : fill} disabled={fill === 'none'} onChange={e => setFill(e.target.value)} data-testid="wave-fill" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} aria-label="Preview colour hex" /></div>
         <Switch label="Centre arch" checked={params.arch} onChange={v => onApply({ ...params, arch: v })} testId="wave-arch" />
         {params.arch && <div className="subgroup">
           {num('archHeight', 'Arch height', { unit: '%' })}

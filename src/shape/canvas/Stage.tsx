@@ -18,6 +18,7 @@ export type StageHandle = { zoomIn(): void; zoomOut(): void; reset(): void; fit(
 
 type Props = {
   shape: ShapeModel; others: ShapeModel[]; shapeOrder: string[]; tool: Tool; selection: Selection; settings: EditorSettings; showGrid: boolean; polygonPoints: string | null;
+  strokeDraw: number | null;
   multiSelect: boolean; onMultiSelect: (enabled: boolean) => void; pageBackground: string;
   onSelect: (s: Selection) => void;
   /** live update while a gesture runs (no history entry) */
@@ -40,6 +41,7 @@ type G =
   | { t: 'nodes'; id: number; indices: number[]; before: ShapeModel; startC: V2; dirty: boolean }
   | { t: 'handle'; id: number; index: number; side: 'in' | 'out'; before: ShapeModel; startH: V2; startC: V2; dirty: boolean }
   | { t: 'pen'; id: number; index: number; before: ShapeModel; origin: V2; startC: V2; dirty: boolean }
+  | { t: 'line'; id: number; before: ShapeModel; start: V2; end: V2; dirty: boolean }
   | { t: 'bbox'; id: number; part: BBoxPart | 'move'; before: ShapeModel; bounds: Box; startC: V2; g0: V2; dirty: boolean };
 
 const THRESHOLD: Record<PointerKind, number> = { touch: 9, pen: 6, mouse: 3 };
@@ -71,11 +73,12 @@ const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor, backg
   </g>;
 });
 
-const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, painted, fill, fillRule }: { d: string; polygonPoints: string | null; painted: Painted | null; fill: string; fillRule?: ShapeModel['fillRule'] }) {
+const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, painted, fill, fillRule, strokeDraw }: { d: string; polygonPoints: string | null; painted: Painted | null; fill: string; fillRule?: ShapeModel['fillRule']; strokeDraw: number | null }) {
   const cls = `shape-fill${painted ? ' painted' : ''}`;
+  const drawStyle = strokeDraw === null ? undefined : { strokeDasharray: 1, strokeDashoffset: 1 - strokeDraw };
   return <g>
     {painted && <g transform={`translate(${painted.x} ${painted.y})`} pointerEvents="none"><defs dangerouslySetInnerHTML={{ __html: painted.defs }} /><g dangerouslySetInnerHTML={{ __html: painted.body }} /></g>}
-    {polygonPoints ? <polygon className={cls} points={polygonPoints} fillRule={fillRule} style={painted ? undefined : { fill }} /> : <path className={cls} d={d} fillRule={fillRule} style={painted ? undefined : { fill }} />}
+    {polygonPoints ? <polygon className={cls} points={polygonPoints} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(painted ? {} : { fill }), ...drawStyle }} /> : <path className={cls} d={d} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(painted ? {} : { fill }), ...drawStyle }} />}
   </g>;
 });
 
@@ -101,6 +104,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   const [pct, setPct] = useState(100);
   const [guides, setGuides] = useState<Guide[]>([]);
   const [nodeMenu, setNodeMenu] = useState<{ x: number; y: number; index: number } | null>(null);
+  const [linePreview, setLinePreview] = useState<{ start: V2; end: V2 } | null>(null);
 
   /* ───── viewport (imperative: never goes through React state while a gesture runs) ───── */
   const applyView = useCallback((v: Viewport) => {
@@ -204,6 +208,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   /** Cancel an in-flight edit without touching history (used when a second finger lands). */
   const revert = (g: G) => {
     if (g.t === 'node' || g.t === 'nodes' || g.t === 'handle' || g.t === 'pen' || g.t === 'bbox') { if (g.dirty) propsRef.current.onPreview(g.before); }
+    if (g.t === 'line') setLinePreview(null);
     showGuides([]); setHud(null);
   };
 
@@ -327,7 +332,13 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     const c = screenToCanvas(vp, cur.x, cur.y), m = mods.current;
     const st = P.settings;
 
-    if (g.t === 'nodes') {
+    if (g.t === 'line') {
+      const { p } = snapNode(c, { index: -1, points: [], closed: false, zoom: vp.zoom, settings: st, shift: m.shift, alt: m.alt });
+      g.end = p;
+      g.dirty = dist(g.start, p) >= 1;
+      setLinePreview({ start: g.start, end: p });
+      setHud(`Line · ${f1(dist(g.start, p))}`);
+    } else if (g.t === 'nodes') {
       P.onPreview(moveNodesBy(g.before, g.before, g.indices, c.x - g.startC.x, c.y - g.startC.y)); g.dirty = true;
       setHud(`${g.indices.length} nodes · ${f1(c.x - g.startC.x)}, ${f1(c.y - g.startC.y)}`);
     } else if (g.t === 'node') {
@@ -389,6 +400,12 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
       gest.current = { t: 'pan', id: e.pointerId, s, vp: { ...vpRef.current } }; userMoved.current = true;
       el.style.cursor = 'grabbing'; return;
     }
+    if (tool === 'Line') {
+      const start = screenToCanvas(vpRef.current, s.x, s.y);
+      gest.current = { t: 'line', id: e.pointerId, before: propsRef.current.shape, start, end: start, dirty: false };
+      setLinePreview({ start, end: start });
+      return;
+    }
     gest.current = { t: 'pending', id: e.pointerId, s, hit: doHit(s, type), ptr: type };
   };
   const onMove = (e: RPointerEvent) => {
@@ -397,7 +414,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     if (!known) {
       if (e.pointerType === 'mouse' && gest.current.t === 'idle' && wrapRef.current && !space.current) {
         const s = local(e), hit = tool === 'Hand' ? null : doHit(s, 'mouse');
-        wrapRef.current.style.cursor = tool === 'Hand' ? 'grab' : tool === 'Pen' ? 'crosshair'
+        wrapRef.current.style.cursor = tool === 'Hand' ? 'grab' : tool === 'Pen' || tool === 'Line' ? 'crosshair'
           : hit?.kind === 'handle' ? 'crosshair' : hit?.kind === 'node' ? 'grab' : hit?.kind === 'bbox' ? CURSORS[hit.part]
           : hit?.kind === 'segment' ? 'pointer' : hit?.kind === 'shape' && selection.kind === 'shape' ? 'move' : '';
       }
@@ -420,6 +437,23 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
     } else if (g.t === 'pending') {
       if (g.id === e.pointerId) { gest.current = { t: 'idle' }; if (!cancelled) handleTap(g); }
     } else if (g.t === 'pan') {
+      if (g.id === e.pointerId) gest.current = { t: 'idle' };
+    } else if (g.t === 'line') {
+      if (g.id === e.pointerId && !cancelled && g.dirty) {
+        const P = propsRef.current;
+        const line: ShapeModel = {
+          name: 'Line',
+          kind: 'path',
+          points: [{ ...g.start, mode: 'corner' }, { ...g.end, mode: 'corner' }],
+          closed: false,
+          fill: 'none',
+          stroke: P.shape.stroke === 'none' ? P.shape.fill : P.shape.stroke,
+          strokeWidth: P.shape.strokeWidth || 1,
+        };
+        P.onAddShape(line, { kind: 'node', index: 1 });
+      }
+      setLinePreview(null);
+      setHud(null);
       if (g.id === e.pointerId) gest.current = { t: 'idle' };
     } else if (g.t !== 'idle' && g.t !== 'locked' && g.id === e.pointerId) {
       if (cancelled) revert(g); else if (g.dirty) P.onGestureEnd(g.before);
@@ -450,8 +484,9 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
         <ArtboardLayer showGrid={props.showGrid} step={gridStep} minor={showMinor} background={props.pageBackground} />
         {!shape.hidden && shape.box && (shape.frame ?? 'box') === 'box' && <rect className="frame-box" x={shape.box.x} y={shape.box.y} width={shape.box.w} height={shape.box.h} />}
         {props.shapeOrder.map(id => id === shape.id
-          ? (!shape.hidden && <ShapeLayer key={id} d={d} polygonPoints={props.polygonPoints} painted={painted} fill={shape.fill} fillRule={shape.fillRule} />)
+          ? (!shape.hidden && <ShapeLayer key={id} d={d} polygonPoints={props.polygonPoints} painted={painted} fill={shape.fill} fillRule={shape.fillRule} strokeDraw={props.strokeDraw} />)
           : (() => { const other = otherById.get(id); return other && !other.hidden ? <StaticShape key={id} shape={other} /> : null; })())}
+        {linePreview && <path className="line-preview" d={`M${linePreview.start.x} ${linePreview.start.y}L${linePreview.end.x} ${linePreview.end.y}`} fill="none" stroke={shape.stroke === 'none' ? shape.fill : shape.stroke} strokeWidth={shape.strokeWidth || 1} />}
         {dots && <><path className="dots-ring" d={dots} style={{ strokeWidth: settings.nodeSize + 4 }} /><path className="dots-fill" d={dots} style={{ strokeWidth: settings.nodeSize }} /></>}
         {!shape.hidden && !shape.locked && selection.kind === 'segment' && shape.points[selection.index] && <path className="seg-sel" d={segmentPath(shape, selection.index)} />}
         {bounds && <g>
@@ -506,9 +541,9 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
       }} onClear={() => props.onSelect({ kind: 'none' })} />}
     {nodeMenu && menuPoint && <NodeMenu x={nodeMenu.x} y={nodeMenu.y} width={wrapRef.current?.clientWidth ?? 0} height={wrapRef.current?.clientHeight ?? 0}
       count={nodeIndices.length || 1} selected={nodeIndices.includes(nodeMenu.index)} locked={!!menuPoint.locked}
-      smooth={shape.kind === 'polygon' ? null : (menuPoint.mode ?? 'auto') !== 'corner'} onSelect={() => { props.onSelect(toggleInSelection(selection, nodeMenu.index)); setNodeMenu(null); }}
+      smooth={shape.kind === 'polygon' ? false : (menuPoint.mode ?? 'auto') !== 'corner'} onSelect={() => { props.onSelect(toggleInSelection(selection, nodeMenu.index)); setNodeMenu(null); }}
       onLock={() => { props.onCommit(setNodesLocked(shape, [nodeMenu.index], !menuPoint.locked), selection); setNodeMenu(null); }}
-      onToggleType={() => { props.onCommit(setNodeMode(shape, nodeMenu.index, (menuPoint.mode ?? 'auto') === 'corner' ? 'smooth' : 'corner'), { kind: 'node', index: nodeMenu.index }); setNodeMenu(null); }}
+      onToggleType={() => { const mode = shape.kind === 'polygon' || (menuPoint.mode ?? 'auto') === 'corner' ? 'smooth' : 'corner'; props.onCommit(setNodeMode(shape, nodeMenu.index, mode), { kind: 'node', index: nodeMenu.index }); setNodeMenu(null); }}
       onDelete={() => {
         const selected = selectedIndices(selection).includes(nodeMenu.index) ? selectedIndices(selection) : [nodeMenu.index];
         const result = deleteNodes(shape, selected);

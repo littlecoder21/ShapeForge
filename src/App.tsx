@@ -1,14 +1,16 @@
-import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
-  ArrowDownToLine, Check, ChevronUp, Code2, Copy, Download, Grid2X2, Hand, Magnet, MousePointer2, Move, PanelBottomClose, PanelBottomOpen, PenTool, Plus, Redo2, ScanLine, Shapes, SlidersHorizontal,
+  ArrowDownToLine, Check, ChevronUp, Code2, Copy, Download, Grid2X2, Hand, Magnet, MousePointer2, Move, PanelBottomClose, PanelBottomOpen, PenTool, Plus, Redo2, ScanLine, Shapes, SlidersHorizontal, Slash, Trash2,
   Palette, Sparkles, Undo2, Waves, X, Crosshair,
 } from 'lucide-react';
 import { exportCode, exportPageSvg, makeShape, samplePath, simplify, type ShapeModel, type Unit } from './lib/shape/geometry';
+import { animatedFillOpacity, animatedShapeAt, animatedStrokeDraw, combineAnimatedHtml, exportAnimatedHtmlParts, type AnimatedShape, type ShapeAnimation } from './lib/shape/animation';
 import { NONE, nudgeNode, deleteNode, deleteNodes, moveNodesBy, selectAllNodes, selectedIndices, setNodesLocked, toggleInSelection, type Selection, type Tool } from './lib/shape/edit';
 import { DEFAULT_WAVE, buildWaveShape, clampWave, type WaveParams } from './lib/shape/wave';
 import { unifyShapes } from './lib/shape/union';
+import { computeOuterPath, outerShape } from './lib/shape/compound';
 import { loadSettings, saveSettings, type EditorSettings } from './lib/shape/settings';
-import { addPage, addShape, duplicateShape, moveShape, patchPage, patchShape, removePage, removeShape, renamePage, replaceShapesWithUnion, selectPage, selectShape } from './shape/state/document';
+import { addPage, addShape, clearPage, duplicateShape, moveShape, patchPage, patchShape, removePage, removeShape, renamePage, replaceShapesWithUnion, selectPage, selectShape } from './shape/state/document';
 import { useDocument } from './shape/state/useDocument';
 import Stage, { type StageHandle } from './shape/canvas/Stage';
 import PageTabs from './shape/layout/PageTabs';
@@ -19,6 +21,7 @@ import ShapePanel from './shape/panels/ShapePanel';
 import WavePanel from './shape/panels/WavePanel';
 import BoundaryPanel from './shape/panels/BoundaryPanel';
 import EditorPanel from './shape/panels/EditorPanel';
+import AnimationPanel, { shapeAnimation } from './shape/panels/AnimationPanel';
 import './index.css';
 
 /** Gradient Studio is a separate workspace: loaded on demand so ShapeForge itself stays light. */
@@ -26,8 +29,9 @@ const GradientStudio = lazy(() => import('./gradient/GradientStudio'));
 
 const FORMATS = ['SVG', 'PAGE SVG', 'SVG PATH', 'CSS PATH', 'POLYGON', 'REACT', 'HTML + CSS', 'JSON'];
 const LIBRARY = ['Rectangle', 'Rounded rectangle', 'Half circle', 'Ellipse', 'Triangle', 'Diamond', 'Pentagon', 'Hexagon', 'Octagon', 'Star', 'Heart', 'Arrow', 'Cross', 'Trapezoid', 'Parallelogram', 'Circle'];
-type Tab = 'page' | 'node' | 'shape' | 'wave' | 'outer' | 'editor';
-const TABS: { id: Tab; label: string }[] = [{ id: 'page', label: 'Page' }, { id: 'node', label: 'Node' }, { id: 'shape', label: 'Shape' }, { id: 'wave', label: 'Wave' }, { id: 'outer', label: 'Outer' }, { id: 'editor', label: 'Editor' }];
+type Tab = 'page' | 'node' | 'shape' | 'wave' | 'outer' | 'animation' | 'editor';
+const TABS: { id: Tab; label: string }[] = [{ id: 'page', label: 'Page' }, { id: 'node', label: 'Node' }, { id: 'shape', label: 'Shape' }, { id: 'wave', label: 'Wave' }, { id: 'outer', label: 'Import' }, { id: 'animation', label: 'Animate' }, { id: 'editor', label: 'Editor' }];
+const POLYGON_SAMPLE_STEPS = [4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 
 function useMedia(query: string) {
   const [m, setM] = useState(() => (typeof window !== 'undefined' ? window.matchMedia(query).matches : false));
@@ -48,6 +52,7 @@ function App() {
   const [seed, setSeed] = useState(23);
   const [tolerance, setTolerance] = useState(3);
   const [precision, setPrecision] = useState(1);
+  const [polygonSamples, setPolygonSamples] = useState(48);
   const [unit, setUnit] = useState<Unit>('%');
   const [grid, setGrid] = useState(true);
   const [settings, setSettingsState] = useState<EditorSettings>(loadSettings);
@@ -59,6 +64,9 @@ function App() {
   const [toast, setToast] = useState('');
   const [copied, setCopied] = useState(false);
   const [pageSettingsOpen, setPageSettingsOpen] = useState(false);
+  const [animationPlayhead, setAnimationPlayhead] = useState(0);
+  const [animationPlaying, setAnimationPlaying] = useState(false);
+  const [animationPreviewing, setAnimationPreviewing] = useState(false);
   const [outputCollapsed, setOutputCollapsed] = useState(false);
   const [multiSelect, setMultiSelect] = useState(false);
   const [studio, setStudio] = useState(() => typeof location !== 'undefined' && location.hash === '#gradient');
@@ -68,6 +76,7 @@ function App() {
   const stageRef = useRef<StageHandle>(null);
   const waveAddedPreview = useRef(false);
   const autoDock = useRef(true);
+  const animationElapsed = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setSettings = useCallback((patch: Partial<EditorSettings>) => setSettingsState(s => ({ ...s, ...patch })), []);
@@ -101,9 +110,69 @@ function App() {
   }, [documentState.pushGesture, documentState.shape.id]);
   const undo = useCallback(() => { documentState.undo(); setSelection(NONE); }, [documentState.undo]);
   const redo = useCallback(() => { documentState.redo(); setSelection(NONE); }, [documentState.redo]);
+  const clearCurrentPage = () => {
+    if (!page.shapes.length) return;
+    documentState.apply(clearPage);
+    setSelection(NONE);
+    setAnimationPlaying(false);
+    setAnimationPreviewing(false);
+    setAnimationPlayhead(0);
+    animationElapsed.current = 0;
+    announce(`${page.name} cleared · Undo to restore`);
+  };
   const canUndo = documentState.canUndo, canRedo = documentState.canRedo;
 
   const setFill = useCallback((fill: string) => commit({ ...shape, fill }), [commit, shape]);
+  const animation = shapeAnimation(shape);
+  const setAnimation = useCallback((next: ShapeAnimation) => commit({ ...shape, animation: next } as AnimatedShape as ShapeModel), [commit, shape]);
+  const liveAnimation = useCallback((next: ShapeAnimation) => documentState.live({ ...shape, animation: next } as AnimatedShape as ShapeModel, shape), [documentState.live, shape]);
+
+  useEffect(() => {
+    if (!animationPlaying || !animation) return;
+    const started = performance.now() - animationElapsed.current;
+    let frame = 0;
+    const tick = (now: number) => {
+      const elapsed = now - started;
+      const duration = Math.max(1, animation.duration);
+      const totalDuration = duration * Math.max(1, Math.floor(animation.iterations ?? 1));
+      animationElapsed.current = elapsed;
+      if (animation.loop) setAnimationPlayhead(elapsed % duration);
+      else if (elapsed >= totalDuration) {
+        setAnimationPlayhead(animation.duration);
+        setAnimationPlaying(false);
+      } else setAnimationPlayhead(elapsed % duration);
+      if (animation.loop || elapsed < totalDuration) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [animationPlaying, animation?.duration, animation?.iterations, animation?.loop]);
+
+  const toggleAnimationPlay = () => {
+    if (!animation?.keyframes.length) return;
+    if (animationPlaying) setAnimationPlaying(false);
+    else {
+      if (animationPlayhead >= animation.duration) {
+        animationElapsed.current = 0;
+        setAnimationPlayhead(0);
+      }
+      setAnimationPreviewing(true);
+      setAnimationPlaying(true);
+    }
+  };
+  const animationPreviewShape = useMemo(() => animationPreviewing && animation
+    ? animatedShapeAt(shape, animation, animationPlayhead)
+    : shape, [shape, animation, animationPlayhead, animationPreviewing]);
+  const isAnimationPreview = animationPreviewing && !!animation?.keyframes.length;
+  const stagePolygonPoints = format === 'POLYGON' && animationPreviewShape.kind === 'path'
+    ? simplify(samplePath(animationPreviewShape.points, animationPreviewShape.closed, polygonSamples), tolerance).map(point => `${point.x},${point.y}`).join(' ')
+    : null;
+
+  useEffect(() => {
+    setAnimationPlaying(false);
+    setAnimationPreviewing(false);
+    setAnimationPlayhead(0);
+    animationElapsed.current = 0;
+  }, [shape.id]);
 
   // a wave regenerated elsewhere (undo / redo) keeps the wave controls in sync
   useEffect(() => { if (shape.wave) setWaveParams(shape.wave); }, [shape.wave]);
@@ -122,6 +191,11 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (isAnimationPreview) {
+        if (e.key === 'Escape') { setAnimationPlaying(false); setAnimationPreviewing(false); }
+        e.preventDefault();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
       if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
       if (mod && k === 'y') { e.preventDefault(); redo(); return; }
@@ -154,7 +228,7 @@ function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, selection, shape, commit, announce]);
+  }, [undo, redo, selection, shape, commit, announce, isAnimationPreview]);
 
   const pickShape = (id: string) => {
     const target = page.shapes.find(s => s.id === id);
@@ -215,6 +289,25 @@ function App() {
       announce('Could not unify these shapes. Check for invalid geometry and try again.');
     }
   };
+  const addImportedShapes = (imported: ShapeModel[]) => {
+      documentState.apply(d => imported.reduce((next, item) => addShape(next, item), d));
+      setSelection(NONE);
+      setTool('Select');
+  };
+  const extractOuter = () => {
+    try {
+      const result = computeOuterPath(page.shapes);
+      const extracted = outerShape(result, 'Outside area mask', '#ffffff');
+      if (!extracted) { announce(result.notes.join(' ') || 'Could not extract the outside area'); return; }
+      documentState.apply(d => addShape(d, { ...extracted, stroke: 'none', strokeWidth: 0 }, false));
+      setSelection(NONE);
+      setTool('Select');
+      announce(result.notes[0] || 'Added an editable page mask');
+    } catch (error) {
+      console.error('Could not extract the outside area', error);
+      announce('Could not extract the outside area. Check the page geometry and try again.');
+    }
+  };
   const randomize = () => { const n = seed + 17; setSeed(n); documentState.apply(d => addShape(d, makeShape('Blob', n))); setSelection(NONE); setSheet(null); announce('New seed · ' + n); };
   const reset = () => { documentState.apply(d => addShape(d, makeShape('Blob', 23))); setFormat('SVG'); setSelection(NONE); announce('New shape added to page'); };
   const convert = () => {
@@ -227,13 +320,26 @@ function App() {
   const deferredShape = useDeferredValue(shape);
   const deferredPage = useDeferredValue(page);
   const wantCode = !isPhone || sheet === 'code';
-  const code = useMemo(() => (wantCode ? format === 'PAGE SVG'
-    ? exportPageSvg(deferredPage.shapes, precision, deferredPage)
-    : exportCode(deferredShape, format, precision, tolerance, unit, deferredPage) : ''), [wantCode, deferredPage, deferredShape, format, precision, tolerance, unit]);
-  const polygonPoints = useMemo(() => (format === 'POLYGON' && deferredShape.kind === 'path' ? simplify(samplePath(deferredShape.points, deferredShape.closed, 12), tolerance).map(p => `${p.x},${p.y}`).join(' ') : null), [format, deferredShape, tolerance]);
+  const animatedParts = useMemo(() => {
+    const deferredAnimation = shapeAnimation(deferredShape);
+    return format === 'HTML + CSS' && deferredAnimation?.keyframes.length
+      ? exportAnimatedHtmlParts(deferredShape, deferredAnimation, precision)
+      : null;
+  }, [format, deferredShape, precision]);
+  const code = useMemo(() => {
+    if (!wantCode) return '';
+    if (format === 'PAGE SVG') return exportPageSvg(deferredPage.shapes, precision, deferredPage);
+    if (animatedParts) return combineAnimatedHtml(animatedParts);
+    return exportCode(deferredShape, format, precision, tolerance, unit, deferredPage, polygonSamples);
+  }, [wantCode, deferredPage, deferredShape, format, precision, tolerance, unit, polygonSamples, animatedParts]);
+  const polygonPoints = useMemo(() => (format === 'POLYGON' && deferredShape.kind === 'path' ? simplify(samplePath(deferredShape.points, deferredShape.closed, polygonSamples), tolerance).map(p => `${p.x},${p.y}`).join(' ') : null), [format, deferredShape, tolerance, polygonSamples]);
 
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(code); setCopied(true); announce('Copied to clipboard'); setTimeout(() => setCopied(false), 1500); }
+    catch { announce('Clipboard unavailable in this browser'); }
+  };
+  const copyCodePart = async (part: string, label: string) => {
+    try { await navigator.clipboard.writeText(part); announce(`Copied ${label}`); }
     catch { announce('Clipboard unavailable in this browser'); }
   };
   const download = () => {
@@ -261,9 +367,13 @@ function App() {
       onDelete={id => { documentState.apply(d => removeShape(d, id)); setSelection(NONE); }}
       onMove={(id, dir) => documentState.apply(d => moveShape(d, id, dir))} />;
     if (t === 'node') return <PrecisionPanel {...panelProps} selection={selection} onSelect={setSelection} />;
-    if (t === 'shape') return <ShapePanel {...panelProps} fill={shape.fill} setFill={setFill} tolerance={tolerance} setTolerance={setTolerance} precision={precision} setPrecision={setPrecision} unit={unit} setUnit={setUnit} shapes={page.shapes} onUnify={mergeSelectedShapes} />;
+    if (t === 'shape') return <ShapePanel {...panelProps} fill={shape.fill} setFill={setFill} tolerance={tolerance} setTolerance={setTolerance} precision={precision} setPrecision={setPrecision} unit={unit} setUnit={setUnit} shapes={page.shapes} onUnify={mergeSelectedShapes}
+      polygonSamples={polygonSamples} setPolygonSamples={setPolygonSamples} />;
     if (t === 'wave') return <WavePanel params={waveParams} active={!!shape.wave} fill={shape.fill} setFill={setFill} unit={unit} setUnit={setUnit} onLive={p => applyWave(p, 'live')} onLiveEnd={() => { if (waveAddedPreview.current) waveAddedPreview.current = false; else liveEnd(); }} onApply={p => applyWave(p, 'apply')} />;
-    if (t === 'outer') return <BoundaryPanel shape={shape} precision={precision} onApply={s => { commit(s); setSelection(NONE); }} onLive={s => { live(s); setSelection(NONE); }} onLiveEnd={liveEnd} announce={announce} />;
+    if (t === 'outer') return <BoundaryPanel onAddShapes={addImportedShapes} onExtractOuter={extractOuter} announce={announce} />;
+    if (t === 'animation') return <AnimationPanel shape={shape} animation={animation} playhead={animationPlayhead} playing={animationPlaying} previewing={animationPreviewing}
+      onChange={setAnimation} onLiveChange={liveAnimation} onLiveEnd={liveEnd} onPlayhead={time => { animationElapsed.current = time; setAnimationPlayhead(time); setAnimationPlaying(false); }} onTogglePlay={toggleAnimationPlay}
+      onTogglePreview={() => { setAnimationPreviewing(value => !value); setAnimationPlaying(false); }} />;
     return <EditorPanel settings={settings} set={setSettings} />;
   };
   const tabBar = (cls: string) => <div className={cls} role="tablist" aria-label="Editor panels">
@@ -272,29 +382,38 @@ function App() {
 
   const outputContent = <>
     <div className="output-top">
-      <div className="tabs" role="tablist" aria-label="Export format">{FORMATS.map(item => <button key={item} role="tab" aria-selected={format === item} className={`tab ${format === item ? 'active' : ''}`} onClick={() => setFormat(item)} data-testid={`tab-${item.toLowerCase().replaceAll(' ', '-')}`}>{item}</button>)}</div>
+      <div className="tabs" role="tablist" aria-label="Export format">{FORMATS.map(item => <button key={item} role="tab" aria-selected={format === item} className={`tab ${format === item ? 'active' : ''}`} onClick={() => setFormat(item)} data-testid={`tab-${item.toLowerCase().replaceAll(' ', '-')}`}>{item === 'HTML + CSS' && animatedParts ? 'HTML + CSS + JS' : item}</button>)}</div>
       <div className="output-actions">
         <button className="btn" onClick={download} title="Download current export" data-testid="button-download"><Download /> <span className="desktop-action">Download</span></button>
-        <button className="btn primary" onClick={copyCode} data-testid="button-copy">{copied ? <Check /> : <Copy />} {copied ? 'Copied' : 'Copy'}</button>
+        <button className="btn primary" onClick={copyCode} aria-label={animatedParts ? 'Copy all HTML, CSS, and JavaScript' : 'Copy code'} title={animatedParts ? 'Copy all HTML, CSS, and JavaScript' : 'Copy code'} data-testid="button-copy">{copied ? <Check /> : <Copy />} {copied ? 'Copied' : animatedParts ? 'Copy all' : 'Copy'}</button>
         <button type="button" className="icon-btn output-collapse" aria-label={outputCollapsed ? 'Expand output panel' : 'Collapse output panel'} aria-expanded={!outputCollapsed} title={outputCollapsed ? 'Expand output' : 'Collapse output'} onClick={() => setOutputCollapsed(value => !value)} data-testid="button-collapse-output">
           {outputCollapsed ? <PanelBottomOpen /> : <PanelBottomClose />}
         </button>
       </div>
     </div>
-    <div className="output-body"><pre className="code" data-testid="code-output">{code}</pre></div>
+    <div className="output-body">{animatedParts ? <div className="code-sections">
+      {([
+        ['html', 'HTML', animatedParts.html],
+        ['css', 'CSS', animatedParts.css],
+        ['javascript', 'JavaScript', animatedParts.javascript],
+      ] as const).map(([id, label, content]) => <section className="code-section" key={id}>
+        <div className="code-section-head"><strong>{label}</strong><button type="button" className="btn" onClick={() => copyCodePart(content, label)} data-testid={`button-copy-${id}`}>Copy {label}</button></div>
+        <pre className="code" data-testid={`code-section-${id}`}>{content}</pre>
+      </section>)}
+    </div> : <pre className="code" data-testid="code-output">{code}</pre>}</div>
   </>;
 
   const toolsContent = <div>
     <div className="panel-heading">Tools <span>01—04</span></div>
     <div className="section-label">DRAW</div>
     <div className="tool-list">
-      {([['Select', MousePointer2], ['Pen', PenTool], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`tool-button ${tool === name ? 'active' : ''}`} onClick={() => { setTool(name); setSheet(null); }} data-testid={`tool-${name.toLowerCase()}`}><Icon /><span className="tool-label">{name}</span></button>)}
+      {([['Select', MousePointer2], ['Pen', PenTool], ['Line', Slash], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`tool-button ${tool === name ? 'active' : ''}`} onClick={() => { setTool(name); setSheet(null); }} data-testid={`tool-${name.toLowerCase()}`}><Icon /><span className="tool-label">{name}</span></button>)}
     </div>
     <div className="section-label">GENERATE</div>
     <div className="tool-list">
       <button className="tool-button" onClick={() => generate('Wave')} data-testid="tool-wave"><Waves /><span className="tool-label">Wave maker</span></button>
       <button className="tool-button" onClick={randomize} data-testid="tool-random-blob"><Sparkles /><span className="tool-label">Random blob</span></button>
-      <button className="tool-button" onClick={() => { openTab('outer'); setSheet(null); }} data-testid="tool-outer"><ScanLine /><span className="tool-label">Outer shape</span></button>
+      <button className="tool-button" onClick={() => { openTab('outer'); setSheet(null); }} data-testid="tool-import-shape"><ScanLine /><span className="tool-label">Import shape</span></button>
     </div>
     <div className="section-label">SHAPE LIBRARY</div>
     <div className="library-grid">{LIBRARY.map(item => <button key={item} className="library-item" onClick={() => generate(item)} data-testid={`library-${item.toLowerCase().replaceAll(' ', '-')}`}><svg viewBox="0 0 1000 600" aria-hidden="true"><path d={makeShape(item).points.map((point, i) => `${i ? 'L' : 'M'}${point.x} ${point.y}`).join(' ') + ' Z'} /></svg>{item}</button>)}</div>
@@ -307,7 +426,7 @@ function App() {
     <p className="hint" style={{ margin: '16px 8px' }}>Add and edit shapes across pages. Geometry stays editable as you work.</p>
   </div>;
 
-  const hint = tool === 'Hand' ? 'DRAG TO PAN' : tool === 'Pen' ? 'TAP = NODE · DRAG = CURVE' : isNarrow ? 'PINCH ZOOM · TWO FINGERS PAN' : 'CTRL+WHEEL ZOOM · SPACE+DRAG PAN';
+  const hint = tool === 'Hand' ? 'DRAG TO PAN' : tool === 'Pen' ? 'TAP = NODE · DRAG = CURVE' : tool === 'Line' ? 'DRAG TO DRAW A LINE' : isNarrow ? 'PINCH ZOOM · TWO FINGERS PAN' : 'CTRL+WHEEL ZOOM · SPACE+DRAG PAN';
 
   return <main className="app-shell">
     <header className="topbar">
@@ -316,7 +435,8 @@ function App() {
         <div className="action-group">
           <button className="btn quiet desktop-action" onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)" data-testid="button-undo"><Undo2 /></button>
           <button className="btn quiet desktop-action" onClick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Shift+Z)" data-testid="button-redo"><Redo2 /></button>
-            <button className="btn quiet page-settings-trigger" onClick={() => setPageSettingsOpen(true)} aria-label="Page settings" title="Page settings" data-testid="button-page-settings"><SlidersHorizontal /></button>
+          <button className="btn quiet desktop-action" onClick={clearCurrentPage} disabled={!page.shapes.length} aria-label="Reset page (clear shapes)" title="Reset page · clear current page" data-testid="button-reset-page"><Trash2 /></button>
+          <button className="btn quiet page-settings-trigger" onClick={() => setPageSettingsOpen(true)} aria-label="Page settings" title="Page settings" data-testid="button-page-settings"><SlidersHorizontal /></button>
         </div>
         <button className="btn desktop-action" onClick={reset} data-testid="button-new"><Plus /> New</button>
         <button className="btn desktop-action" onClick={saveJson} data-testid="button-save"><ArrowDownToLine /> Save</button>
@@ -341,10 +461,17 @@ function App() {
           onAdd={() => { documentState.apply(d => addPage(d)); setSelection(NONE); }}
           onRename={(id, name) => documentState.apply(d => renamePage(d, id, name))}
           onDelete={id => { documentState.apply(d => removePage(d, id)); setSelection(NONE); }} />
-        <div className="artboard-wrap">
-          <Stage ref={stageRef} shape={shape} others={page.shapes.filter(s => s.id !== shape.id)} shapeOrder={page.shapes.map(s => s.id!)} tool={tool} selection={selection} settings={settings} showGrid={grid} polygonPoints={polygonPoints} multiSelect={multiSelect} onMultiSelect={setMultiSelect} pageBackground={page.background}
+        <div className="artboard-wrap" style={{
+          '--animation-fill-opacity': String(isAnimationPreview ? animatedFillOpacity(animation, animationPlayhead) : 1),
+          '--animation-stroke-color': isAnimationPreview ? animationPreviewShape.stroke : 'none',
+          '--animation-stroke-width': isAnimationPreview ? String(animationPreviewShape.strokeWidth) : '0',
+        } as CSSProperties}>
+          <Stage ref={stageRef} shape={animationPreviewShape} others={page.shapes.filter(s => s.id !== shape.id)} shapeOrder={page.shapes.map(s => s.id!)} tool={tool} selection={selection} settings={settings} showGrid={grid} polygonPoints={stagePolygonPoints ?? polygonPoints} strokeDraw={isAnimationPreview ? animatedStrokeDraw(animation, animationPlayhead) : null} multiSelect={multiSelect} onMultiSelect={setMultiSelect} pageBackground={page.background}
             onSelect={setSelection} onPreview={documentState.preview} onGestureEnd={finishGesture} onCommit={commit}
             onPickShape={pickShape} onAddShape={(next, sel) => { documentState.apply(d => addShape(d, next)); if (sel) setSelection(sel); }} onAnnounce={announce} />
+          {isAnimationPreview && <div className="animation-preview-shield" role="status" aria-label="Animation preview is active" data-testid="animation-preview-shield">
+            <span>{animationPlaying ? 'Playing animation' : 'Animation preview · editing paused'}</span>
+          </div>}
         </div>
         <div className="canvas-foot"><span>{hint}</span><span>{shape.kind.toUpperCase()} · {shape.points.length} POINTS</span></div>
       </section>
@@ -359,7 +486,7 @@ function App() {
       <div className="dock-body">{renderTab(tab)}</div>
     </section>}
     <nav className="mobile-tools" aria-label="Editing controls">
-      {([['Select', MousePointer2], ['Pen', PenTool], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`mt-btn ${tool === name ? 'active' : ''}`} onClick={() => setTool(name)} aria-pressed={tool === name} data-testid={`mobile-tool-${name.toLowerCase()}`}><Icon /><span>{name}</span></button>)}
+      {([['Select', MousePointer2], ['Pen', PenTool], ['Line', Slash], ['Hand', Hand]] as const).map(([name, Icon]) => <button key={name} className={`mt-btn ${tool === name ? 'active' : ''}`} onClick={() => setTool(name)} aria-pressed={tool === name} data-testid={`mobile-tool-${name.toLowerCase()}`}><Icon /><span>{name}</span></button>)}
       <i className="mt-sep" />
       <button className="mt-btn" onClick={undo} disabled={!canUndo} data-testid="button-mobile-undo"><Undo2 /><span>Undo</span></button>
       <button className="mt-btn" onClick={redo} disabled={!canRedo} data-testid="button-mobile-redo"><Redo2 /><span>Redo</span></button>

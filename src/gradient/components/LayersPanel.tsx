@@ -1,12 +1,12 @@
 import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, GripVertical, Trash2 } from 'lucide-react';
 import { gradientFn } from '../engine/css';
-import { BLEND_MODES, cloneLayer, type GradientLayer, type GradientProject } from '../engine/model';
+import { BLEND_MODES, cloneLayer, newSolidLayer, type GradientLayer, type GradientProject } from '../engine/model';
 import { useStore } from '../engine/store';
 import { LAYER_TEMPLATES, typeIcon } from '../engine/templates';
 import { ValueControl } from '../../shared/controls';
 import LayerCssPanel from './LayerCssPanel';
-import { useStudio } from './ui';
+import { ColorInput, useStudio } from './ui';
 
 const ROW = 54;
 
@@ -29,7 +29,13 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
   const move = (id: string, to: number) => store.update(p => { const i = p.layers.findIndex(l => l.id === id); if (i < 0 || to < 0 || to >= p.layers.length || i === to) return p; const a = [...p.layers]; const [x] = a.splice(i, 1); a.splice(to, 0, x); return { ...p, layers: a }; });
   const dup = (l: GradientLayer) => { const c = cloneLayer(l); c.name = `${l.name} copy`; store.update(p => ({ ...p, layers: p.layers.flatMap(x => (x.id === l.id ? [c, x] : [x])) })); store.select(c.id); };
   const del = (l: GradientLayer) => {
-    if (layers.length <= 1) { announce('Keep at least one layer'); return; }
+    if (layers.length === 1) {
+      const base = newSolidLayer();
+      store.update(p => ({ ...p, layers: [base] }));
+      store.select(base.id);
+      announce('Replaced final layer with a solid color layer');
+      return;
+    }
     const i = layers.findIndex(x => x.id === l.id), nextId = layers[i + 1]?.id ?? layers[i - 1]?.id ?? null;
     store.update(p => ({ ...p, layers: p.layers.filter(x => x.id !== l.id) })); store.select(nextId);
   };
@@ -59,7 +65,7 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
           <button type="button" className="gs-eye" onClick={() => toggle(l)} aria-label={l.visible ? `Hide ${l.name}` : `Show ${l.name}`} aria-pressed={l.visible} data-testid="layer-eye">{l.visible ? <Eye /> : <EyeOff />}</button>
           <button type="button" className="gs-layerbtn" onClick={() => select(l.id)} aria-label={`Select ${l.name}`} aria-current={l.id === layerId} data-testid="layer-select">
             <LayerThumb layer={l} />
-            <span className="gs-lname">{l.name}<small>{typeIcon[l.type]} {l.repeating ? 'repeating ' : ''}{l.type}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
+            <span className="gs-lname">{l.name}<small>{typeIcon[l.type]} {l.solidColor !== undefined ? 'solid color' : `${l.repeating ? 'repeating ' : ''}${l.type}`}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
           </button>
           <span className="gs-lact">
             {l.id === layerId && <>
@@ -75,6 +81,21 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
     </ul>
     <p className="gs-bar-hint">Top of the list = top of the stack.</p>
     {selected && <div className="gs-quick" data-testid="layer-quick">
+      {selected.solidColor !== undefined && <div>
+        <div className="field-label">Solid color</div>
+        <ColorInput
+          color={selected.solidColor}
+          alpha={1}
+          showAlpha={false}
+          onChange={color => store.updateLayer(selected.id, layer => ({
+            ...layer,
+            solidColor: color,
+            stops: layer.stops.map((item, i) => ({ ...item, color, alpha: 1, pos: i === 0 ? 0 : 100 })),
+          }), { coalesce: 'solid-color' })}
+          label="Solid color"
+          testId="solid-color"
+        />
+      </div>}
       <label className="nf"><span className="nf-label">Blend mode</span><select className="generate-select" value={selected.blend} onChange={e => store.updateLayer(selected.id, { blend: e.target.value as GradientLayer['blend'] })} data-testid="quick-blend" aria-label="Blend mode">{BLEND_MODES.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
       <ValueControl label="Opacity" value={Math.round(selected.opacity * 100)} min={0} max={100} unit="%" def={100} onChange={v => store.updateLayer(selected.id, { opacity: v / 100 }, { coalesce: 'opacity' })} testId="quick-opacity" />
     </div>}

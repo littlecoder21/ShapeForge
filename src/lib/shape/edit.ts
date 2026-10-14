@@ -12,7 +12,7 @@ import { screenToCanvas, type V2, type Viewport } from './viewport';
  * Screen-pixel tolerances are converted with the current zoom, never baked into geometry.
  */
 
-export type Tool = 'Select' | 'Pen' | 'Hand';
+export type Tool = 'Select' | 'Pen' | 'Line' | 'Hand';
 export type Selection =
   | { kind: 'none' }
   | { kind: 'node'; index: number }

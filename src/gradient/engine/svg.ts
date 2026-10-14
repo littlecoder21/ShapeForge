@@ -4,6 +4,7 @@ import { bleedOf, layerMatrix, linearLine, normDeg, periodOf, offsetOf, radii, r
 import { rampRange, rampStops, colorAtPos } from './ramp';
 import { meshCoord as _mc, pointRadii } from './mesh';
 import { noiseFilterMarkup } from './noise';
+import { textureTileSvg } from './textures';
 import type { GradientLayer, GradientProject } from './model';
 
 /* ═══════════ SVG generation ═══════════
@@ -62,7 +63,9 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   const stops = () => (isStop ? rampStops(layer).map(s => stopTag(s.offset, s.color)).join('') : '');
   const { lo } = isStop ? rampRange(layer) : { lo: 0 };
 
-  if (layer.type === 'mesh') {
+  if (layer.solidColor !== undefined) {
+    inner = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${layer.solidColor}"/>`;
+  } else if (layer.type === 'mesh') {
     const mid = 25 + layer.mesh.core * 0.5, tag = (c: string, a: number, off: number) => `<stop offset="${r2(off, 4)}" stop-color="${c}"${a < 0.999 ? ` stop-opacity="${r2(a, 3)}"` : ''}/>`;
     const sq: string[] = [];
     layer.mesh.points.forEach((p, i) => {
@@ -115,7 +118,14 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   const style = layer.blend !== 'normal' ? ` style="mix-blend-mode:${layer.blend}"` : '';
   const op = layer.opacity < 1 ? ` opacity="${r2(layer.opacity, 3)}"` : '';
   const content = inner || `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${fill}"/>`;
-  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}>${content}</g>` };
+  let textureOverlay = '';
+  if (layer.texture.enabled) {
+    const size = Math.max(1, layer.texture.scale), offsetX = Math.round(layer.texture.seed * 13 + layer.texture.offsetX) % Math.round(size), offsetY = Math.round(layer.texture.seed * 7 + layer.texture.offsetY) % Math.round(size);
+    const tile = `data:image/svg+xml,${encodeURIComponent(textureTileSvg(layer.texture))}`;
+    defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${offsetX}" y="${offsetY}" width="${r2(size)}" height="${r2(size)}"><image href="${tile}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
+    textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(layer.texture.opacity / 100, 3)}" style="mix-blend-mode:${layer.texture.blend}"/>`;
+  }
+  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}>${content}${textureOverlay}</g>` };
 }
 
 export function projectSvgParts(project: GradientProject, prefix = 'g'): SvgParts {
@@ -138,7 +148,7 @@ export function isNativePaint(project: GradientProject) {
   const vis = project.layers.filter(l => l.visible);
   if (vis.length !== 1 || project.background) return false;
   const l = vis[0];
-  return (l.type === 'linear' || l.type === 'radial') && l.blend === 'normal' && l.opacity === 1 && isIdentityTransform(l) && !activeEffects(l.effects).length && blurOf(l.effects) === 0;
+  return (l.type === 'linear' || l.type === 'radial') && l.blend === 'normal' && l.opacity === 1 && !l.texture.enabled && isIdentityTransform(l) && !activeEffects(l.effects).length && blurOf(l.effects) === 0;
 }
 
 export const angleNorm = normDeg;

@@ -108,6 +108,12 @@
 .gs-pal span { display: flex; height: 18px; border-radius: 5px; overflow: hidden; } .gs-pal i { flex: 1; } .gs-pal.on { border-color: #3e7c68; color: #75e4bc; }
 .gs-fxcard { display: grid; gap: 8px; padding: 12px; margin-top: 10px; border-radius: 10px; background: #1b1f25; border: 1px solid #343a43; } .gs-fxcard.off { opacity: .55; }
 .gs-fxhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .gs-fxhead b { font-size: 12px; } .gs-fxhead .switch { width: auto; min-height: 30px; }
+.gs-texture-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; max-height: 42dvh; overflow: auto; padding: 2px; overscroll-behavior: contain; }
+.gs-texture-card { display: grid; gap: 6px; min-width: 0; padding: 6px; border-radius: 9px; background: #23282f; border: 1px solid #343a43; color: #cfd6dc; text-align: left; }
+.gs-texture-card:hover { border-color: #65717c; } .gs-texture-card.on { border-color: #69dfb5; background: #25332e; color: #75e4bc; }
+.gs-texture-thumb { display: block; width: 100%; aspect-ratio: 1.7 / 1; border-radius: 5px; border: 1px solid #ffffff18; background-color: #11151b; background-size: 40px 40px; background-position: center; }
+.gs-texture-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; font-weight: 650; }
+.gs-texture-color { display: grid; gap: 5px; }
 
 /* presets */
 .gs-search { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 12px; border-radius: 10px; background: #242930; border: 1px solid #3a414a; color: #8a949f; }

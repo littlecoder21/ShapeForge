@@ -158,7 +158,9 @@ async function renderFilteredSvg(project: GradientProject, scale: number): Promi
 }
 
 export async function exportPng(project: GradientProject, scale = 1): Promise<{ blob: Blob; notes: string[] }> {
-  const needsSvgFilters = project.layers.some(layer => layer.visible && activeEffects(layer.effects).some(effect => EFFECTS[effect.type].rasterUnsupported));
+  const needsSvgFilters = project.layers.some(layer => layer.visible && (
+    layer.texture.enabled || activeEffects(layer.effects).some(effect => EFFECTS[effect.type].rasterUnsupported)
+  ));
   let rendered: RenderResult;
   if (needsSvgFilters) {
     try {
@@ -166,7 +168,7 @@ export async function exportPng(project: GradientProject, scale = 1): Promise<{ 
     } catch (error) {
       rendered = renderProject(project, scale);
       const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';
-      rendered.notes.push(`Some mesh effects could not be rasterized (${reason}); see SVG output for the full effect`);
+      rendered.notes.push(`Some effects or textures could not be rasterized (${reason}); see SVG output for the full effect`);
     }
   } else {
     rendered = renderProject(project, scale);

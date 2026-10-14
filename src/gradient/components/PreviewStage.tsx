@@ -38,7 +38,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
   const pointers = useRef(new Map<number, V2 & { type: string }>()), gest = useRef<G>({ t: 'idle' }), raf = useRef(0), anim = useRef(0);
   const [pct, setPct] = useState(100);
 
-  const overlay = useMemo(() => (layer && layer.visible ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
+  const overlay = useMemo(() => (layer && layer.visible && layer.solidColor === undefined ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const live = useRef({ overlay, layer, canvas: project.canvas }); live.current = { overlay, layer, canvas: project.canvas };
 
@@ -93,10 +93,14 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
     const o = live.current.overlay; if (!o) return null;
     const vp = vpRef.current, R = type === 'mouse' ? 15 : 27;
     let best: Handle | null = null, bs = Infinity;
+    let move: Handle | null = null, moveDistance = Infinity;
     for (const hd of o.handles) {
-      const d = Math.hypot(hd.x * vp.zoom + vp.x - s.x, hd.y * vp.zoom + vp.y - s.y), score = d / (R + (hd.kind === 'stop' ? 4 : 0)) - hd.pri * 0.02;
+      const d = Math.hypot(hd.x * vp.zoom + vp.x - s.x, hd.y * vp.zoom + vp.y - s.y);
+      if (hd.kind === 'move') { move = hd; moveDistance = d; }
+      const score = d / (R + (hd.kind === 'stop' ? 4 : 0)) - hd.pri * 0.02;
       if (d <= R + (hd.kind === 'stop' ? 4 : 0) && score < bs) { bs = score; best = hd; }
     }
+    if (move && moveDistance <= 6 && (best?.kind === 'angle' || best?.kind === 'from') && moveDistance <= Math.hypot(best.x * vp.zoom + vp.x - s.x, best.y * vp.zoom + vp.y - s.y) + 6) return move;
     return best;
   };
   const cancelDrag = () => { const g = gest.current; if (g.t === 'drag') { store.updateLayer(g.start.id, () => g.start); store.end(); } setRead(null); };

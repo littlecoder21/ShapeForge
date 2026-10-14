@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Combine, Pentagon, Plus, Spline, Waves } from 'lucide-react';
 import { UNITS, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../../lib/shape/geometry';
 import { insertOnSegment, type Selection } from '../../lib/shape/edit';
@@ -9,13 +9,16 @@ import { Section, Seg, ValueControl } from '../../shared/controls';
 type Props = {
   shape: ShapeModel; fill: string; setFill: (c: string) => void;
   tolerance: number; setTolerance: (n: number) => void; precision: number; setPrecision: (n: number) => void; unit: Unit; setUnit: (u: Unit) => void;
+  polygonSamples: number; setPolygonSamples: (n: number) => void;
   settings: EditorSettings; setSettings: (p: Partial<EditorSettings>) => void;
   onCommit: (next: ShapeModel, sel?: Selection) => void; announce: (m: string) => void;
   shapes: ShapeModel[]; onUnify: (ids: string[]) => void;
 };
 
-export default function ShapePanel({ shape, fill, setFill, tolerance, setTolerance, precision, setPrecision, unit, setUnit, settings, setSettings, onCommit, announce, shapes, onUnify }: Props) {
+export default function ShapePanel({ shape, fill, setFill, tolerance, setTolerance, precision, setPrecision, unit, setUnit, polygonSamples, setPolygonSamples, settings, setSettings, onCommit, announce, shapes, onUnify }: Props) {
   const [unifyIds, setUnifyIds] = useState<string[]>([]);
+  const previousFill = useRef(fill === 'none' ? '#69dfb5' : fill);
+  useEffect(() => { if (fill !== 'none') previousFill.current = fill; }, [fill]);
   const simplifiedCount = useMemo(() => simplify(shape.kind === 'path' ? samplePath(shape.points, shape.closed, 8) : shape.points, tolerance).length, [shape.points, shape.closed, shape.kind, tolerance]);
   const frame: FrameMode = shape.frame ?? (shape.box ? 'box' : 'artboard');
   const convert = () => {
@@ -43,7 +46,8 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
     </Section>
     <Section title="Appearance" hint="live preview">
       <div className="field-label">Fill color <span>{fill}</span></div>
-      <div className="swatch-row"><input aria-label="Shape fill color" type="color" value={fill} onChange={e => setFill(e.target.value)} data-testid="input-fill-color" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} data-testid="input-fill-hex" /></div>
+      <label className="animation-check"><input type="checkbox" checked={fill === 'none'} onChange={event => setFill(event.target.checked ? 'none' : previousFill.current)} data-testid="checkbox-no-fill" />No fill (transparent)</label>
+      <div className="swatch-row"><input aria-label="Shape fill color" type="color" value={fill === 'none' ? previousFill.current : fill} disabled={fill === 'none'} onChange={e => setFill(e.target.value)} data-testid="input-fill-color" /><input className="generate-select" value={fill} onChange={e => setFill(e.target.value)} aria-label="Shape fill color value" data-testid="input-fill-hex" /></div>
     </Section>
     <Section title="Unify shapes" hint="boolean union">
       <div className="unify-list">
@@ -61,6 +65,7 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
       <Seg value={frame} label="Export frame" options={[{ id: 'artboard', label: 'Artboard' }, { id: 'bounds', label: 'Shape bounds' }, { id: 'box', label: 'Wave box', disabled: !shape.box }]}
         onChange={f => onCommit({ ...shape, frame: f })} testId="export-frame" />
       <ValueControl label="Simplify tolerance" value={tolerance} min={0} max={30} step={0.5} def={3} onChange={setTolerance} testId="range-tolerance" />
+      <ValueControl label="Curve sample detail" value={polygonSamples} min={4} max={128} step={4} def={48} onChange={setPolygonSamples} testId="polygon-curve-detail" />
       <label className="field-label" htmlFor="precision" style={{ marginTop: 12 }}>Code precision</label>
       <select id="precision" className="generate-select" value={precision} onChange={e => setPrecision(Number(e.target.value))} data-testid="select-precision"><option value="0">0 decimals</option><option value="1">1 decimal</option><option value="2">2 decimals</option><option value="3">3 decimals</option></select>
       <div className="field-label" style={{ marginTop: 12 }}>Output units</div>
