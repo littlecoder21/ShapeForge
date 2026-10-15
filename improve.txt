@@ -1,0 +1,679 @@
+# MASTER ENGINEERING PROMPT — Build 8 Advanced Visual-Effect Builders in My Existing Gradient & Shape Studio
+
+## 1. Project Context
+
+I have an existing web-based Shape & Gradient Generator built with React, TypeScript, and an established rendering architecture.
+
+The project already includes multiple gradient builders, shared rendering utilities, reusable layer structures, color conversion functions, seeded randomness, and existing UI patterns.
+
+Examples of existing concepts and utilities include:
+
+- `GradientLayer[]`
+- `newLayer()`
+- `newEffect()`
+- `hslToHex()`
+- `mulberry()` seeded randomness
+- Color stops, layer transforms, and effect configuration
+- Existing gradient and atmosphere rendering systems
+
+These are examples from my project, not permission to assume every utility has the same implementation or API.
+
+**Your first responsibility is to inspect the actual codebase before changing anything.**
+
+Understand the existing architecture, component conventions, rendering pipeline, state management, export mechanisms, styling system, and performance constraints.
+
+Do not invent existing APIs. Adapt your implementation to the actual source code.
+
+## 2. Main Objective
+
+Build eight powerful, production-quality visual-effect builders that integrate into my existing application.
+
+Implement these builders:
+
+1. Fluid Builder
+2. Light Builder
+3. Ink & Smoke Builder
+4. Halftone Builder
+5. Prism & Refraction Builder
+6. Metallic Builder
+7. Glass Builder
+8. Holographic Builder
+
+These must be genuinely different visual tools, not eight differently named versions of a generic gradient editor.
+
+Each builder must have its own rendering logic, specialized controls, useful presets, compositing behavior, and appropriate export capabilities.
+
+The final result should feel like a professional creative software suite for generating advanced website backgrounds, card surfaces, decorative effects, typography treatments, overlays, and abstract visual assets.
+
+## 3. Non-Negotiable Existing-Project Rules
+
+Before implementation:
+
+1. Inspect the repository and map its architecture.
+2. Identify the existing builders, rendering utilities, types, and shared components.
+3. Determine how navigation, builder registration, state, previews, and exports currently work.
+4. Identify dependencies and existing rendering technologies.
+5. Create an implementation plan based on the real project.
+
+Preserve all existing builders and features.
+
+Do not rewrite the application from scratch.
+
+Do not replace the current state-management architecture without a demonstrated technical necessity.
+
+Do not rename or remove existing exports, functions, types, files, or public interfaces unnecessarily.
+
+Do not overwrite existing styles or global CSS in a way that changes unrelated screens.
+
+Avoid unnecessary dependencies and large rendering libraries.
+
+Reuse shared infrastructure when appropriate, but never force every effect into an abstraction that prevents specialized rendering.
+
+Build incrementally and verify that the application still compiles and existing functionality continues to work.
+
+## 4. Shared Builder Architecture
+
+Create a consistent integration system for the eight new builders.
+
+Each builder should provide the following where appropriate:
+
+- Unique builder identifier and metadata
+- Dedicated configuration types
+- Specialized rendering implementation
+- Reusable control groups
+- Sensible default configuration
+- Preset definitions
+- Reset and randomize functionality
+- Seeded randomness where deterministic generation is useful
+- Live preview updates
+- Animation controls where supported
+- Layer and effect controls where appropriate
+- Responsive preview behavior
+- Export capabilities
+- Performance-aware rendering
+- Clear validation and error handling
+
+Use a shared interface only where it fits the existing architecture.
+
+Keep the implementation modular. Separate UI controls, configuration types, rendering algorithms, presets, and export adapters when doing so improves maintainability.
+
+Avoid creating an excessively generic rendering engine that makes every builder behave identically.
+
+## 5. Fluid Builder
+
+Create a sophisticated fluid-inspired visual generator.
+
+### Rendering capabilities
+
+- Organic color-flow fields
+- Fluid-like color mixing
+- Turbulence and directional flow
+- Domain-warped gradients
+- Swirling and vortex patterns
+- Soft liquid boundaries
+- Flow-map-inspired distortions
+- Animated flowing colors
+- Organic blobs and liquid membranes
+- Optional viscous, watery, and molten visual styles
+
+### Advanced controls
+
+- Flow direction
+- Flow intensity
+- Turbulence scale
+- Turbulence strength
+- Viscosity or smoothness
+- Swirl amount
+- Warp frequency
+- Warp amplitude
+- Diffusion or blur
+- Color palette and color blending
+- Animation speed and direction
+- Seed and regeneration
+- Detail and quality
+- Edge softness
+- Background color
+- Layer opacity and blend mode where supported
+
+Provide distinct presets such as Liquid Marble, Chromatic Flow, Soft Fluid, Deep Ocean, Molten Color, and Organic Membrane.
+
+Do not claim to simulate physically accurate fluids if the implementation uses a procedural approximation.
+
+## 6. Light Builder
+
+Create a dedicated light and illumination generator.
+
+### Rendering capabilities
+
+- Radial light sources
+- Directional beams
+- Volumetric-style light shafts
+- Light streaks
+- Atmospheric glow
+- Multiple overlapping light sources
+- Soft halos
+- Lens-inspired flares
+- Bloom-like highlights
+- Light falloff
+- Colored illumination
+- Animated light movement
+- Background-aware light compositing
+
+### Advanced controls
+
+- Light source position
+- Source radius
+- Intensity
+- Falloff curve
+- Beam angle
+- Beam spread
+- Beam length
+- Glow radius
+- Core brightness
+- Halo intensity
+- Color and temperature
+- Source count
+- Light direction
+- Blur and softness
+- Blend mode
+- Animation speed
+- Flicker amount
+- Quality and resolution
+
+Presets should include Aurora Rays, Cinematic Beam, Soft Spotlight, Neon Glow, Atmospheric Haze, and Light Leaks.
+
+Keep the effect visually controllable instead of producing an uncontrolled bright blur.
+
+## 7. Ink & Smoke Builder
+
+Build a generator for organic ink, pigment, smoke, and atmospheric diffusion.
+
+### Rendering capabilities
+
+- Ink-in-water-inspired patterns
+- Smoke plumes
+- Pigment diffusion
+- Organic tendrils
+- Cloud-like formations
+- Swirling particulate structures
+- Layered translucent wisps
+- High-contrast monochrome smoke
+- Colorful ink blooms
+- Procedural turbulence and distortion
+- Slow evolving animation
+- Soft volumetric-style depth
+
+### Advanced controls
+
+- Ink density
+- Smoke density
+- Turbulence
+- Curl or swirl
+- Diffusion
+- Dissipation
+- Tendril scale
+- Edge definition
+- Contrast
+- Opacity
+- Color palette
+- Particle or detail scale
+- Direction and flow
+- Layer count
+- Animation speed
+- Random seed
+- Quality level
+
+Include presets such as Black Ink, Rainbow Pigment, Blue Smoke, Crimson Vapor, Liquid Clouds, and Abstract Nebula.
+
+Make clear visual distinctions between sharp ink deposits and soft smoke formations.
+
+## 8. Halftone Builder
+
+Create a professional graphic-design-oriented halftone generator.
+
+### Rendering capabilities
+
+- Circular halftone dots
+- Variable-size dots
+- Traditional print-style halftones
+- Multichannel color halftones
+- CMYK-inspired patterns
+- Line screens
+- Elliptical dots
+- Square and diamond screens
+- Crosshatch patterns
+- Gradient-to-dot conversion
+- Image luminance-to-dot conversion when supported by existing project infrastructure
+- Duotone and monotone treatments
+- Multiple overlapping screens
+- Masked halftone patterns
+- Optional animated pattern movement
+
+### Advanced controls
+
+- Dot size
+- Minimum and maximum dot size
+- Grid spacing
+- Screen angle
+- Screen frequency
+- Dot shape
+- Dot density
+- Contrast
+- Threshold
+- Invert luminance
+- Foreground and background colors
+- Channel separation
+- Channel angles
+- Rotation
+- Pattern scale
+- Mask shape
+- Opacity
+- Blend mode
+- Antialiasing and output quality
+
+Include presets such as Editorial Print, CMYK Pop, Monochrome Poster, Vintage Newspaper, Gradient Dots, and Technical Screen.
+
+Provide deterministic, repeatable results. Prevent unwanted moiré artifacts where possible and explain tradeoffs when multiple screen frequencies are used.
+
+## 9. Prism & Refraction Builder
+
+Create an optical-effect generator focused on prismatic color separation and distorted light.
+
+### Rendering capabilities
+
+- Rainbow dispersion
+- Chromatic aberration
+- Prism-inspired spectral splitting
+- Directional color displacement
+- Refraction-like distortion
+- Glass-inspired light bending
+- Wavy optical distortions
+- Caustic-inspired patterns
+- Iridescent highlights
+- Refracted abstract shapes
+- Multilayer optical effects
+- Animated spectral movement
+
+### Advanced controls
+
+- Dispersion strength
+- RGB channel offset
+- Refraction intensity
+- Distortion scale
+- Distortion frequency
+- Chromatic shift
+- Spectral range
+- Prism angle
+- Rainbow width
+- Edge distortion
+- Highlight intensity
+- Caustic contrast
+- Blur
+- Layer count
+- Animation speed
+- Background
+- Output resolution
+
+Include presets such as Crystal Spectrum, Rainbow Refraction, Optical Wave, Chromatic Glass, Prismatic Light, and Spectral Edge.
+
+Do not confuse RGB displacement with physically accurate optical refraction. Provide real image or layer sampling where practical and a clearly labeled procedural fallback otherwise.
+
+## 10. Metallic Builder
+
+Create a high-quality procedural metal-surface generator.
+
+### Rendering capabilities
+
+- Polished chrome
+- Brushed aluminum
+- Gold and silver
+- Copper and bronze
+- Liquid metal
+- Satin metal
+- Anodized metal
+- Directional metallic streaks
+- Micro-surface variation
+- Metallic gradients
+- Reflective-looking highlight bands
+- Oxidized and weathered finishes
+- Iridescent metal
+- Animated specular-style sweeps
+
+### Advanced controls
+
+- Metal type
+- Base color
+- Highlight color
+- Shadow color
+- Roughness-like appearance
+- Brushed direction
+- Brushed intensity
+- Reflection-band scale
+- Highlight width
+- Contrast
+- Surface noise
+- Micro-scratches
+- Grain direction
+- Oxidation
+- Patina
+- Edge illumination
+- Reflection movement
+- Animation speed
+- Detail and quality
+
+Presets should include Liquid Chrome, Brushed Silver, Champagne Gold, Rose Gold, Dark Titanium, Polished Copper, and Anodized Rainbow.
+
+Use procedural shading and directional highlights to create a convincing metallic appearance.
+
+Do not falsely describe a flat 2D procedural texture as a physically based 3D material.
+
+## 11. Glass Builder
+
+Create a dedicated generator for translucent, frosted, and refractive glass-like surfaces.
+
+### Rendering capabilities
+
+- Frosted glass
+- Clear glass-inspired surfaces
+- Tinted glass
+- Milky glass
+- Edge highlights
+- Soft internal reflections
+- Glass-like distortion
+- Blurred background sampling where supported
+- Specular-style highlights
+- Condensation-inspired droplets
+- Subtle surface imperfections
+- Multiple glass layers
+- Animated highlight sweeps
+- Rounded glass-panel styling support
+
+### Advanced controls
+
+- Tint color
+- Tint opacity
+- Frost amount
+- Blur radius
+- Refraction strength
+- Distortion scale
+- Edge thickness
+- Edge brightness
+- Highlight position
+- Highlight intensity
+- Surface roughness appearance
+- Noise
+- Droplet amount
+- Background visibility
+- Shadow softness
+- Layer opacity
+- Output quality
+
+Include presets such as Clear Crystal, Frosted Panel, Smoked Glass, Arctic Glass, Liquid Glass, and Champagne Glass.
+
+Where possible, allow the user to preview the effect against a configurable background because glass appearance depends heavily on what is behind it.
+
+Distinguish CSS backdrop-filter effects from generated raster textures. Do not promise real optical depth or physically accurate refraction when the implementation cannot provide it.
+
+## 12. Holographic Builder
+
+Create a new builder specializing in holographic and iridescent surface effects.
+
+This builder must complement the Metallic, Glass, and Prism builders rather than duplicating them.
+
+### Rendering capabilities
+
+- Rainbow interference gradients
+- Iridescent color bands
+- Thin-film-inspired color variation
+- Holographic foil patterns
+- Angle-dependent-looking color shifts
+- Fine spectral lines
+- Multicolor reflective highlights
+- Noise-modulated iridescence
+- Diffraction-inspired decorative patterns
+- Animated spectral sweeps
+- Layered holographic textures
+- Subtle grain and surface imperfections
+
+### Advanced controls
+
+- Spectral palette
+- Hue cycle
+- Interference frequency
+- Rainbow spread
+- Color separation
+- Pattern scale
+- Iridescence intensity
+- Highlight width
+- Surface grain
+- Noise amount
+- Distortion
+- Contrast
+- Angle
+- Animation speed
+- Sweep direction
+- Layer opacity
+- Blend mode
+- Quality and seed
+
+Include presets such as Holographic Foil, Iridescent Pearl, Rainbow Film, Cyber Spectrum, Opal Surface, and Liquid Hologram.
+
+Clearly distinguish procedural iridescent artwork from physically simulated thin-film interference.
+
+## 13. Shared Texture and Compositing System
+
+Investigate the existing rendering architecture before introducing a shared system.
+
+Where beneficial, support reusable effects such as:
+
+- Fine grain
+- Paper grain
+- Film noise
+- Surface noise
+- Soft blur
+- Edge glow
+- Displacement
+- Color adjustment
+- Contrast adjustment
+- Opacity
+- Blend modes
+- Masks
+- Vignette
+- Dithering
+- Directional texture
+- Seeded procedural patterns
+
+Effects must be composable without forcing every builder to support every effect.
+
+Avoid duplicating identical implementations across builders when a shared utility makes sense.
+
+Keep each builder's specialized algorithms independent where their behavior differs.
+
+Do not implement every texture as an expensive full-resolution pixel loop.
+
+## 14. Rendering Technology Strategy
+
+Choose the rendering technology based on the actual requirements and the existing project.
+
+Prefer lightweight Canvas 2D or CSS when they provide sufficient quality.
+
+Use SVG for vector-friendly patterns, masks, and scalable effects.
+
+Consider WebGL or an existing GPU framework only when its benefits justify the additional complexity.
+
+Do not introduce a new rendering framework simply because it is available.
+
+For each builder, determine:
+
+- Whether its output should be vector-based, raster-based, or hybrid
+- Whether live animation is necessary
+- Whether it requires image sampling
+- Whether GPU acceleration materially improves performance
+- Whether its output can be exported as CSS, SVG, PNG, or a combination
+
+Never pretend that an effect is natively editable CSS if it actually requires a raster image.
+
+## 15. Performance Requirements
+
+Performance is a core feature, not a final cleanup task.
+
+Implement appropriate safeguards:
+
+- Device-pixel-ratio-aware rendering
+- Configurable preview resolution
+- Full-resolution export independent of preview quality
+- Animation through `requestAnimationFrame`
+- Avoid unnecessary React rerenders during animation
+- Cancel animation frames when no longer needed
+- Clean up observers, event listeners, and rendering resources
+- Debounce expensive non-interactive operations where appropriate
+- Avoid rebuilding static textures on every frame
+- Cache reusable gradients, patterns, and noise fields
+- Avoid repeated canvas allocations
+- Handle resizing without distorting the artwork
+- Respect reduced-motion preferences where relevant
+- Use workers for genuinely expensive CPU work when justified
+- Avoid unbounded particle counts and texture resolutions
+- Provide quality levels such as Draft, Balanced, and High where useful
+
+Ensure controls remain responsive while users change settings.
+
+If a builder supports animation, include a clear pause/play control and deterministic seed behavior.
+
+## 16. User Interface and Workflow
+
+Follow the existing design system.
+
+Every builder should have:
+
+- A clear workspace
+- Organized collapsible control sections
+- Sensible default values
+- Live visual feedback
+- Useful presets
+- Reset controls
+- Randomize controls where appropriate
+- Consistent sliders and numeric inputs
+- Color controls
+- Clear loading and error states
+- Responsive desktop and mobile layouts
+- Accessible labels and keyboard-friendly controls
+
+Group controls into sections such as Appearance, Geometry, Color, Texture, Lighting, Animation, and Output only when those categories make sense for that builder.
+
+Do not overwhelm the interface by exposing every technical parameter immediately. Place advanced settings in expandable sections.
+
+Use specialized terminology where useful, with short descriptions for unfamiliar parameters.
+
+Avoid redesigning unrelated application screens.
+
+## 17. Presets and Randomization
+
+Each builder must have at least six high-quality, visually distinct presets.
+
+Presets should represent useful design outcomes rather than merely changing one color.
+
+A preset should configure all relevant parameters together.
+
+Provide controlled randomization that respects valid parameter ranges and produces visually coherent results.
+
+Where supported, expose a seed field and a regenerate action.
+
+Use a deterministic random generator for repeatable procedural results. Do not make randomization depend on uncontrolled `Math.random()` calls throughout the rendering loop.
+
+## 18. Export System
+
+Integrate exports into the existing project's export architecture.
+
+Provide the appropriate options for each builder:
+
+- PNG for raster artwork
+- SVG for genuinely vector-based effects
+- CSS for effects that can be represented faithfully using CSS
+- CSS background layers when supported
+- Transparent PNG when the effect supports transparency
+- High-resolution export
+- Configuration serialization for saving and restoring work
+
+Do not generate fake SVG containing only a raster image and describe it as fully editable vector output.
+
+Do not export an approximate CSS version without communicating its limitations.
+
+When a builder produces procedural pixels, PNG may be its most faithful export.
+
+Preserve transparent backgrounds when requested and avoid unintended background fills.
+
+Ensure export resolution is independent of the current preview resolution.
+
+## 19. Quality Assurance
+
+After implementation:
+
+1. Run the existing type checker and build.
+2. Fix errors introduced by your changes.
+3. Verify that all eight builders open correctly.
+4. Verify that their controls change the actual rendered output.
+5. Verify that presets apply correctly.
+6. Verify that randomization and seeded regeneration behave as intended.
+7. Verify that reset restores valid defaults.
+8. Verify that resizing does not distort output.
+9. Test animation start, pause, cleanup, and repeated mounting.
+10. Test export dimensions and transparency.
+11. Check browser console errors.
+12. Check for memory leaks and unnecessary animation loops.
+13. Confirm that all existing builders and exports still work.
+14. Test the interface at desktop and mobile widths.
+
+Do not claim that a test passed unless you actually ran it.
+
+## 20. Implementation Strategy
+
+Do not attempt a massive unverified rewrite.
+
+Work in these phases:
+
+### Phase A — Audit
+
+Inspect the repository and document the current architecture, reusable utilities, integration points, and risks.
+
+### Phase B — Shared Infrastructure
+
+Implement only the shared interfaces, helpers, and export integration genuinely needed by the new builders.
+
+### Phase C — Builder Implementation
+
+Implement the eight builders in manageable increments. Prefer completing one builder's rendering, controls, presets, integration, and tests before proceeding to the next.
+
+Prioritize architectural validation with representative builders that use different rendering approaches. Reuse the validated infrastructure without forcing all builders into identical rendering methods.
+
+### Phase D — Integration
+
+Register every builder in the existing navigation and connect it to the existing state and preview systems.
+
+### Phase E — Verification
+
+Run the available checks and fix regressions before declaring the work complete.
+
+### Phase F — Final Report
+
+Summarize:
+
+- Files created
+- Files modified
+- Architecture decisions
+- Implemented features for each builder
+- Rendering technology used by each builder
+- Export formats supported by each builder
+- Performance safeguards
+- Tests actually executed
+- Remaining limitations
+
+## Final Instruction
+
+Build a coherent, professional extension of my existing application, not a disconnected demo or a complete rewrite.
+
+Preserve working code, respect the current architecture, and prioritize genuine rendering quality, specialized controls, performance, and export accuracy.
+
+If a feature is technically expensive, implement the best practical version that fits the existing project and clearly document its limitations.
+
+Start by inspecting the source code. Then present a concise implementation plan and proceed with the implementation using the actual project structure.

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Shuffle } from 'lucide-react';
 import { Section, Switch, ValueControl } from '../../shared/controls';
-import { DEFAULT_AURORA, auroraPalette, auroraSky, buildAurora, type AuroraOptions } from '../engine/aurora';
+import { AURORA_PRESETS, DEFAULT_AURORA, auroraPalette, auroraSky, buildAurora, type AuroraOptions } from '../engine/aurora';
 import { useStudio, ColorInput } from './ui';
 
 const PALETTES: { name: string; colors: string[]; sky: string }[] = [
@@ -15,13 +15,19 @@ const PALETTES: { name: string; colors: string[]; sky: string }[] = [
 export default function AuroraPanel({ onBuilt }: { onBuilt?: () => void }) {
   const { store, announce } = useStudio();
   const [o, setO] = useState<AuroraOptions>(DEFAULT_AURORA);
-  const set = (p: Partial<AuroraOptions>) => setO(prev => ({ ...prev, ...p }));
+  const [activePreset, setActivePreset] = useState('');
+  const set = (p: Partial<AuroraOptions>) => { setActivePreset(''); setO(prev => ({ ...prev, ...p })); };
   const build = (mode: 'replace' | 'add') => {
     const layers = buildAurora(o);
     store.update(p => ({ ...p, layers: mode === 'replace' ? layers : [...layers, ...p.layers] }));
     store.select((layers.find(l => l.type !== 'noise') ?? layers[0]).id); announce(`${mode === 'replace' ? 'Built' : 'Added'} aurora · ${layers.length} editable layers`); onBuilt?.();
   };
   return <div data-testid="aurora-panel">
+    <Section title="Aurora presets" open={false}>
+      <div className="gs-chips wrap" role="radiogroup" aria-label="Aurora presets">
+        {AURORA_PRESETS.map(preset => <button key={preset.id} type="button" role="radio" aria-checked={activePreset === preset.id} className={`chip ${activePreset === preset.id ? 'active' : ''}`} onClick={() => { setActivePreset(preset.id); setO({ ...preset.options }); }} data-testid={`aurora-preset-${preset.id}`}>{preset.name}</button>)}
+      </div>
+    </Section>
     <Section title="Palette">
       <div className="gs-palettes" role="radiogroup" aria-label="Aurora palette">
         {PALETTES.map(p => <button key={p.name} type="button" role="radio" aria-checked={o.palette.join() === p.colors.join()} className={`gs-pal ${o.palette.join() === p.colors.join() ? 'on' : ''}`} onClick={() => set({ palette: p.colors, sky: p.sky })} data-testid={`aurora-pal-${p.name.toLowerCase().replace(/\s/g, '-')}`}>
@@ -35,11 +41,15 @@ export default function AuroraPanel({ onBuilt }: { onBuilt?: () => void }) {
       <ValueControl label="Ribbons" value={o.ribbons} min={0} max={3} def={1} onChange={v => set({ ribbons: v })} testId="aurora-ribbons" />
       <ValueControl label="Intensity" value={o.intensity} min={10} max={100} unit="%" def={70} onChange={v => set({ intensity: v })} testId="aurora-intensity" />
       <ValueControl label="Softness (blur)" value={o.blur} min={10} max={140} unit="px" def={55} onChange={v => set({ blur: v })} testId="aurora-blur" />
+      <ValueControl label="Motion intensity" value={o.motionIntensity ?? 55} min={0} max={100} unit="%" def={55} onChange={motionIntensity => set({ motionIntensity })} />
       <div className="seed-row"><ValueControl label="Seed" value={o.seed} min={1} max={999} def={5} onChange={v => set({ seed: v })} /><button type="button" className="btn" aria-label="Random seed" onClick={() => set({ seed: 1 + Math.floor(Math.random() * 998) })}><Shuffle /></button></div>
     </Section>
     <Section title="Extras">
       <Switch label="Horizon glow" checked={o.glow} onChange={v => set({ glow: v })} testId="aurora-glow" />
       <Switch label="Star dust" checked={o.stars} onChange={v => set({ stars: v })} />
+      {o.stars && <ValueControl label="Star density" value={o.starDensity ?? 38} min={0} max={100} unit="%" def={38} onChange={starDensity => set({ starDensity })} />}
+      <Switch label="Fine aurora filaments" checked={!!o.strands} onChange={strands => set({ strands })} />
+      {o.strands && <ValueControl label="Filament density" value={o.strandDensity ?? 42} min={0} max={100} unit="%" def={42} onChange={strandDensity => set({ strandDensity })} />}
       <Switch label="Slow drift animation" checked={o.movement} onChange={v => set({ movement: v })} testId="aurora-move" />
       <Switch label="Distortion (SVG turbulence)" checked={o.distortion} onChange={v => set({ distortion: v })} testId="aurora-distort" />
     </Section>

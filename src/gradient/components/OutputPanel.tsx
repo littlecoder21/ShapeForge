@@ -50,10 +50,11 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       <button type="button" className={`ptab gear ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} aria-expanded={showSettings} data-testid="out-settings-toggle">Names &amp; size</button>
     </div>
     {showSettings && <OutputSettingsForm />}
-    <div className="gs-copyrow gs-downloadbar" role="group" aria-label="Download PNG">
+    <div className="gs-copyrow gs-downloadbar" role="group" aria-label="Download PNG at output resolution">
       <span className="nf-label">Download preview</span>
       <button type="button" className="btn small" onClick={() => png(1)} data-testid="png-1"><ImageDown />PNG</button>
       <button type="button" className="btn small" onClick={() => png(2)} data-testid="png-2"><ImageDown />PNG @2×</button>
+      <button type="button" className="btn small" onClick={() => png(3)} data-testid="png-3"><ImageDown />PNG @3×</button>
     </div>
     {out.analysis.needsLayers && (fmt === 'css' || fmt === 'vars') && <div className="gs-note" role="note" data-testid="flat-note">
       <b>Approximate:</b> {out.analysis.warnings.slice(0, 2).join(' · ')}{out.analysis.warnings.length > 2 ? ` · +${out.analysis.warnings.length - 2} more` : ''}.
