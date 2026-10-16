@@ -1,6 +1,8 @@
 import { Shuffle } from 'lucide-react';
 import { useState } from 'react';
 import { Seg, Section, Switch, ValueControl } from '../../shared/controls';
+import { applyBuilderLayers } from '../engine/builderLayers';
+import { useStore } from '../engine/store';
 import { ATMOSPHERES, DEFAULT_ATMOSPHERE, buildAtmosphere, type AtmosphereOptions } from '../engine/atmosphere';
 import { mixColors, rgbToHex, toRgba } from '../engine/color';
 import { ColorInput, useStudio } from './ui';
@@ -16,11 +18,13 @@ export default function AtmospherePanel() {
     const blended = rgbToHex(mixColors(toRgba(before, 1), toRgba(last, 1), 0.5, 'oklab'));
     set({ sky: [...o.sky.slice(0, -1), blended, last] });
   };
-  const build = (mode: 'replace' | 'add') => {
+  const build = (mode: 'replace' | 'add' | 'update') => {
     const layers = buildAtmosphere(o);
-    store.update(p => ({ ...p, layers: mode === 'replace' ? layers : [...layers, ...p.layers] }));
-    store.select((layers.find(l => l.type !== 'noise') ?? layers[0]).id); announce(`${mode === 'replace' ? 'Built' : 'Added'} atmosphere · ${layers.length} editable layers`);
+    if (!applyBuilderLayers(store, 'atmosphere', layers, mode)) return;
+    announce(`${mode === 'replace' ? 'Built' : mode === 'update' ? 'Updated' : 'Added'} atmosphere · ${layers.length} editable layers`);
   };
+  const selectedLayer = useStore(store, state => state.project.layers.find(layer => layer.id === state.layerId));
+  const canUpdate = selectedLayer?.builderSource === 'atmosphere' && !!selectedLayer.builderGroup;
   return <div data-testid="atmosphere-panel">
     <Section title="Time of day">
       <div className="gs-chips wrap" role="radiogroup" aria-label="Atmosphere preset">
@@ -62,7 +66,9 @@ export default function AtmospherePanel() {
     </Section>
     <div className="gs-btnrow">
       <button type="button" className="btn primary" onClick={() => build('replace')} data-testid="atmo-build">Build atmosphere</button>
-      <button type="button" className="btn" onClick={() => build('add')} data-testid="atmo-add">Add on top</button>
+      <button type="button" className="btn" onClick={() => build('add')} data-testid="atmo-add">Create layers</button>
+      <button type="button" className="btn" disabled={!canUpdate} onClick={() => build('update')} data-testid="atmo-update">Update selected</button>
     </div>
+    <p className="hint">To update this scene, select one of its generated layers first. The full generated layer group will be refreshed in place.</p>
   </div>;
 }

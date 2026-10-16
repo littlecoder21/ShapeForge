@@ -20,6 +20,50 @@ export type NodeMode = 'auto' | 'corner' | 'smooth' | 'symmetric' | 'free';
 export type Point = { x: number; y: number; in?: Point; out?: Point; mode?: NodeMode; /** a locked node cannot be dragged, nudged or deleted */ locked?: boolean };
 export type ShapeKind = 'path' | 'polygon';
 export type Box = { x: number; y: number; w: number; h: number };
+export interface TextGlyphShape { x: number; y: number; rotation: number; scaleX: number; scaleY: number }
+export interface TextVectorGlyph {
+  index: number;
+  char: string;
+  d: string;
+  contourPaths: string[];
+  transform: string;
+  contours: Point[][];
+  pivotX: number;
+  pivotY: number;
+}
+export interface TextStrokePath {
+  id: string;
+  name: string;
+  d: string;
+  glyphIndex?: number;
+  transform?: string;
+  reverse: boolean;
+  startPercent: number;
+  duration: number;
+  pauseAfter: number;
+  overlapNext: number;
+  closed: boolean;
+}
+export interface TextShapeData {
+  value: string;
+  font: string;
+  fontSize: number;
+  weight: string;
+  italic: boolean;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+  draw: boolean;
+  duration: number;
+  letterSpacing: number;
+  lineSpacing: number;
+  glyphShapes: TextGlyphShape[];
+  width: number;
+  height: number;
+  content: string;
+  vectorGlyphs?: TextVectorGlyph[];
+  strokePaths?: TextStrokePath[];
+}
 /** Which rectangle exports are measured against. */
 export type FrameMode = 'artboard' | 'bounds' | 'box';
 export type Unit = '%' | 'px' | 'rem' | 'em' | 'vw' | 'vh';
@@ -47,6 +91,8 @@ export type ShapeModel = {
   locked?: boolean;
   /** further sub-paths (holes). `points` is the main ring; the shape is one compound path. */
   extra?: Point[][];
+  /** Editable SVG text content; points define its movable, resizable artboard frame. */
+  text?: TextShapeData;
   fillRule?: FillRule;
   /** 'outer' = computed complement of the page's shapes (read-only geometry) */
   derived?: 'outer';
@@ -161,6 +207,73 @@ export function simplify(points: Point[], tolerance: number) {
     if (max > tolerance && idx > 0) { keep[idx] = true; stack.push([a, idx], [idx, b]); }
   }
   return points.filter((_, i) => keep[i]);
+}
+
+/** Resample a polyline to an exact point count, preserving corners when the count allows. */
+export function resamplePolyline(points: Point[], requestedCount: number, closed: boolean): Point[] {
+  if (!points.length) return [];
+  const count = Math.max(1, Math.min(300, Math.round(requestedCount)));
+  if (count === 1) return [{ x: points[0].x, y: points[0].y }];
+
+  const segmentCount = closed ? points.length : points.length - 1;
+  if (segmentCount < 1) return Array.from({ length: count }, () => ({ x: points[0].x, y: points[0].y }));
+  if (count < points.length) {
+    const lengths = Array.from({ length: segmentCount }, (_, i) => {
+      const a = points[i], b = points[(i + 1) % points.length];
+      return Math.hypot(b.x - a.x, b.y - a.y);
+    });
+    const total = lengths.reduce((sum, length) => sum + length, 0);
+    if (total <= 1e-9) return Array.from({ length: count }, () => ({ x: points[0].x, y: points[0].y }));
+    return Array.from({ length: count }, (_, i) => {
+      let distance = total * (closed ? i / count : i / (count - 1));
+      for (let segment = 0; segment < segmentCount; segment++) {
+        const length = lengths[segment];
+        if (distance <= length || segment === segmentCount - 1) {
+          const a = points[segment], b = points[(segment + 1) % points.length];
+          const t = length <= 1e-9 ? 0 : Math.min(1, distance / length);
+          return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+        }
+        distance -= length;
+      }
+      return { x: points[points.length - 1].x, y: points[points.length - 1].y };
+    });
+  }
+
+  const intervals = new Array(segmentCount).fill(1);
+  const remaining = count - segmentCount - (closed ? 0 : 1);
+  const lengths = Array.from({ length: segmentCount }, (_, i) => {
+    const a = points[i], b = points[(i + 1) % points.length];
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  });
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  if (remaining > 0 && total > 1e-9) {
+    const shares = lengths.map(length => remaining * length / total);
+    shares.forEach((share, i) => { intervals[i] += Math.floor(share); });
+    let left = remaining - shares.reduce((sum, share) => sum + Math.floor(share), 0);
+    const remainders = shares.map((share, i) => ({ i, remainder: share - Math.floor(share) }))
+      .sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < left; i++) intervals[remainders[i].i]++;
+  } else if (remaining > 0) {
+    for (let i = 0; i < remaining; i++) intervals[i % segmentCount]++;
+  }
+
+  const result: Point[] = [];
+  for (let segment = 0; segment < segmentCount; segment++) {
+    const a = points[segment], b = points[(segment + 1) % points.length];
+    for (let i = 0; i < intervals[segment]; i++) {
+      const t = i / intervals[segment];
+      result.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    }
+  }
+  if (!closed) result.push({ x: points[points.length - 1].x, y: points[points.length - 1].y });
+  return result.slice(0, count);
+}
+
+export function polygonOutputPoints(points: Point[], closed: boolean, smooth: boolean, count: number, tolerance: number): Point[] {
+  const pointCount = Math.max(1, Math.min(300, Math.round(count)));
+  const steps = Math.max(8, Math.min(48, Math.ceil(pointCount / Math.max(1, points.length))));
+  const sampled = smooth ? simplify(samplePath(points, closed, steps), tolerance) : points;
+  return resamplePolyline(sampled, pointCount, closed);
 }
 export function shapeOutline(shape: Pick<ShapeModel, 'points' | 'closed' | 'kind'>, steps = 12): Point[] {
   return shape.kind === 'path' ? samplePath(shape.points, shape.closed, steps) : shape.points.map(p => ({ x: p.x, y: p.y }));
@@ -279,12 +392,21 @@ export function chainRings<T extends { x: number; y: number }>(rings: T[][]): T[
   return out;
 }
 
-export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 1, unit: Unit = '%', pageSize?: { width: number; height: number; unit: string }, curveSteps = 48) {
+function textSvgElement(shape: ShapeModel, offsetX = 0, offsetY = 0) {
+  const text = shape.text!;
+  if (shape.points.length < 4 || !text.width || !text.height) return '';
+  const origin = shape.points[0], topRight = shape.points[1], bottomLeft = shape.points[3];
+  const a = (topRight.x - origin.x) / text.width, b = (topRight.y - origin.y) / text.width;
+  const c = (bottomLeft.x - origin.x) / text.height, d = (bottomLeft.y - origin.y) / text.height;
+  return `<svg x="0" y="0" width="${fmt(text.width)}" height="${fmt(text.height)}" viewBox="0 0 ${fmt(text.width)} ${fmt(text.height)}" preserveAspectRatio="none" transform="matrix(${fmt(a, 5)} ${fmt(b, 5)} ${fmt(c, 5)} ${fmt(d, 5)} ${fmt(origin.x - offsetX)} ${fmt(origin.y - offsetY)})">${text.content}</svg>`;
+}
+
+export function exportCode(shape: ShapeModel, format: string, precision = 1, tolerance = 1, unit: Unit = '%', pageSize?: { width: number; height: number; unit: string }, polygonPointCount = 48) {
   const frame = frameOf(shape);
   const rings = ringsOf(shape).map(r => translatePoints(r, -frame.x, -frame.y));
   const smooth = shape.kind === 'path', evenodd = shape.fillRule === 'evenodd';
   const d = rings.map(r => pathFromPoints(r, shape.closed, smooth, precision)).join(' ');
-  const sampled = chainRings(rings.map(r => simplify(smooth ? samplePath(r, shape.closed, curveSteps) : r, tolerance)));
+  const sampled = chainRings(rings.map(r => polygonOutputPoints(r, shape.closed, smooth, polygonPointCount, tolerance)));
   const poly = polygonToCssUnits(sampled, frame, unit, precision, evenodd);
   const vb = `0 0 ${fmt(frame.w, precision)} ${fmt(frame.h, precision)}`;
   const pageAttrs = pageSize && (shape.frame ?? (shape.box ? 'box' : 'artboard')) === 'artboard'
@@ -293,8 +415,10 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
   const par = shape.wave || pageSize ? ' preserveAspectRatio="none"' : '';
   const rule = evenodd ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';
   const paint = shape.paint && (shape.fill === 'none' ? { ...shape.paint, fill: false, css: false } : shape.paint);
-  let svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
-  if (paint && (paintShowsFill(paint) || paint.stroke)) {
+  let svg = shape.text
+    ? `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  ${textSvgElement(shape, frame.x, frame.y)}\n</svg>`
+    : `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <path d="${d}" fill="${shape.fill}"${rule} />\n</svg>`;
+  if (!shape.text && paint && (paintShowsFill(paint) || paint.stroke)) {
     const pp = paintSvgParts(paint, d, frame, shape.strokeWidth);
     const outline = paint.stroke ? '' : '';
     svg = `<svg${pageAttrs} viewBox="${vb}"${par} xmlns="http://www.w3.org/2000/svg">\n  <defs>${pp.defs}</defs>\n  ${paintShowsFill(paint) ? '' : `<path d="${d}" fill="${shape.fill}"${rule} />\n  `}${pp.body}${outline}\n</svg>`;
@@ -319,6 +443,7 @@ export function exportCode(shape: ShapeModel, format: string, precision = 1, tol
       ...(shape.fillRule ? { fillRule: shape.fillRule } : {}), ...(shape.derived ? { derived: shape.derived } : {}),
       ...(shape.box ? { box: { x: r(shape.box.x), y: r(shape.box.y), w: r(shape.box.w), h: r(shape.box.h) } } : {}),
       ...(shape.wave ? { wave: shape.wave } : {}),
+      ...(shape.text ? { text: shape.text } : {}),
       points: shape.points.map(p => ({ ...pt(p), ...(p.mode ? { mode: p.mode } : {}), ...(p.locked ? { locked: true } : {}), ...(p.in ? { in: pt(p.in) } : {}), ...(p.out ? { out: pt(p.out) } : {}) })),
       ...(shape.extra?.length ? { extra: shape.extra.map(ring => ring.map(p => ({ ...pt(p), ...(p.mode ? { mode: p.mode } : {}), ...(p.in ? { in: pt(p.in) } : {}), ...(p.out ? { out: pt(p.out) } : {}) }))) } : {}),
     }, null, 2);
@@ -332,6 +457,10 @@ export function exportPageSvg(shapes: ShapeModel[], precision = 1, page: { width
   if (page.background && page.background !== 'transparent') body.push(`<rect width="${W}" height="${H}" fill="${page.background}" />`);
   for (const shape of shapes) {
     if (shape.hidden) continue;
+    if (shape.text) {
+      body.push(textSvgElement(shape));
+      continue;
+    }
     const rings = ringsOf(shape);
     const d = rings.map(r => pathFromPoints(r, shape.closed, shape.kind === 'path', precision)).join(' ');
     const rule = shape.fillRule === 'evenodd' ? ' fill-rule="evenodd" clip-rule="evenodd"' : '';

@@ -4,6 +4,7 @@ import { H, W } from '../../lib/shape/constants';
 import { fmt, getHandles, isStraightSegment, pathFromPoints, pathOfShape, shapeBounds, type Box, type Point, type ShapeModel } from '../../lib/shape/geometry';
 import { paintedMarkup, type Painted } from '../../lib/shape/paintMarkup';
 import StaticShape from './StaticShape';
+import TextArtboardObject from './TextArtboardObject';
 import NodeMenu from './NodeMenu';
 import NodeBar from './NodeBar';
 import {
@@ -73,12 +74,13 @@ const ArtboardLayer = memo(function ArtboardLayer({ showGrid, step, minor, backg
   </g>;
 });
 
-const ShapeLayer = memo(function ShapeLayer({ d, polygonPoints, painted, fill, fillRule, strokeDraw }: { d: string; polygonPoints: string | null; painted: Painted | null; fill: string; fillRule?: ShapeModel['fillRule']; strokeDraw: number | null }) {
+const ShapeLayer = memo(function ShapeLayer({ shape, d, polygonPoints, painted, fill, fillRule, strokeDraw }: { shape: ShapeModel; d: string; polygonPoints: string | null; painted: Painted | null; fill: string; fillRule?: ShapeModel['fillRule']; strokeDraw: number | null }) {
   const cls = `shape-fill${painted ? ' painted' : ''}`;
   const drawStyle = strokeDraw === null ? undefined : { strokeDasharray: 1, strokeDashoffset: 1 - strokeDraw };
   return <g>
-    {painted && <g transform={`translate(${painted.x} ${painted.y})`} pointerEvents="none"><defs dangerouslySetInnerHTML={{ __html: painted.defs }} /><g dangerouslySetInnerHTML={{ __html: painted.body }} /></g>}
-    {polygonPoints ? <polygon className={cls} points={polygonPoints} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(painted ? {} : { fill }), ...drawStyle }} /> : <path className={cls} d={d} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(painted ? {} : { fill }), ...drawStyle }} />}
+    {shape.text && <TextArtboardObject text={shape.text} points={shape.points} />}
+    {!shape.text && painted && <g transform={`translate(${painted.x} ${painted.y})`} pointerEvents="none"><defs dangerouslySetInnerHTML={{ __html: painted.defs }} /><g dangerouslySetInnerHTML={{ __html: painted.body }} /></g>}
+    {polygonPoints ? <polygon className={cls} points={polygonPoints} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(shape.text ? { fill: 'transparent' } : painted ? {} : { fill }), ...drawStyle }} /> : <path className={cls} d={d} pathLength={strokeDraw === null ? undefined : 1} fillRule={fillRule} style={{ ...(shape.text ? { fill: 'transparent' } : painted ? {} : { fill }), ...drawStyle }} />}
   </g>;
 });
 
@@ -467,7 +469,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
   const dots = useMemo(() => shape.hidden || shape.locked ? '' : shape.points.map(p => `M${p.x} ${p.y}h.01`).join(''), [shape.points, shape.hidden, shape.locked]);
   const otherById = useMemo(() => new Map(props.others.map(other => [other.id, other])), [props.others]);
   const bounds = useMemo(() => (selection.kind === 'shape' && !shape.locked && !shape.hidden ? shapeBounds(shape) : null), [selection.kind, shape]);
-  const painted = useMemo(() => paintedMarkup(shape), [shape.paint, shape.points, shape.extra, shape.closed, shape.kind, shape.box, shape.frame, shape.strokeWidth, shape.fillRule, shape.id]);
+  const painted = useMemo(() => shape.text ? null : paintedMarkup(shape), [shape.text, shape.paint, shape.points, shape.extra, shape.closed, shape.kind, shape.box, shape.frame, shape.strokeWidth, shape.fillRule, shape.id]);
   const selIdx = shape.hidden || shape.locked ? null : selectedNode(selection);
   const selPoint = selIdx !== null ? shape.points[selIdx] : undefined;
   const handles = selPoint && shape.kind === 'path' ? getHandles(shape.points, selIdx!, shape.closed) : null;
@@ -484,7 +486,7 @@ const Stage = forwardRef<StageHandle, Props>(function Stage(props, ref) {
         <ArtboardLayer showGrid={props.showGrid} step={gridStep} minor={showMinor} background={props.pageBackground} />
         {!shape.hidden && shape.box && (shape.frame ?? 'box') === 'box' && <rect className="frame-box" x={shape.box.x} y={shape.box.y} width={shape.box.w} height={shape.box.h} />}
         {props.shapeOrder.map(id => id === shape.id
-          ? (!shape.hidden && <ShapeLayer key={id} d={d} polygonPoints={props.polygonPoints} painted={painted} fill={shape.fill} fillRule={shape.fillRule} strokeDraw={props.strokeDraw} />)
+          ? (!shape.hidden && <ShapeLayer key={id} shape={shape} d={d} polygonPoints={props.polygonPoints} painted={painted} fill={shape.fill} fillRule={shape.fillRule} strokeDraw={props.strokeDraw} />)
           : (() => { const other = otherById.get(id); return other && !other.hidden ? <StaticShape key={id} shape={other} /> : null; })())}
         {linePreview && <path className="line-preview" d={`M${linePreview.start.x} ${linePreview.start.y}L${linePreview.end.x} ${linePreview.end.y}`} fill="none" stroke={shape.stroke === 'none' ? shape.fill : shape.stroke} strokeWidth={shape.strokeWidth || 1} />}
         {dots && <><path className="dots-ring" d={dots} style={{ strokeWidth: settings.nodeSize + 4 }} /><path className="dots-fill" d={dots} style={{ strokeWidth: settings.nodeSize }} /></>}

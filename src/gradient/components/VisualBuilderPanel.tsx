@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { RotateCcw, Shuffle } from 'lucide-react';
 import { Section, Switch, ValueControl } from '../../shared/controls';
+import { applyBuilderLayers } from '../engine/builderLayers';
 import { BLEND_MODES } from '../engine/model';
+import { useStore } from '../engine/store';
 import { VISUAL_BUILDERS, buildVisual, mergeVisualConfig, updateVisualColor, visualBuilder, visualConfig, visualSeed, type VisualBuilderId, type VisualConfig } from '../engine/visualBuilders';
 import { ColorInput, useStudio } from './ui';
 
@@ -20,13 +22,13 @@ export default function VisualBuilderPanel({ id }: { id: VisualBuilderId }) {
     setActivePreset(presetId);
     setConfig(current => mergeVisualConfig(mergeVisualConfig(builder.defaults, preset.values), { seed: current.seed }));
   };
-  const build = (mode: 'replace' | 'add') => {
+  const build = (mode: 'replace' | 'add' | 'update') => {
     const layers = buildVisual(id, config);
-    store.update(project => ({ ...project, layers: mode === 'replace' ? layers : [...layers, ...project.layers] }));
-    const selected = layers.find(layer => layer.type !== 'noise') ?? layers[0];
-    if (selected) store.select(selected.id);
-    announce(`${mode === 'replace' ? 'Built' : 'Added'} ${builder.name} · ${layers.length} editable layers`);
+    if (!applyBuilderLayers(store, id, layers, mode)) return;
+    announce(`${mode === 'replace' ? 'Built' : mode === 'update' ? 'Updated' : 'Added'} ${builder.name} · ${layers.length} editable layers`);
   };
+  const selectedLayer = useStore(store, state => state.project.layers.find(layer => layer.id === state.layerId));
+  const canUpdate = selectedLayer?.builderSource === id && !!selectedLayer.builderGroup;
   const seed = visualSeed(config);
   const palette = Array.isArray(config.palette) ? config.palette : [];
   const background = typeof config.background === 'string' ? config.background : '#080b18';
@@ -68,8 +70,10 @@ export default function VisualBuilderPanel({ id }: { id: VisualBuilderId }) {
     </Section>
     <div className="gs-btnrow">
       <button type="button" className="btn primary" onClick={() => build('replace')} data-testid={`${id}-build`}>Build {builder.name.toLowerCase()}</button>
-      <button type="button" className="btn" onClick={() => build('add')} data-testid={`${id}-add`}>Add as layers</button>
+      <button type="button" className="btn" onClick={() => build('add')} data-testid={`${id}-add`}>Create layers</button>
+      <button type="button" className="btn" disabled={!canUpdate} onClick={() => build('update')} data-testid={`${id}-update`}>Update selected</button>
     </div>
+    <p className="hint">To update a scene, select one of its generated layers first. The full generated layer group will be refreshed in place.</p>
     <p className="hint">Generated layers and their effects, textures, blend modes, opacity, animation, and transparency are included in project JSON, layered CSS, SVG, and PNG output. Single-element CSS may be approximate for layered designs. Procedural distortions are visual approximations, not physical simulations.</p>
   </div>;
 }

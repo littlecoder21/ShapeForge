@@ -1,9 +1,9 @@
 import { Suspense, lazy, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowDownToLine, Check, ChevronUp, Code2, Copy, Download, Grid2X2, Hand, Magnet, MousePointer2, Move, PanelBottomClose, PanelBottomOpen, PenTool, Plus, Redo2, ScanLine, Shapes, SlidersHorizontal, Slash, Trash2,
-  Palette, Sparkles, Undo2, Waves, X, Crosshair,
+  Palette, Sparkles, Undo2, Waves, X, Crosshair, Type,
 } from 'lucide-react';
-import { exportCode, exportPageSvg, makeShape, samplePath, simplify, type ShapeModel, type Unit } from './lib/shape/geometry';
+import { exportCode, exportPageSvg, makeShape, polygonOutputPoints, type Point, type ShapeModel, type TextShapeData, type TextVectorGlyph, type Unit } from './lib/shape/geometry';
 import { animatedFillOpacity, animatedShapeAt, animatedStrokeDraw, combineAnimatedHtml, exportAnimatedHtmlParts, type AnimatedShape, type ShapeAnimation } from './lib/shape/animation';
 import { NONE, nudgeNode, deleteNode, deleteNodes, moveNodesBy, selectAllNodes, selectedIndices, setNodesLocked, toggleInSelection, type Selection, type Tool } from './lib/shape/edit';
 import { DEFAULT_WAVE, buildWaveShape, clampWave, type WaveParams } from './lib/shape/wave';
@@ -22,6 +22,8 @@ import WavePanel from './shape/panels/WavePanel';
 import BoundaryPanel from './shape/panels/BoundaryPanel';
 import EditorPanel from './shape/panels/EditorPanel';
 import AnimationPanel, { shapeAnimation } from './shape/panels/AnimationPanel';
+import TextSvgPanel from './shape/panels/TextSvgPanel';
+import { transformContourPoint } from './shape/panels/textSvgGeometry';
 import './index.css';
 
 /** Gradient Studio is a separate workspace: loaded on demand so ShapeForge itself stays light. */
@@ -29,8 +31,8 @@ const GradientStudio = lazy(() => import('./gradient/GradientStudio'));
 
 const FORMATS = ['SVG', 'PAGE SVG', 'SVG PATH', 'CSS PATH', 'POLYGON', 'REACT', 'HTML + CSS', 'JSON'];
 const LIBRARY = ['Rectangle', 'Rounded rectangle', 'Half circle', 'Ellipse', 'Triangle', 'Diamond', 'Pentagon', 'Hexagon', 'Octagon', 'Star', 'Heart', 'Arrow', 'Cross', 'Trapezoid', 'Parallelogram', 'Circle'];
-type Tab = 'page' | 'node' | 'shape' | 'wave' | 'outer' | 'animation' | 'editor';
-const TABS: { id: Tab; label: string }[] = [{ id: 'page', label: 'Page' }, { id: 'node', label: 'Node' }, { id: 'shape', label: 'Shape' }, { id: 'wave', label: 'Wave' }, { id: 'outer', label: 'Import' }, { id: 'animation', label: 'Animate' }, { id: 'editor', label: 'Editor' }];
+type Tab = 'page' | 'node' | 'shape' | 'wave' | 'outer' | 'text-svg' | 'animation' | 'editor';
+const TABS: { id: Tab; label: string }[] = [{ id: 'page', label: 'Page' }, { id: 'node', label: 'Node' }, { id: 'shape', label: 'Shape' }, { id: 'wave', label: 'Wave' }, { id: 'outer', label: 'Import' }, { id: 'text-svg', label: 'Text SVG' }, { id: 'animation', label: 'Animate' }, { id: 'editor', label: 'Editor' }];
 const POLYGON_SAMPLE_STEPS = [4, 8, 12, 16, 24, 32, 48, 64, 96, 128];
 
 function useMedia(query: string) {
@@ -177,7 +179,7 @@ function App() {
     : shape, [shape, animation, animationPlayhead, animationPreviewing]);
   const isAnimationPreview = animationPreviewing && !!animation?.keyframes.length;
   const stagePolygonPoints = format === 'POLYGON' && animationPreviewShape.kind === 'path'
-    ? simplify(samplePath(animationPreviewShape.points, animationPreviewShape.closed, polygonSamples), tolerance).map(point => `${point.x},${point.y}`).join(' ')
+    ? polygonOutputPoints(animationPreviewShape.points, animationPreviewShape.closed, true, polygonSamples, tolerance).map(point => `${point.x},${point.y}`).join(' ')
     : null;
 
   useEffect(() => {
@@ -307,6 +309,55 @@ function App() {
       setSelection(NONE);
       setTool('Select');
   };
+  const addTextToArtboard = (text: TextShapeData) => {
+    const scale = Math.min(1, 880 / text.width, 480 / text.height);
+    const width = text.width * scale, height = text.height * scale;
+    const x = (1000 - width) / 2, y = (600 - height) / 2;
+    const next: ShapeModel = {
+      name: `Text · ${text.value.slice(0, 24) || 'Untitled'}`,
+      kind: 'polygon',
+      points: [
+        { x, y, mode: 'corner' }, { x: x + width, y, mode: 'corner' },
+        { x: x + width, y: y + height, mode: 'corner' }, { x, y: y + height, mode: 'corner' },
+      ],
+      closed: true, fill: 'none', stroke: 'none', strokeWidth: 0, text,
+    };
+    documentState.apply(d => addShape(d, next, false));
+    setSelection({ kind: 'shape' });
+    setTool('Select');
+  };
+  const updateArtboardText = (text: TextShapeData) => commit({ ...shape, text, name: `Text · ${text.value.slice(0, 24) || 'Untitled'}` });
+  const addTextGlyphShapes = (text: TextShapeData) => {
+    const glyphs = text.vectorGlyphs ?? [];
+    const scale = Math.min(1, 880 / text.width, 480 / text.height);
+    const offsetX = (1000 - text.width * scale) / 2, offsetY = (600 - text.height * scale) / 2;
+    const mapPoint = (point: Point, glyph: TextVectorGlyph): Point => {
+      const transformed = transformContourPoint(point, glyph);
+      return {
+        ...transformed,
+        x: offsetX + transformed.x * scale,
+        y: offsetY + transformed.y * scale,
+        ...(point.in ? { in: mapPoint(point.in, glyph) } : {}),
+        ...(point.out ? { out: mapPoint(point.out, glyph) } : {}),
+      };
+    };
+    const shapes = glyphs.flatMap((glyph, index) => {
+      const contours = glyph.contours.map(contour => contour.map(point => mapPoint(point, glyph))).filter(contour => contour.length >= 2);
+      if (!contours.length) return [];
+      return [{
+        name: `Glyph ${index + 1} · ${glyph.char}`,
+        kind: 'path' as const, points: contours[0], extra: contours.slice(1), closed: true,
+        fill: text.fill, stroke: 'none', strokeWidth: 0, fillRule: 'nonzero' as const,
+      }];
+    });
+    if (!shapes.length) {
+      announce('No editable glyph outlines are available. Import a font file first.');
+      return;
+    }
+    documentState.apply(current => shapes.reduce((next, glyph) => addShape(next, glyph, false), current));
+    setSelection(NONE);
+    setTool('Select');
+  };
   const extractOuter = () => {
     try {
       const result = computeOuterPath(page.shapes);
@@ -325,7 +376,7 @@ function App() {
   const reset = () => { documentState.apply(d => addShape(d, makeShape('Blob', 23))); setFormat('SVG'); setSelection(NONE); announce('New shape added to page'); };
   const convert = () => {
     if (shape.kind === 'polygon') { commit({ ...shape, kind: 'path', name: `${shape.name} · path`, points: shape.points.map(p => ({ ...p, mode: 'corner' as const })) }); announce('Polygon converted to an exact path'); }
-    else { commit({ ...shape, kind: 'polygon', points: simplify(samplePath(shape.points, shape.closed), tolerance), name: `${shape.name} · polygon`, wave: undefined }); announce('Path converted to editable polygon'); }
+    else { commit({ ...shape, kind: 'polygon', points: polygonOutputPoints(shape.points, shape.closed, true, polygonSamples, tolerance), name: `${shape.name} · polygon`, wave: undefined }); announce(`Path converted to polygon with ${polygonSamples} nodes`); }
     setSelection(NONE);
   };
 
@@ -345,7 +396,7 @@ function App() {
     if (animatedParts) return combineAnimatedHtml(animatedParts);
     return exportCode(deferredShape, format, precision, tolerance, unit, deferredPage, polygonSamples);
   }, [wantCode, deferredPage, deferredShape, format, precision, tolerance, unit, polygonSamples, animatedParts]);
-  const polygonPoints = useMemo(() => (format === 'POLYGON' && deferredShape.kind === 'path' ? simplify(samplePath(deferredShape.points, deferredShape.closed, polygonSamples), tolerance).map(p => `${p.x},${p.y}`).join(' ') : null), [format, deferredShape, tolerance, polygonSamples]);
+  const polygonPoints = useMemo(() => (format === 'POLYGON' && deferredShape.kind === 'path' ? polygonOutputPoints(deferredShape.points, deferredShape.closed, true, polygonSamples, tolerance).map(p => `${p.x},${p.y}`).join(' ') : null), [format, deferredShape, tolerance, polygonSamples]);
 
   const copyCode = async () => {
     try { await navigator.clipboard.writeText(code); setCopied(true); announce('Copied to clipboard'); setTimeout(() => setCopied(false), 1500); }
@@ -384,6 +435,7 @@ function App() {
       polygonSamples={polygonSamples} setPolygonSamples={setPolygonSamples} />;
     if (t === 'wave') return <WavePanel params={waveParams} active={!!shape.wave} fill={shape.fill} setFill={setFill} unit={unit} setUnit={setUnit} onLive={p => applyWave(p, 'live')} onLiveEnd={() => { if (waveAddedPreview.current) waveAddedPreview.current = false; else liveEnd(); }} onApply={p => applyWave(p, 'apply')} />;
     if (t === 'outer') return <BoundaryPanel onAddShapes={addImportedShapes} onExtractOuter={extractOuter} announce={announce} />;
+    if (t === 'text-svg') return <TextSvgPanel announce={announce} selectedShape={shape} onAddText={addTextToArtboard} onUpdateText={updateArtboardText} onAddGlyphShapes={addTextGlyphShapes} />;
     if (t === 'animation') return <AnimationPanel shape={shape} animation={animation} playhead={animationPlayhead} playing={animationPlaying} previewing={animationPreviewing}
       onChange={setAnimation} onLiveChange={liveAnimation} onLiveEnd={liveEnd} onPlayhead={time => { animationElapsed.current = time; setAnimationPlayhead(time); setAnimationPlaying(false); }} onTogglePlay={toggleAnimationPlay}
       onTogglePreview={() => { setAnimationPreviewing(value => !value); setAnimationPlaying(false); }} />;
@@ -427,6 +479,7 @@ function App() {
       <button className="tool-button" onClick={() => generate('Wave')} data-testid="tool-wave"><Waves /><span className="tool-label">Wave maker</span></button>
       <button className="tool-button" onClick={randomize} data-testid="tool-random-blob"><Sparkles /><span className="tool-label">Random blob</span></button>
       <button className="tool-button" onClick={() => { openTab('outer'); setSheet(null); }} data-testid="tool-import-shape"><ScanLine /><span className="tool-label">Import shape</span></button>
+      <button className="tool-button" onClick={() => { openTab('text-svg'); setSheet(null); }} data-testid="tool-text-svg"><Type /><span className="tool-label">Text to SVG</span></button>
     </div>
     <div className="section-label">SHAPE LIBRARY</div>
     <div className="library-grid">{LIBRARY.map(item => <button key={item} className="library-item" onClick={() => generate(item)} data-testid={`library-${item.toLowerCase().replaceAll(' ', '-')}`}><svg viewBox="0 0 1000 600" aria-hidden="true"><path d={makeShape(item).points.map((point, i) => `${i ? 'L' : 'M'}${point.x} ${point.y}`).join(' ') + ' Z'} /></svg>{item}</button>)}</div>
@@ -454,7 +507,7 @@ function App() {
         </div>
         <button className="btn desktop-action" onClick={reset} data-testid="button-new"><Plus /> New</button>
         <button className="btn desktop-action" onClick={saveJson} data-testid="button-save"><ArrowDownToLine /> Save</button>
-        <button className="btn gradient-btn" onClick={openStudio} data-testid="button-create-gradient"><Palette /><span><span className="cg-long">Create </span>Gradient</span></button>
+        <button className="btn gradient-btn" onClick={openStudio} aria-label="Open Gradient Studio" title="Open Gradient Studio" data-testid="button-create-gradient"><Palette /><span><span className="cg-long">Create </span>Gradient</span></button>
         <button className="btn primary" onClick={showCode} data-testid="button-export"><Code2 /> Export</button>
       </div>
     </header>

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Shuffle } from 'lucide-react';
 import { Section, Switch, ValueControl } from '../../shared/controls';
+import { applyBuilderLayers } from '../engine/builderLayers';
+import { useStore } from '../engine/store';
 import { AURORA_PRESETS, DEFAULT_AURORA, auroraPalette, auroraSky, buildAurora, type AuroraOptions } from '../engine/aurora';
 import { useStudio, ColorInput } from './ui';
 
@@ -17,11 +19,13 @@ export default function AuroraPanel({ onBuilt }: { onBuilt?: () => void }) {
   const [o, setO] = useState<AuroraOptions>(DEFAULT_AURORA);
   const [activePreset, setActivePreset] = useState('');
   const set = (p: Partial<AuroraOptions>) => { setActivePreset(''); setO(prev => ({ ...prev, ...p })); };
-  const build = (mode: 'replace' | 'add') => {
+  const build = (mode: 'replace' | 'add' | 'update') => {
     const layers = buildAurora(o);
-    store.update(p => ({ ...p, layers: mode === 'replace' ? layers : [...layers, ...p.layers] }));
-    store.select((layers.find(l => l.type !== 'noise') ?? layers[0]).id); announce(`${mode === 'replace' ? 'Built' : 'Added'} aurora · ${layers.length} editable layers`); onBuilt?.();
+    if (!applyBuilderLayers(store, 'aurora', layers, mode)) return;
+    announce(`${mode === 'replace' ? 'Built' : mode === 'update' ? 'Updated' : 'Added'} aurora · ${layers.length} editable layers`); onBuilt?.();
   };
+  const selectedLayer = useStore(store, state => state.project.layers.find(layer => layer.id === state.layerId));
+  const canUpdate = selectedLayer?.builderSource === 'aurora' && !!selectedLayer.builderGroup;
   return <div data-testid="aurora-panel">
     <Section title="Aurora presets" open={false}>
       <div className="gs-chips wrap" role="radiogroup" aria-label="Aurora presets">
@@ -55,8 +59,10 @@ export default function AuroraPanel({ onBuilt }: { onBuilt?: () => void }) {
     </Section>
     <div className="gs-btnrow">
       <button type="button" className="btn primary" onClick={() => build('replace')} data-testid="aurora-build">Build aurora</button>
-      <button type="button" className="btn" onClick={() => build('add')} data-testid="aurora-add">Add on top</button>
+      <button type="button" className="btn" onClick={() => build('add')} data-testid="aurora-add">Create layers</button>
+      <button type="button" className="btn" disabled={!canUpdate} onClick={() => build('update')} data-testid="aurora-update">Update selected</button>
     </div>
+    <p className="hint">To update this scene, select one of its generated layers first. The full generated layer group will be refreshed in place.</p>
     <p className="hint">Result: ordinary layers you can restyle, reorder, animate or delete one by one.</p>
   </div>;
 }

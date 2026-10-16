@@ -79,6 +79,9 @@ export const DEFAULT_TEXTURE: TextureData = {
 export interface GradientLayer {
   id: string;
   name: string;
+  /** Identifies the scene-builder output this layer belongs to, so it can be updated as a group. */
+  builderSource?: string;
+  builderGroup?: string;
   visible: boolean;
   type: GradientKind;
   repeating: boolean;
@@ -201,6 +204,8 @@ export function cloneLayer(l: GradientLayer, keepId = false): GradientLayer {
   const c: GradientLayer = JSON.parse(JSON.stringify(l));
   if (!keepId) {
     c.id = uid('l');
+    delete c.builderSource;
+    delete c.builderGroup;
     const map = new Map<string, string>();
     c.stops.forEach(s => { const n = uid('s'); map.set(s.id, n); s.id = n; });
     c.mesh.points.forEach(p => { const n = uid('m'); map.set(p.id, n); p.id = n; });

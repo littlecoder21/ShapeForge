@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Combine, Pentagon, Plus, Spline, Waves } from 'lucide-react';
-import { UNITS, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../../lib/shape/geometry';
+import { UNITS, polygonOutputPoints, simplify, samplePath, shapeBounds, smoothAll, toPathExact, type FrameMode, type ShapeModel, type Unit } from '../../lib/shape/geometry';
 import { insertOnSegment, type Selection } from '../../lib/shape/edit';
 import type { EditorSettings } from '../../lib/shape/settings';
 import { TransformBlock } from './PrecisionPanel';
@@ -26,7 +26,7 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
   const frame: FrameMode = shape.frame ?? (shape.box ? 'box' : 'artboard');
   const convert = () => {
     if (shape.kind === 'polygon') { onCommit({ ...toPathExact(shape), name: `${shape.name} · path` }); announce('Polygon converted to an exact path — corners kept sharp'); }
-    else { onCommit({ ...shape, kind: 'polygon', points: simplify(samplePath(shape.points, shape.closed), tolerance), name: `${shape.name} · polygon`, wave: undefined }); announce('Path converted to editable polygon'); }
+    else { onCommit({ ...shape, kind: 'polygon', points: polygonOutputPoints(shape.points, shape.closed, true, polygonSamples, tolerance), name: `${shape.name} · polygon`, wave: undefined }); announce(`Path converted to polygon with ${polygonSamples} nodes`); }
   };
   const addNode = () => { const r = insertOnSegment(shape, 0, 0.5); onCommit(r.shape, { kind: 'node', index: r.index }); };
   return <div>
@@ -74,7 +74,8 @@ export default function ShapePanel({ shape, fill, setFill, tolerance, setToleran
       <Seg value={frame} label="Export frame" options={[{ id: 'artboard', label: 'Artboard' }, { id: 'bounds', label: 'Shape bounds' }, { id: 'box', label: 'Wave box', disabled: !shape.box }]}
         onChange={f => onCommit({ ...shape, frame: f })} testId="export-frame" />
       <ValueControl label="Simplify tolerance" value={tolerance} min={0} max={30} step={0.5} def={3} onChange={setTolerance} testId="range-tolerance" />
-      <ValueControl label="Curve sample detail" value={polygonSamples} min={4} max={128} step={4} def={48} onChange={setPolygonSamples} testId="polygon-curve-detail" />
+      <ValueControl label="Polygon output points" value={polygonSamples} min={1} max={300} step={1} def={48} onChange={setPolygonSamples} testId="polygon-output-points" />
+      <p className="hint">Sets the exact nodes per outline for polygon output and path-to-polygon conversion.</p>
       <label className="field-label" htmlFor="precision" style={{ marginTop: 12 }}>Code precision</label>
       <select id="precision" className="generate-select" value={precision} onChange={e => setPrecision(Number(e.target.value))} data-testid="select-precision"><option value="0">0 decimals</option><option value="1">1 decimal</option><option value="2">2 decimals</option><option value="3">3 decimals</option></select>
       <div className="field-label" style={{ marginTop: 12 }}>Output units</div>

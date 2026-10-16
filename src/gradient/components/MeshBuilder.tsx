@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Section, Seg, ValueControl } from '../../shared/controls';
+import { applyBuilderLayers } from '../engine/builderLayers';
+import { useStore } from '../engine/store';
 import { MESH_PATTERNS, generateMesh, type MeshPattern } from '../engine/mesh';
 import { newLayer } from '../engine/model';
 import { ColorInput, useStudio } from './ui';
@@ -13,10 +15,12 @@ const PALETTES: [string, string[]][] = [
 export default function MeshBuilder() {
   const { store, announce } = useStudio();
   const [pal, setPal] = useState(0), [count, setCount] = useState(5), [pattern, setPattern] = useState<MeshPattern>('scatter'), [seed, setSeed] = useState(11), [base, setBase] = useState('#0b1020');
-  const create = () => {
+  const create = (mode: 'add' | 'update') => {
     const layer = newLayer('mesh', { name: 'Mesh', mesh: generateMesh(PALETTES[pal][1], count, pattern, seed, base, 54), space: 'oklab' });
-    store.update(p => ({ ...p, layers: [layer, ...p.layers] })); store.select(layer.id); announce('Mesh layer added — drag its points on the canvas');
+    if (applyBuilderLayers(store, 'mesh', [layer], mode)) announce(mode === 'update' ? 'Mesh layer updated — drag its points on the canvas' : 'Mesh layer added — drag its points on the canvas');
   };
+  const selectedLayer = useStore(store, state => state.project.layers.find(layer => layer.id === state.layerId));
+  const canUpdate = selectedLayer?.builderSource === 'mesh' && !!selectedLayer.builderGroup;
   return <div data-testid="mesh-builder">
     <Section title="Palette">
       <div className="gs-palettes">{PALETTES.map(([n, c], i) => <button key={n} type="button" className={`gs-pal ${pal === i ? 'on' : ''}`} onClick={() => setPal(i)} data-testid={`meshgen-pal-${n.toLowerCase()}`}><span>{c.map(x => <i key={x} style={{ background: x }} />)}</span>{n}</button>)}</div>
@@ -27,7 +31,10 @@ export default function MeshBuilder() {
       <Seg value={pattern} label="Layout" options={MESH_PATTERNS.map(p => ({ id: p.id, label: p.label }))} onChange={setPattern} />
       <ValueControl label="Seed" value={seed} min={1} max={999} def={11} onChange={setSeed} />
     </Section>
-    <button type="button" className="btn primary wide" onClick={create} data-testid="meshgen-create">Create mesh layer</button>
+    <div className="gs-btnrow">
+      <button type="button" className="btn primary" onClick={() => create('add')} data-testid="meshgen-create">Create mesh layer</button>
+      <button type="button" className="btn" disabled={!canUpdate} onClick={() => create('update')} data-testid="meshgen-update">Update selected</button>
+    </div>
     <p className="hint">Every point is draggable on the canvas and can have its own colour, size and drift animation.</p>
   </div>;
 }
