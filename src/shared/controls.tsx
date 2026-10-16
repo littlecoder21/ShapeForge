@@ -1,7 +1,127 @@
-import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type PointerEvent as RPointerEvent, type ReactNode } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 
 /* Small touch-friendly form controls shared by every panel. */
+
+type DirectionAwareRangeProps = Omit<ComponentPropsWithoutRef<'input'>, 'type' | 'onChange'> & {
+  onValueChange: (value: string) => void;
+  onTouchIntentStart?: () => void;
+  onTouchIntentEnd?: () => void;
+};
+
+type RangeTouch = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  initialValue: string;
+  candidateValue: string;
+  direction: 'pending' | 'horizontal' | 'vertical';
+  notifiedValue: string;
+};
+
+export function DirectionAwareRange({
+  onValueChange,
+  onTouchIntentStart,
+  onTouchIntentEnd,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  onLostPointerCapture,
+  ...props
+}: DirectionAwareRangeProps) {
+  const touch = useRef<RangeTouch | null>(null);
+
+  const publishCandidate = (input: HTMLInputElement, gesture: RangeTouch) => {
+    if (gesture.candidateValue !== gesture.initialValue && gesture.notifiedValue !== gesture.candidateValue) {
+      input.value = gesture.candidateValue;
+      gesture.notifiedValue = gesture.candidateValue;
+      onValueChange(gesture.candidateValue);
+    }
+  };
+
+  const finishTouch = (input: HTMLInputElement, gesture: RangeTouch, cancelled: boolean) => {
+    if (gesture.direction === 'horizontal') {
+      publishCandidate(input, gesture);
+      onTouchIntentEnd?.();
+    } else if (!cancelled && gesture.direction === 'pending') {
+      onTouchIntentStart?.();
+      publishCandidate(input, gesture);
+      onTouchIntentEnd?.();
+    }
+    input.value = gesture.direction === 'vertical' || (cancelled && gesture.direction !== 'horizontal')
+      ? gesture.initialValue
+      : gesture.candidateValue;
+    touch.current = null;
+  };
+
+  return <input
+    {...props}
+    type="range"
+    onChange={event => {
+      const gesture = touch.current;
+      if (gesture) {
+        gesture.candidateValue = event.currentTarget.value;
+        if (gesture.direction !== 'horizontal') {
+          event.currentTarget.value = gesture.initialValue;
+          return;
+        }
+        gesture.notifiedValue = gesture.candidateValue;
+      }
+      onValueChange(event.currentTarget.value);
+    }}
+    onPointerDown={event => {
+      if (event.pointerType === 'touch') {
+        touch.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          initialValue: event.currentTarget.value,
+          candidateValue: event.currentTarget.value,
+          direction: 'pending',
+          notifiedValue: event.currentTarget.value,
+        };
+        return;
+      }
+      onPointerDown?.(event);
+    }}
+    onPointerMove={event => {
+      const gesture = touch.current;
+      if (gesture?.pointerId === event.pointerId && gesture.direction === 'pending') {
+        const dx = Math.abs(event.clientX - gesture.startX);
+        const dy = Math.abs(event.clientY - gesture.startY);
+        if (Math.max(dx, dy) >= 8) {
+          gesture.direction = dx > dy ? 'horizontal' : 'vertical';
+          if (gesture.direction === 'horizontal') {
+            onTouchIntentStart?.();
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }
+            publishCandidate(event.currentTarget, gesture);
+          } else {
+            event.currentTarget.value = gesture.initialValue;
+          }
+        }
+      }
+      onPointerMove?.(event);
+    }}
+    onPointerUp={event => {
+      const gesture = touch.current;
+      if (gesture?.pointerId === event.pointerId) finishTouch(event.currentTarget, gesture, false);
+      else onPointerUp?.(event);
+    }}
+    onPointerCancel={event => {
+      const gesture = touch.current;
+      if (gesture?.pointerId === event.pointerId) finishTouch(event.currentTarget, gesture, true);
+      else onPointerCancel?.(event);
+    }}
+    onLostPointerCapture={event => {
+      const gesture = touch.current;
+      if (gesture?.pointerId === event.pointerId) finishTouch(event.currentTarget, gesture, true);
+      else onLostPointerCapture?.(event);
+    }}
+  />;
+}
 
 export function Section({ title, hint, open = true, children }: { title: string; hint?: string; open?: boolean; children: ReactNode }) {
   const [isOpen, setOpen] = useState(open);
@@ -59,12 +179,16 @@ export function ValueControl({ label, value, min, max, step = 1, unit = '', def,
       </div>
     </div>
     {!hideRange && <>
-      <input className="vc-slider" type="range" aria-label={`${label} slider`} min={min} max={max} step={step} value={value}
-        onChange={e => onChange(Number(e.target.value))}
+      <DirectionAwareRange className="vc-slider" aria-label={`${label} slider`} min={min} max={max} step={step} value={value}
+        onValueChange={v => onChange(Number(v))}
         onPointerDown={beginSlider}
         onPointerUp={endSlider}
         onPointerCancel={endSlider}
         onLostPointerCapture={endSlider}
+        onTouchIntentStart={() => {
+          if (!sliderActive.current) { sliderActive.current = true; onBegin?.(); }
+        }}
+        onTouchIntentEnd={endSlider}
         onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) beginSlider(); }}
         onKeyUp={endSlider}
         onBlur={endSlider}

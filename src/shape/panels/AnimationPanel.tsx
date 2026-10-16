@@ -5,7 +5,7 @@ import {
   type AnimatedShape, type AnimationGroup, type AnimationValues, type ShapeAnimation,
 } from '../../lib/shape/animation';
 import type { ShapeModel } from '../../lib/shape/geometry';
-import { Section, ValueControl } from '../../shared/controls';
+import { DirectionAwareRange, Section, ValueControl } from '../../shared/controls';
 
 const GROUPS = ANIMATION_GROUPS.map(group => group.id);
 const MORPH_TARGETS = ['Triangle', 'Rectangle', 'Pentagon', 'Hexagon', 'Octagon', 'Star', 'Diamond', 'Arrow'];
@@ -92,7 +92,7 @@ export default function AnimationPanel({ shape, animation, playhead, playing, pr
       <label className="animation-number animation-repeat-count"><span>Repeat count</span><input type="number" min={1} max={9999} step={1} value={data.iterations ?? 1} disabled={data.loop} onChange={event => update({ ...data, iterations: Math.max(1, Math.min(9999, Math.floor(Number(event.target.value) || 1))) })} data-testid="animation-iterations" /></label>
       {data.loop && <p className="hint">Turn off looping to play the animation a fixed number of times.</p>}
       <label className="field-label" htmlFor="animation-playhead">Playhead <span>{Math.round(playhead)} ms</span></label>
-      <input id="animation-playhead" className="vc-slider animation-scrubber" type="range" min={0} max={duration} step={10} value={Math.min(playhead, duration)} onChange={event => onPlayhead(Number(event.target.value))} data-testid="animation-playhead" />
+      <DirectionAwareRange id="animation-playhead" className="vc-slider animation-scrubber" min={0} max={duration} step={10} value={Math.min(playhead, duration)} onValueChange={value => onPlayhead(Number(value))} data-testid="animation-playhead" />
       <div className="animation-ruler" aria-label="Keyframes">
         {data.keyframes.map(frame => <button key={frame.id} type="button" className={`animation-marker ${selectedFrame?.id === frame.id ? 'selected' : ''}`} style={{ left: `${100 * frame.time / duration}%` }} title={`${frame.time} ms · ${Object.keys(frame.values).join(', ')}`} onClick={() => onPlayhead(frame.time)} data-testid={`animation-keyframe-${frame.id}`} />)}
       </div>

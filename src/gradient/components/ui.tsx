@@ -4,6 +4,7 @@ import { Pipette } from 'lucide-react';
 import { hexToRgb, parseColor, rgbToHex } from '../engine/color';
 import { projectSvg } from '../engine/svg';
 import type { StudioStore } from '../engine/store';
+import { DirectionAwareRange } from '../../shared/controls';
 
 declare global {
   interface Window {
@@ -277,8 +278,8 @@ export function ColorInput({ color, alpha, onChange, onCommit, showAlpha = true,
       <i className="gs-color-plane-marker" style={{ left: `${hsv.s}%`, top: `${100 - hsv.v}%` }} />
     </div>
     <label className="gs-picker-label" htmlFor={testId ? `${testId}-hue` : undefined}>Hue <span>{Math.round(hsv.h)}°</span></label>
-    <input id={testId ? `${testId}-hue` : undefined} className="gs-hue-slider" type="range" min={0} max={359} value={Math.round(hsv.h)} aria-label={`${label ?? 'Colour'} hue`}
-      onChange={event => publish({ ...hsv, h: Number(event.target.value) })} onPointerUp={() => onCommit?.()} data-testid={testId ? `${testId}-hue` : undefined} />
+    <DirectionAwareRange id={testId ? `${testId}-hue` : undefined} className="gs-hue-slider" min={0} max={359} value={Math.round(hsv.h)} aria-label={`${label ?? 'Colour'} hue`}
+      onValueChange={value => publish({ ...hsv, h: Number(value) })} onPointerUp={() => onCommit?.()} onTouchIntentEnd={() => onCommit?.()} data-testid={testId ? `${testId}-hue` : undefined} />
     <div className="gs-picker-row">
       <label className="gs-hex-label">HEX
         <input className="gs-hex" aria-label={`${label ?? 'Colour'} hex`} value={hexDraft} spellCheck={false}
@@ -288,8 +289,8 @@ export function ColorInput({ color, alpha, onChange, onCommit, showAlpha = true,
     </div>
     {showAlpha && <>
       <label className="gs-picker-label" htmlFor={testId ? `${testId}-alpha` : undefined}>Opacity <span>{Math.round(alpha * 100)}%</span></label>
-      <input id={testId ? `${testId}-alpha` : undefined} className="gs-alpha-slider" type="range" min={0} max={100} value={Math.round(alpha * 100)} aria-label={`${label ?? 'Colour'} opacity`}
-        onChange={event => onChange(pickerColor, Number(event.target.value) / 100)} onPointerUp={() => onCommit?.()} data-testid={testId ? `${testId}-alpha` : undefined} />
+      <DirectionAwareRange id={testId ? `${testId}-alpha` : undefined} className="gs-alpha-slider" min={0} max={100} value={Math.round(alpha * 100)} aria-label={`${label ?? 'Colour'} opacity`}
+        onValueChange={value => onChange(pickerColor, Number(value) / 100)} onPointerUp={() => onCommit?.()} onTouchIntentEnd={() => onCommit?.()} data-testid={testId ? `${testId}-alpha` : undefined} />
     </>}
   </div>, document.body) : null;
 

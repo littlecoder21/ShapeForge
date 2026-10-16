@@ -1,13 +1,32 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { Font } from 'opentype.js';
-import { ArrowDown, ArrowUp, Clipboard, Download, Link2, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { ArrowDown, ArrowUp, Clipboard, Download, Link2, Pause, Play, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { Section, Switch, ValueControl } from '../../shared/controls';
+import { H, W } from '../../lib/shape/constants';
+import { useMedia } from '../../shared/useMedia';
 import type { ShapeModel, TextGlyphShape, TextShapeData, TextStrokePath, TextVectorGlyph } from '../../lib/shape/geometry';
 import { createVectorGlyphs, isValidPathData, makePresetStrokes, mergeStrokePaths, transformContourPoint, variantStrokePath } from './textSvgGeometry';
 
 const FONT_OPTIONS = [
   'Arial', 'Georgia', 'Verdana', 'Times New Roman', 'Trebuchet MS', 'Courier New',
   'Impact', 'Comic Sans MS', 'system-ui', 'serif', 'sans-serif', 'monospace', 'cursive',
+];
+const BUNDLED_FONT_FILES = import.meta.glob<string>('../../lib/fonts/**/*.ttf', { eager: true, query: '?url', import: 'default' });
+const BUILT_IN_FONTS = [
+  { family: 'Caveat', file: 'caveat/Caveat-VariableFont_wght.ttf' },
+  { family: 'Dancing Script', file: 'dancing_script/DancingScript-VariableFont_wght.ttf' },
+  { family: 'Great Vibes', file: 'great_vibes/GreatVibes-Regular.ttf' },
+  { family: 'Inter', file: 'inter/Inter-VariableFont_opsz,wght.ttf' },
+  { family: 'Inter', file: 'inter/Inter-Italic-VariableFont_opsz,wght.ttf', style: 'italic' },
+  { family: 'Lobster', file: 'lobster/Lobster-Regular.ttf' },
+  { family: 'Open Sans', file: 'open_sans/OpenSans-VariableFont_wdth,wght.ttf' },
+  { family: 'Open Sans', file: 'open_sans/OpenSans-Italic-VariableFont_wdth,wght.ttf', style: 'italic' },
+  { family: 'Pacifico', file: 'pacifico/Pacifico-Regular.ttf' },
+  { family: 'Permanent Marker', file: 'permanent_marker/PermanentMarker-Regular.ttf' },
+  { family: 'Roboto', file: 'roboto/Roboto-VariableFont_wdth,wght.ttf' },
+  { family: 'Roboto', file: 'roboto/Roboto-Italic-VariableFont_wdth,wght.ttf', style: 'italic' },
+  { family: 'Sacramento', file: 'sarcamento/Sacramento-Regular.ttf' },
 ];
 
 function escapeXml(value: string) {
@@ -16,7 +35,7 @@ function escapeXml(value: string) {
   })[character]!);
 }
 
-function buildTextSvg(value: string, font: string, fontSize: number, weight: string, italic: boolean, fill: string, stroke: string, strokeWidth: number, draw: boolean, duration: number, letterSpacing: number, lineSpacing: number, glyphShapes: TextGlyphShape[], advances: number[], vectorGlyphs: TextVectorGlyph[], strokePaths: TextStrokePath[]): TextShapeData {
+function buildTextSvg(value: string, font: string, fontSize: number, weight: string, italic: boolean, fill: string, stroke: string, strokeWidth: number, draw: boolean, animationPlaying: boolean, duration: number, letterSpacing: number, lineSpacing: number, glyphShapes: TextGlyphShape[], advances: number[], vectorGlyphs: TextVectorGlyph[], strokePaths: TextStrokePath[]): TextShapeData {
   const lines = value.split(/\r?\n/);
   const lineHeight = fontSize * lineSpacing / 100;
   let measuringIndex = 0;
@@ -56,7 +75,10 @@ function buildTextSvg(value: string, font: string, fontSize: number, weight: str
     time += Math.max(0.02, path.duration) + Math.max(0, path.pauseAfter) - Math.min(Math.max(0, path.overlapNext), Math.max(0, path.duration));
     const d = variantStrokePath(path.d, path.reverse, path.startPercent, path.closed);
     const transform = path.transform ? ` transform="${path.transform}"` : '';
-    return `<path d="${escapeXml(d)}"${transform} fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100" style="animation:text-stroke ${Math.max(0.02, path.duration)}s linear ${Math.max(0, delay)}s both" data-stroke-id="${escapeXml(path.id)}" data-stroke-order="${index + 1}"/>`;
+    const animation = animationPlaying
+      ? `animation:text-stroke ${Math.max(0.02, path.duration)}s linear ${Math.max(0, delay)}s both`
+      : 'animation:none;stroke-dashoffset:0';
+    return `<path d="${escapeXml(d)}"${transform} fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100" style="${animation}" data-stroke-id="${escapeXml(path.id)}" data-stroke-order="${index + 1}"/>`;
   }).join('');
   const style = draw
     ? '<style>@keyframes text-stroke{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}@media(prefers-reduced-motion:reduce){[data-stroke-id]{animation-duration:.01ms!important;animation-delay:0s!important}}</style>'
@@ -65,7 +87,7 @@ function buildTextSvg(value: string, font: string, fontSize: number, weight: str
     ? `<g fill="${draw ? 'none' : fill}">${vectorMarkup}</g>`
     : `<g font-family="${escapeXml(font.trim() || 'sans-serif')}" font-size="${fontSize}" font-weight="${weight}" font-style="${italic ? 'italic' : 'normal'}" fill="${draw && paths.length ? 'none' : fill}">${textMarkup}</g>`;
   return {
-    value, font, fontSize, weight, italic, fill, stroke, strokeWidth, draw, duration, letterSpacing, lineSpacing, glyphShapes, width, height,
+    value, font, fontSize, weight, italic, fill, stroke, strokeWidth, draw, animationPlaying, duration, letterSpacing, lineSpacing, glyphShapes, width, height,
     vectorGlyphs, strokePaths: paths, content: `${style}${typographyMarkup}${draw ? animatedPaths : ''}`,
   };
 }
@@ -86,6 +108,9 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
   const [drawColor, setDrawColor] = useState(selectedShape.text?.stroke ?? '#69dfb5');
   const [drawWidth, setDrawWidth] = useState(selectedShape.text?.strokeWidth ?? 3);
   const [draw, setDraw] = useState(selectedShape.text?.draw ?? false);
+  const [animationPlaying, setAnimationPlaying] = useState(selectedShape.text?.animationPlaying ?? true);
+  const [mobilePanel, setMobilePanel] = useState<'text' | 'preview' | 'animation'>('text');
+  const isMobile = useMedia('(max-width: 640px)');
   const [duration, setDuration] = useState(selectedShape.text?.duration ?? 3);
   const [letterSpacing, setLetterSpacing] = useState(selectedShape.text?.letterSpacing ?? 0);
   const [lineSpacing, setLineSpacing] = useState(selectedShape.text?.lineSpacing ?? 130);
@@ -111,6 +136,7 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
     setDrawColor(data?.stroke ?? '#69dfb5');
     setDrawWidth(data?.strokeWidth ?? 3);
     setDraw(data?.draw ?? false);
+    setAnimationPlaying(data?.animationPlaying ?? true);
     setDuration(data?.duration ?? 3);
     setLetterSpacing(data?.letterSpacing ?? 0);
     setLineSpacing(data?.lineSpacing ?? 130);
@@ -141,7 +167,8 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
     const saved = selectedShape.text;
     return saved?.value === text && saved.font === font ? saved.vectorGlyphs ?? [] : [];
   }, [loadedFont, text, fontSize, letterSpacing, lineSpacing, glyphShapes, selectedShape.text, font]);
-  const data = useMemo(() => buildTextSvg(text, font, fontSize, weight, italic, fill, drawColor, drawWidth, draw, duration, letterSpacing, lineSpacing, glyphShapes, advances, vectorGlyphs, strokePaths), [text, font, fontSize, weight, italic, fill, drawColor, drawWidth, draw, duration, letterSpacing, lineSpacing, glyphShapes, advances, vectorGlyphs, strokePaths]);
+  const createData = (playing: boolean) => buildTextSvg(text, font, fontSize, weight, italic, fill, drawColor, drawWidth, draw, playing, duration, letterSpacing, lineSpacing, glyphShapes, advances, vectorGlyphs, strokePaths);
+  const data = useMemo(() => createData(animationPlaying), [text, font, fontSize, weight, italic, fill, drawColor, drawWidth, draw, animationPlaying, duration, letterSpacing, lineSpacing, glyphShapes, advances, vectorGlyphs, strokePaths]);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${data.width}" height="${data.height}" viewBox="0 0 ${data.width} ${data.height}">${data.content}</svg>`;
 
   const importFont = async (file?: File) => {
@@ -159,6 +186,37 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
       console.error('Could not parse the selected font', error);
       announce('Could not read that font. Choose a valid TTF, OTF, WOFF, or WOFF2 file.');
     }
+  };
+  const loadBundledFont = async (family: string) => {
+    const bundledFont = BUILT_IN_FONTS.find(item => item.family === family && !item.style);
+    if (!bundledFont) return false;
+    const asset = BUNDLED_FONT_FILES[`../../lib/fonts/${bundledFont.file}`];
+    if (!asset) {
+      announce(`Could not find the bundled ${family} font file.`);
+      return true;
+    }
+    try {
+      const opentype = await import('opentype.js');
+      const parsed = opentype.parse(await (await fetch(asset)).arrayBuffer());
+      setLoadedFont(parsed);
+      setFont(family);
+      setGlyphShapes([]);
+      setStrokePaths([]);
+      setDraw(true);
+      announce(`Loaded ${family}; glyphs are now editable SVG paths`);
+    } catch (error) {
+      console.error(`Could not load the bundled ${family} font`, error);
+      announce(`Could not load the bundled ${family} font.`);
+    }
+    return true;
+  };
+  const handleFontChange = (value: string) => {
+    if (BUILT_IN_FONTS.some(item => item.family === value && !item.style)) {
+      void loadBundledFont(value);
+      return;
+    }
+    setLoadedFont(null);
+    setFont(value);
   };
   const addDecoration = () => {
     const item: TextStrokePath = {
@@ -220,12 +278,33 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
     onAddGlyphShapes(data);
     announce(`Added ${data.vectorGlyphs.length} editable character shapes to the artboard`);
   };
-  const pointInPreview = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const svgElement = event.currentTarget.querySelector('svg');
-    if (!svgElement) return null;
-    const rect = svgElement.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    return { x: (event.clientX - rect.left) / rect.width * data.width, y: (event.clientY - rect.top) / rect.height * data.height };
+  const textFrame = useMemo(() => {
+    if (selectedShape.text && selectedShape.points.length >= 4) {
+      const [origin, topRight, , bottomLeft] = selectedShape.points;
+      const a = (topRight.x - origin.x) / selectedShape.text.width;
+      const b = (topRight.y - origin.y) / selectedShape.text.width;
+      const c = (bottomLeft.x - origin.x) / selectedShape.text.height;
+      const d = (bottomLeft.y - origin.y) / selectedShape.text.height;
+      return { a, b, c, d, x: origin.x, y: origin.y, det: a * d - b * c };
+    }
+    const scale = Math.min(1, 880 / data.width, 480 / data.height);
+    return { a: scale, b: 0, c: 0, d: scale, x: (W - data.width * scale) / 2, y: (H - data.height * scale) / 2, det: scale * scale };
+  }, [selectedShape.text, selectedShape.points, data.width, data.height]);
+  const pointInArtboard = (event: ReactPointerEvent<SVGRectElement>) => {
+    const matrix = event.currentTarget.getScreenCTM();
+    const svgElement = event.currentTarget.ownerSVGElement;
+    if (!matrix || !svgElement || Math.abs(textFrame.det) < 1e-8) return null;
+    const screenPoint = svgElement.createSVGPoint();
+    screenPoint.x = event.clientX;
+    screenPoint.y = event.clientY;
+    const pagePoint = screenPoint.matrixTransform(matrix.inverse());
+    if (pagePoint.x < 0 || pagePoint.x > W || pagePoint.y < 0 || pagePoint.y > H) return null;
+    const x = pagePoint.x - textFrame.x;
+    const y = pagePoint.y - textFrame.y;
+    return {
+      x: (textFrame.d * x - textFrame.c * y) / textFrame.det,
+      y: (textFrame.a * y - textFrame.b * x) / textFrame.det,
+    };
   };
   const freehandPath = (points: { x: number; y: number }[]) => {
     if (points.length < 2) return '';
@@ -236,9 +315,10 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
     }
     return d;
   };
-  const drawDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const drawDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    event.stopPropagation();
     if (!drawing || drawPointer.current !== null) return;
-    const point = pointInPreview(event);
+    const point = pointInArtboard(event);
     if (!point) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -246,15 +326,17 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
     drawPoints.current = [point];
     setDrawingPreview(`M${point.x.toFixed(2)} ${point.y.toFixed(2)}`);
   };
-  const drawMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const drawMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    event.stopPropagation();
     if (drawPointer.current !== event.pointerId) return;
-    const point = pointInPreview(event);
+    const point = pointInArtboard(event);
     const previous = drawPoints.current[drawPoints.current.length - 1];
     if (!point || !previous || Math.hypot(point.x - previous.x, point.y - previous.y) < 1) return;
     drawPoints.current = [...drawPoints.current, point];
     setDrawingPreview(freehandPath(drawPoints.current));
   };
-  const drawUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const drawUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    event.stopPropagation();
     if (drawPointer.current !== event.pointerId) return;
     drawMove(event);
     const d = freehandPath(drawPoints.current);
@@ -263,8 +345,12 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
         id: `hand-${Date.now()}`, name: `Hand-drawn stroke ${animationStrokes.length + 1}`, d,
         reverse: false, startPercent: 0, duration: duration / Math.max(1, animationStrokes.length + 1), pauseAfter: 0, overlapNext: 0, closed: false,
       };
-      setStrokePaths(current => [...(current.length ? current : animationStrokes), item]);
+      const nextPaths = [...(strokePaths.length ? strokePaths : animationStrokes), item];
+      setStrokePaths(nextPaths);
       setDraw(true);
+      if (selectedShape.text) {
+        onUpdateText(buildTextSvg(text, font, fontSize, weight, italic, fill, drawColor, drawWidth, true, animationPlaying, duration, letterSpacing, lineSpacing, glyphShapes, advances, vectorGlyphs, nextPaths));
+      }
     }
     drawPointer.current = null;
     drawPoints.current = [];
@@ -298,16 +384,38 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
       announce('Text added to the artboard — drag, scale, and rotate it there');
     }
   };
+  const toggleAnimation = () => {
+    const nextPlaying = !animationPlaying;
+    setAnimationPlaying(nextPlaying);
+    if (selectedShape.text) onUpdateText(createData(nextPlaying));
+  };
+  const preview = <div className="text-svg-preview" data-testid="text-svg-preview">
+    <div dangerouslySetInnerHTML={{ __html: svg }} />
+  </div>;
+  const drawHost = document.querySelector<SVGGElement>('.stage-svg > g');
+  const showArtboardPreview = !isMobile || mobilePanel === 'preview';
 
-  return <div className="text-svg-panel" data-testid="text-svg-panel">
+  return <div className="text-svg-panel" data-testid="text-svg-panel" data-mobile-panel={mobilePanel}>
     <h2 className="properties-title">Text to SVG</h2>
     <p className="hint" style={{ marginTop: -8 }}>Keep live typography, or import a font to create real editable glyph outlines. Build ordered pen strokes, tune timing, and convert glyphs into ordinary ShapeForge paths for node editing.</p>
-    <Section title="Text & typography">
+    <nav className="text-svg-mobile-tabs" role="tablist" aria-label="Text SVG sections">
+      {([
+        ['text', 'Text'],
+        ['preview', 'Preview'],
+        ['animation', 'Animation'],
+      ] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={mobilePanel === id} className={mobilePanel === id ? 'active' : ''} onClick={() => setMobilePanel(id)}>{label}</button>)}
+    </nav>
+    <div className="text-svg-mobile-group" data-mobile-group="text">
+    <Section title="Text & typography" open={!isMobile}>
       <label className="field-label" htmlFor="text-svg-content">Text</label>
       <textarea id="text-svg-content" className="boundary-input" value={text} onChange={event => setText(event.target.value)} maxLength={300} rows={4} data-testid="text-svg-content" />
       <label className="field-label" htmlFor="text-svg-font">Font family</label>
-      <input id="text-svg-font" className="generate-select" list="text-svg-font-options" value={font} onChange={event => setFont(event.target.value)} data-testid="text-svg-font" />
-      <datalist id="text-svg-font-options">{FONT_OPTIONS.map(option => <option key={option} value={option} />)}</datalist>
+      <input id="text-svg-font" className="generate-select" list="text-svg-font-options" value={font} onChange={event => handleFontChange(event.target.value)} data-testid="text-svg-font" />
+      <datalist id="text-svg-font-options">
+        <option value="" label="Built-in fonts" />
+        {[...new Set(BUILT_IN_FONTS.map(option => option.family))].map(option => <option key={option} value={option} />)}
+        {FONT_OPTIONS.map(option => <option key={option} value={option} />)}
+      </datalist>
       <label className="field-label" htmlFor="text-svg-font-file">Font file for vector outlines</label>
       <input id="text-svg-font-file" className="generate-select" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" onChange={event => { void importFont(event.target.files?.[0]); event.currentTarget.value = ''; }} data-testid="text-svg-font-file" />
       <p className="hint">{loadedFont ? `Vector outlines loaded: ${loadedFont.getEnglishName('family')}` : vectorGlyphs.length ? `${vectorGlyphs.length} saved vector glyphs available` : 'Import a TTF/OTF/WOFF font to extract real SVG glyph paths. Live system-font text remains available without conversion.'}</p>
@@ -327,7 +435,7 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
       <label className="field-label" htmlFor="text-svg-fill">Fill color</label>
       <input id="text-svg-fill" className="text-svg-color" type="color" value={fill} disabled={draw} onChange={event => setFill(event.target.value)} data-testid="text-svg-fill" />
     </Section>
-    <Section title="Shape individual characters">
+    <Section title="Shape individual characters" open={!isMobile}>
       <p className="hint">Choose a character and adjust its position, rotation, and proportions independently.</p>
       <label className="field-label" htmlFor="text-svg-glyph">Character</label>
       <select id="text-svg-glyph" className="generate-select" value={selectedGlyph} onChange={event => setSelectedGlyph(Number(event.target.value))} data-testid="text-svg-glyph">
@@ -341,15 +449,14 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
         <ValueControl label="Vertical scale" value={activeGlyph.scaleY} min={25} max={200} unit="%" onChange={scaleY => updateGlyph({ scaleY })} testId="text-svg-glyph-scale-y" />
       </>}
     </Section>
-    <Section title="Preview & drawing">
+    </div>
+    <div className="text-svg-mobile-group" data-mobile-group="preview">
+    <Section title="Preview & drawing" open={!isMobile}>
       <div className="field-row">
         <button type="button" className={`btn ${drawing ? 'primary' : ''}`} onClick={() => { setDrawing(value => !value); setDrawingPreview(''); }} data-testid="text-svg-draw-stroke">{drawing ? 'Cancel drawing' : 'Draw stroke'}</button>
-        {drawing && <span className="hint">Draw a continuous stroke over the preview.</span>}
+        {drawing && <span className="hint">Draw directly on the artboard.</span>}
       </div>
-      <div className={`text-svg-preview ${drawing ? 'drawing' : ''}`} data-testid="text-svg-preview" onPointerDown={drawDown} onPointerMove={drawMove} onPointerUp={drawUp} onPointerCancel={drawUp}>
-        <div dangerouslySetInnerHTML={{ __html: svg }} />
-        {drawingPreview && <svg className="text-svg-drawing-overlay" viewBox={`0 0 ${data.width} ${data.height}`} aria-hidden="true"><path d={drawingPreview} /></svg>}
-      </div>
+      {preview}
       <div className="field-row">
         <button type="button" className="btn" onClick={copySvg} data-testid="text-svg-copy"><Clipboard />Copy SVG</button>
         <button type="button" className="btn primary" onClick={downloadSvg} data-testid="text-svg-download"><Download />Download SVG</button>
@@ -360,8 +467,11 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
       <label className="field-label" htmlFor="text-svg-output">SVG markup</label>
       <textarea id="text-svg-output" className="boundary-input text-svg-output" value={svg} readOnly rows={8} spellCheck={false} data-testid="text-svg-output" />
     </Section>
-    <Section title="Handwriting draw animation">
-      <Switch label="Animate real SVG strokes" checked={draw} onChange={setDraw} testId="text-svg-draw" />
+    </div>
+    <div className="text-svg-mobile-group" data-mobile-group="animation">
+    <Section title="Handwriting draw animation" open={!isMobile}>
+      <Switch label="Animate real SVG strokes" checked={draw} onChange={enabled => { setDraw(enabled); if (!enabled) setAnimationPlaying(false); }} testId="text-svg-draw" />
+      {draw && animationStrokes.length > 0 && <button type="button" className="btn" onClick={toggleAnimation} data-testid="text-svg-animation-toggle">{animationPlaying ? <Pause /> : <Play />}{animationPlaying ? 'Stop animation' : 'Play animation'}</button>}
       <p className="hint">Text is never animated with a reveal mask. Imported font outlines and hand-drawn paths use SVG strokes with dasharray/dashoffset.</p>
       <div className="field-row">
         <button type="button" className="btn" onClick={useHandwritingPreset} data-testid="text-svg-smart-presets"><Upload />Smart letter strokes</button>
@@ -400,5 +510,12 @@ export default function TextSvgPanel({ announce, selectedShape, onAddText, onUpd
         {pathError && <p className="boundary-error" role="alert">{pathError}</p>}
       </>}
     </Section>
+    </div>
+    {drawing && drawHost && showArtboardPreview && createPortal(<g className="text-svg-artboard-draw-layer" data-testid="text-svg-artboard-draw-layer">
+      <rect className="text-svg-artboard-draw-surface" x={0} y={0} width={W} height={H}
+        onPointerDown={drawDown} onPointerMove={drawMove} onPointerUp={drawUp} onPointerCancel={drawUp} />
+      {drawingPreview && <path d={drawingPreview} transform={`matrix(${textFrame.a} ${textFrame.b} ${textFrame.c} ${textFrame.d} ${textFrame.x} ${textFrame.y})`}
+        fill="none" stroke={drawColor} strokeWidth={drawWidth} strokeLinecap="round" strokeLinejoin="round" pointerEvents="none" />}
+    </g>, drawHost)}
   </div>;
 }

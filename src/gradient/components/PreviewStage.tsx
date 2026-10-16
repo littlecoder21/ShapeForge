@@ -10,6 +10,7 @@ import type { GradientLayer, GradientProject } from '../engine/model';
 import { useStore, type StudioStore } from '../engine/store';
 import { CHECKER } from './ui';
 import LayeredArt from './LayeredArt';
+import { DirectionAwareRange } from '../../shared/controls';
 
 /* The interactive canvas. The art is a real DOM composition (the exact CSS that gets exported), scaled with a CSS transform;
  * handles are an SVG overlay. Zoom / pan / pinch only touch the transform, never the project. */
@@ -227,7 +228,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
       <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={onTogglePlay} aria-pressed={playing} aria-label={playing ? 'Pause animation preview' : 'Play animation preview'} data-testid="gs-play">{playing ? <Pause /> : <Play />}</button>
       <button type="button" className="gs-play-btn" onClick={() => setPlayEpoch(epoch => epoch + 1)} aria-label="Reset animation preview" data-testid="gs-animation-reset"><RotateCcw /></button>
       <button type="button" className={`gs-play-btn ${beforeProject ? 'on' : ''}`} onClick={() => setBeforeProject(beforeProject ? null : store.snapshot())} aria-pressed={!!beforeProject} aria-label={beforeProject ? 'Close before and after comparison' : 'Capture current preview for comparison'} data-testid="gs-compare"><Columns2 />{beforeProject && <span>Compare</span>}</button>
-      {beforeProject && <label className="gs-compare-slider"><span>Split</span><input type="range" min="10" max="90" value={compareSplit} onChange={e => setCompareSplit(Number(e.target.value))} aria-label="Before and after split" data-testid="gs-compare-split" /></label>}
+      {beforeProject && <label className="gs-compare-slider"><span>Split</span><DirectionAwareRange min="10" max="90" value={compareSplit} onValueChange={value => setCompareSplit(Number(value))} aria-label="Before and after split" data-testid="gs-compare-split" /></label>}
     </div>
   </div>;
 }

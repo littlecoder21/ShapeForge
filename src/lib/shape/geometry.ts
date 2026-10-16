@@ -54,6 +54,7 @@ export interface TextShapeData {
   stroke: string;
   strokeWidth: number;
   draw: boolean;
+  animationPlaying?: boolean;
   duration: number;
   letterSpacing: number;
   lineSpacing: number;

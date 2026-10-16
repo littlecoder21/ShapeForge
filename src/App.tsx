@@ -528,7 +528,7 @@ function App() {
           onAdd={() => { documentState.apply(d => addPage(d)); setSelection(NONE); }}
           onRename={(id, name) => documentState.apply(d => renamePage(d, id, name))}
           onDelete={id => { documentState.apply(d => removePage(d, id)); setSelection(NONE); }} />
-        <div className="artboard-wrap" style={{
+        <div className="artboard-wrap" id="artboard-wrap" style={{
           '--animation-fill-opacity': String(isAnimationPreview ? animatedFillOpacity(animation, animationPlayhead) : 1),
           '--animation-stroke-color': isAnimationPreview ? animationPreviewShape.stroke : 'none',
           '--animation-stroke-width': isAnimationPreview ? String(animationPreviewShape.strokeWidth) : '0',
