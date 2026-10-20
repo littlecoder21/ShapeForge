@@ -1,4 +1,5 @@
 import { clamp } from './color';
+import { TEXTURE_DEFAULTS, normalizeTexture, type TextureParams } from './textureControls';
 
 /* ═══════════════════════════ Gradient Studio data model ═══════════════════════════
  * The project is the source of truth. CSS, SVG, PNG and keyframes are all *generated* from it,
@@ -31,7 +32,7 @@ export interface RepeatSpec { size: number; unit: 'px' | '%' | 'deg'; offset: nu
 export interface Transform { x: number; y: number; scale: number; rotate: number; skewX: number; skewY: number }
 
 export interface EffectInstance { id: string; type: string; enabled: boolean; params: Record<string, number> }
-export interface TextureData {
+export interface TextureData extends TextureParams {
   enabled: boolean;
   pattern: string;
   scale: number;
@@ -71,10 +72,8 @@ export interface MeshData {
 export interface NoiseData { frequency: number; octaves: number; seed: number; mono: boolean; contrast: number; tile: number }
 export const DEFAULT_MESH: MeshData = { points: [], base: '', core: 40, seed: 7 };
 export const DEFAULT_NOISE: NoiseData = { frequency: 80, octaves: 3, seed: 4, mono: true, contrast: 120, tile: 220 };
-export const DEFAULT_TEXTURE: TextureData = {
-  enabled: false, pattern: 'grain-1', scale: 36, density: 50, opacity: 18, angle: 0, seed: 17, color: '#ffffff',
-  backgroundEnabled: false, backgroundColor: '#10131a', backgroundOpacity: 100, contrast: 100, softness: 0, offsetX: 0, offsetY: 0, blend: 'soft-light',
-};
+/** The one authoritative default texture (defined next to the control metadata in textureControls.ts; frozen — always copy it). */
+export const DEFAULT_TEXTURE: TextureData = TEXTURE_DEFAULTS;
 
 export interface GradientLayer {
   id: string;
@@ -248,8 +247,9 @@ export function normalizeProject(raw: unknown): GradientProject {
       group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
     })) };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
-    merged.texture = { ...DEFAULT_TEXTURE, ...(l.texture ?? {}) };
-    if (!/^(grain|dots|lines|crosshatch|grid|waves|geometric|woven|paper|material|organic)-(?:[1-9]|[1-9]\d)$/.test(merged.texture.pattern)) merged.texture.pattern = DEFAULT_TEXTURE.pattern;
+    // fills fields added in newer versions, clamps ranges, validates colours and migrates legacy ids (`dots-1` → `dots-halftone`)
+    merged.texture = normalizeTexture(l.texture);
+    if (!(BLEND_MODES as readonly string[]).includes(merged.texture.blend)) merged.texture.blend = DEFAULT_TEXTURE.blend;
     if (merged.solidColor !== undefined && !/^#[0-9a-f]{6}$/i.test(merged.solidColor)) merged.solidColor = '#ffffff';
     merged.stops = merged.stops.map(s => ({ ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100) }));
     if (merged.solidColor !== undefined) {
