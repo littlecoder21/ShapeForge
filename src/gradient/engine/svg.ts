@@ -4,7 +4,7 @@ import { bleedOf, layerMatrix, linearLine, normDeg, periodOf, offsetOf, radii, r
 import { rampRange, rampStops, colorAtPos } from './ramp';
 import { meshCoord as _mc, pointRadii } from './mesh';
 import { noiseFilterMarkup } from './noise';
-import { textureTileSvg } from './textures';
+import { textureOverlay as textureLayout } from './textures';
 import type { GradientLayer, GradientProject } from './model';
 
 /* ═══════════ SVG generation ═══════════
@@ -121,10 +121,13 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   const content = inner || `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${fill}"/>`;
   let textureOverlay = '';
   if (layer.texture.enabled) {
-    const size = Math.max(1, layer.texture.scale), offsetX = Math.round(layer.texture.seed * 13 + layer.texture.offsetX) % Math.round(size), offsetY = Math.round(layer.texture.seed * 7 + layer.texture.offsetY) % Math.round(size);
-    const tile = `data:image/svg+xml,${encodeURIComponent(textureTileSvg(layer.texture))}`;
-    defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${offsetX}" y="${offsetY}" width="${r2(size)}" height="${r2(size)}"><image href="${tile}" xlink:href="${tile}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
-    textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(layer.texture.opacity / 100, 3)}" style="mix-blend-mode:${layer.texture.blend}"/>`;
+    // same helper the live preview and the CSS export use: the tile is axis-aligned at full strength, the overlay applies
+    // the opacity once, and a rotated texture rotates the whole repeating pattern (seamless at any angle)
+    const ov = textureLayout(layer.texture), size = ov.size;
+    const layerW = w + 2 * bx, layerH = h + 2 * by;
+    const rotate = ov.rotation ? ` patternTransform="translate(${r2(w / 2)} ${r2(h / 2)}) rotate(${r2(ov.rotation)}) translate(${r2(-1.5 * layerW)} ${r2(-1.5 * layerH)})"` : '';
+    defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${ov.offsetX}" y="${ov.offsetY}" width="${r2(size)}" height="${r2(size)}"${rotate}><image href="${ov.href}" xlink:href="${ov.href}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
+    textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(ov.opacity, 3)}" style="mix-blend-mode:${ov.blend}"/>`;
   }
   return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}>${content}${textureOverlay}</g>` };
 }
