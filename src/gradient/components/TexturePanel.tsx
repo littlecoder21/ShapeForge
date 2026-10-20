@@ -2,18 +2,36 @@ import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
 import { BLEND_MODES, DEFAULT_TEXTURE, newLayer, stop, type TextureData } from '../engine/model';
-import { TEXTURES, textureDataUri } from '../engine/textures';
+import { FALLOFF_OPTIONS, type ControlGroup } from '../engine/textureControls';
+import { TEXTURES, resolveTextureId, textureDataUri, textureSupport, type ResolvedControl } from '../engine/textures';
 import { useStore } from '../engine/store';
 import { ColorInput, Empty, useStudio } from './ui';
 
 const FAMILIES = ['all', ...new Set(TEXTURES.map(texture => texture.family))] as const;
 type FamilyFilter = (typeof FAMILIES)[number];
-const THUMBNAILS = new Map(TEXTURES.map(item => [item.id, textureDataUri({
-  ...DEFAULT_TEXTURE,
-  pattern: item.id,
-  color: '#f4f7fb',
-  density: 58,
-})]));
+
+/** Thumbnails are built on demand (the library has 200+ patterns) and drawn at full strength, whatever the opacity setting is. */
+const THUMBNAILS = new Map<string, string>();
+const thumbnail = (id: string) => {
+  let uri = THUMBNAILS.get(id);
+  if (!uri) {
+    uri = textureDataUri({ ...DEFAULT_TEXTURE, pattern: id, color: '#f4f7fb', density: 58 }, 100);
+    THUMBNAILS.set(id, uri);
+  }
+  return uri;
+};
+
+const kebab = (name: string) => name.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
+
+/** Advanced controls are grouped into collapsible sections; a section only appears when the selected texture has controls for it. */
+const ADVANCED_SECTIONS: { group: ControlGroup; title: string; hint: string }[] = [
+  { group: 'geometry', title: 'Geometry', hint: 'stroke, dash, aspect, weave' },
+  { group: 'distribution', title: 'Distribution & variation', hint: 'coverage, jitter, random variation' },
+  { group: 'distortion', title: 'Distortion', hint: 'seamless domain warp' },
+  { group: 'spatial', title: 'Spatial falloff', hint: 'fade a property across the tile' },
+  { group: 'detail', title: 'Detail', hint: 'a second, finer layer' },
+  { group: 'rendering', title: 'Noise field', hint: 'threshold and octaves' },
+];
 
 export default function TexturePanel({ layerId }: { layerId: string }) {
   const { store, announce } = useStudio();
@@ -25,6 +43,7 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
   ), [family, query]);
   if (!layer) return <Empty>Select a layer first.</Empty>;
   const texture = layer.texture;
+  const selectedId = resolveTextureId(texture.pattern);
   const set = (patch: Partial<TextureData>, key?: string) => store.updateLayer(layerId, l => ({
     ...l,
     texture: { ...DEFAULT_TEXTURE, ...l.texture, ...patch },
@@ -39,6 +58,46 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
     store.select(textureLayer.id);
     announce(`Added ${textureLayer.name}`);
   };
+
+  // which advanced controls the selected texture actually supports (driven by the control metadata, not by the preset name)
+  const support = textureSupport(texture);
+  const renderControl = ({ control, label, options }: ResolvedControl) => {
+    const testId = `texture-${kebab(control.id)}`;
+    const value = texture[control.id];
+    if (control.id === 'falloff') {
+      return <div key={control.id} title={control.hint}>
+        <div className="field-label">{label}</div>
+        <Seg value={texture.falloff} label="Falloff" testId={testId} options={FALLOFF_OPTIONS} onChange={falloff => set({ falloff })} />
+      </div>;
+    }
+    if (control.type === 'select') {
+      return <div key={control.id} title={control.hint}>
+        <label className="field-label" htmlFor={testId}>{label}</label>
+        <select id={testId} className="generate-select" value={String(value)} onChange={e => set({ [control.id]: e.target.value } as Partial<TextureData>)} data-testid={testId}>
+          {(options ?? []).map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+      </div>;
+    }
+    return <div key={control.id} title={control.hint}>
+      <ValueControl
+        label={label}
+        value={Number(value)}
+        min={control.min ?? 0}
+        max={control.max ?? 100}
+        step={control.step ?? 1}
+        unit={control.unit}
+        def={Number(control.def)}
+        onChange={v => set({ [control.id]: v } as Partial<TextureData>, testId)}
+        testId={testId}
+      />
+    </div>;
+  };
+  const basicControls = support.controls.filter(item => item.control.tier === 'basic');
+  const advancedSections = ADVANCED_SECTIONS
+    .map(section => ({ ...section, controls: support.controls.filter(item => item.control.tier === 'advanced' && item.control.group === section.group) }))
+    .filter(section => section.controls.length);
+  const noteStyle = { margin: '6px 2px 0', fontSize: 11, lineHeight: 1.45, opacity: 0.7 } as const;
+
   return <div data-testid="texture-panel">
     <Section title="Texture library" hint={`${TEXTURES.length} patterns · click a card to add as a layer`}>
       <label className="gs-search">
@@ -57,13 +116,13 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
           <button
             key={item.id}
             type="button"
-            className={`gs-texture-card ${texture.pattern === item.id ? 'on' : ''}`}
-            aria-pressed={texture.pattern === item.id}
+            className={`gs-texture-card ${selectedId === item.id ? 'on' : ''}`}
+            aria-pressed={selectedId === item.id}
             onClick={() => choose(item.id, item.label)}
             data-testid={`texture-card-${item.id}`}
             title={`Add ${item.label} as a layer`}
           >
-            <span className="gs-texture-thumb" style={{ backgroundImage: THUMBNAILS.get(item.id) }} aria-hidden="true" />
+            <span className="gs-texture-thumb" style={{ backgroundImage: thumbnail(item.id) }} aria-hidden="true" />
             <span className="gs-texture-name">{item.label}</span>
           </button>
         ))}
@@ -98,5 +157,16 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
         {BLEND_MODES.map(mode => <option key={mode} value={mode}>{mode}</option>)}
       </select>
     </Section>
+    {basicControls.length > 0 && <Section title="Shape & spacing" hint="size, spacing and placement of the motifs">
+      {basicControls.map(renderControl)}
+    </Section>}
+    {advancedSections.map(section => (
+      <Section key={section.group} title={section.title} hint={section.hint} open={false}>
+        {section.controls.map(renderControl)}
+      </Section>
+    ))}
+    {support.notes.length > 0 && <div data-testid="texture-notes">
+      {support.notes.map(note => <p key={note} style={noteStyle}>{note}</p>)}
+    </div>}
   </div>;
 }
