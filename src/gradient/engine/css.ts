@@ -4,7 +4,7 @@ import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } fro
 import { meshCoord, meshParts } from './mesh';
 import { outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
 import { noiseDataUri } from './noise';
-import { textureDataUri } from './textures';
+import { textureDataUri, textureOverlay } from './textures';
 
 /* ═══════════════════════════ CSS generation ═══════════════════════════
  * Three outputs, all produced from the structured project:
@@ -241,6 +241,9 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   const items = layerImages(layer, project, { cls: key });
   if (layer.type === 'mesh' && layer.mesh.base) decls.push(`background-color: ${layer.mesh.base}`);
   decls.push('contain: layout');
+  // a rotated texture overlay is larger than the layer, so the layer clips it (the preview root may not)
+  const texture = layer.texture.enabled ? textureOverlay(layer.texture) : undefined;
+  if (texture?.rotation) decls.push('overflow: hidden');
   if (layer.solidColor !== undefined) decls.push(`background-color: ${layer.solidColor}`);
   else if (o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
   else decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
@@ -256,10 +259,10 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   }
   const head = o.pretty && o.comments ? `/* ${cls.replace(/^.*-(\d+)$/, '$1')} · ${layer.name}${bleed > 0 ? ' (blurred layers extend past the edge so the blur stays full)' : ''} */\n` : '';
   let css = `${head}${o.rootSel} .${cls} {\n${decls.map(d => `  ${d};`).join('\n')}\n}`;
-  if (layer.texture.enabled) {
-    const texture = layer.texture;
-    const tile = Math.max(1, texture.scale), offsetX = Math.round(texture.seed * 13 + texture.offsetX) % Math.round(tile), offsetY = Math.round(texture.seed * 7 + texture.offsetY) % Math.round(tile);
-    css += `\n\n${o.rootSel} .${cls}::after {\n  content: "";\n  position: absolute;\n  inset: 0;\n  pointer-events: none;\n      background-image: ${textureDataUri(texture)};\n  background-size: ${r2(texture.scale)}px ${r2(texture.scale)}px;\n  background-position: ${offsetX}px ${offsetY}px;\n  opacity: ${r2(texture.opacity / 100, 3)};\n  mix-blend-mode: ${texture.blend};\n}`;
+  if (texture) {
+    // Shared helper: the tile is axis-aligned at full strength, this rule applies the opacity once, and a rotated texture rotates
+    // the whole repeating overlay (oversized so it still covers the layer) — the repeat stays seamless at any angle.
+    css += `\n\n${o.rootSel} .${cls}::after {\n  content: "";\n  position: absolute;\n  inset: ${texture.rotation ? '-100%' : '0'};\n  pointer-events: none;\n  background-image: ${texture.dataUri};\n  background-size: ${r2(texture.size)}px ${r2(texture.size)}px;\n  background-position: ${texture.offsetX}px ${texture.offsetY}px;\n  opacity: ${r2(texture.opacity, 3)};\n  mix-blend-mode: ${texture.blend};${texture.rotation ? `\n  transform: rotate(${r2(texture.rotation)}deg);` : ''}\n}`;
   }
   if (anim) css = `${anim.props ? `${anim.props}\n\n` : ''}${css}\n\n${anim.keyframes}`;
   return css;
