@@ -24,7 +24,8 @@ export function radii(layer: GradientLayer, c: Canvas) {
 
 /** Bleed fraction: blurred layers are drawn on a larger box so their edges do not fade out. */
 export function bleedOf(layer: GradientLayer, c: Canvas) {
-  const px = blurOf(layer.effects);
+  const pointSpread = layer.type === 'mesh' ? Math.max(0, ...layer.mesh.points.map(point => blurOf(point.effects ?? []))) : 0;
+  const px = Math.max(blurOf(layer.effects), pointSpread);
   const b = px > 0 ? Math.min(0.5, px / Math.min(c.w, c.h)) : 0;
   return Math.round(b * 1000) / 1000;
 }
@@ -87,4 +88,3 @@ export function axisValueToPos(layer: GradientLayer, c: Canvas, v: number) {
   if (layer.repeating) { const per = periodOf(layer, c) || 1; return ((v - offsetOf(layer, c)) / per) * 100; }
   return (v / (axisLength(layer, c) || 1)) * 100;
 }
-

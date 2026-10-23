@@ -6,7 +6,7 @@ import { pointRadii } from './mesh';
 import { curveBands } from './curve';
 import { noiseCanvas } from './noise';
 import { clipLayerMask } from './layerMask';
-import type { BlendMode, GradientLayer, GradientProject } from './model';
+import { IDENTITY, type BlendMode, type GradientLayer, type GradientProject } from './model';
 import { projectSvg } from './svg';
 
 /* ═══════════ PNG / canvas renderer ═══════════
@@ -36,7 +36,16 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
     [...layer.mesh.points].reverse().forEach(p => {
       const rr = pointRadii(p, project.canvas), cx = (p.x / 100) * w, cy = (p.y / 100) * h, rx = (rr.rx / 100) * w, ry = (rr.ry / 100) * h;
       const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
-      ctx.save(); ctx.translate(cx, cy); ctx.scale(1, ry / rx);
+      const transform = { ...IDENTITY, ...(p.transform ?? {}) };
+      const pointEffects = activeEffects(p.effects ?? []);
+      const pointFilter = pointEffects.map(effect => EFFECTS[effect.type].canvas(effect.params)).filter(Boolean).join(' ');
+      ctx.save();
+      ctx.translate(cx + transform.x * w / 100, cy + transform.y * h / 100);
+      ctx.rotate(transform.rotate * Math.PI / 180);
+      ctx.transform(1, Math.tan(transform.skewY * Math.PI / 180), Math.tan(transform.skewX * Math.PI / 180), 1, 0, 0);
+      ctx.scale(transform.scale, transform.scale);
+      ctx.scale(1, ry / rx);
+      if (pointFilter && supportsFilter(ctx)) ctx.filter = pointFilter;
       const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
       g.addColorStop(0, rgbaCss({ ...hexRgb(p.color), a: p.alpha })); g.addColorStop(mid / 100, rgbaCss({ ...hexRgb(p.color), a: p.alpha * (1 - mid / 100) })); g.addColorStop(1, rgbaCss({ ...hexRgb(p.color), a: 0 }));
       ctx.fillStyle = g; ctx.fillRect(-rx * 3, -rx * 3, rx * 6, rx * 6); ctx.restore();
@@ -134,6 +143,10 @@ export function renderProject(project: GradientProject, scale = 1): RenderResult
     const fx = activeEffects(layer.effects);
     const rasterSkipped = fx.filter(e => EFFECTS[e.type].rasterUnsupported);
     if (rasterSkipped.length) notes.push(`“${layer.name}”: ${rasterSkipped.map(e => EFFECTS[e.type].label).join(', ')} ${rasterSkipped.length === 1 ? 'is' : 'are'} not included in PNG; SVG/CSS keeps the effect`);
+    const pointRasterSkipped = layer.type === 'mesh'
+      ? layer.mesh.points.flatMap(point => activeEffects(point.effects ?? []).filter(effect => EFFECTS[effect.type].rasterUnsupported))
+      : [];
+    if (pointRasterSkipped.length) notes.push(`“${layer.name}”: point ${[...new Set(pointRasterSkipped.map(effect => EFFECTS[effect.type].label))].join(', ')} effects are not included in PNG; SVG/CSS keeps the effect`);
     const fstr = fx.map(e => EFFECTS[e.type].canvas(e.params)).filter(Boolean).join(' ');
     ctx.save();
     ctx.globalAlpha = layer.opacity; ctx.globalCompositeOperation = COMPOSITE[layer.blend];
@@ -174,6 +187,7 @@ async function renderFilteredSvg(project: GradientProject, scale: number): Promi
 export async function exportPng(project: GradientProject, scale = 1): Promise<{ blob: Blob; notes: string[] }> {
   const needsSvgFilters = project.layers.some(layer => layer.visible && (
     layer.texture.enabled || activeEffects(layer.effects).some(effect => EFFECTS[effect.type].rasterUnsupported)
+    || (layer.type === 'mesh' && layer.mesh.points.some(point => activeEffects(point.effects ?? []).some(effect => EFFECTS[effect.type].rasterUnsupported)))
   ));
   let rendered: RenderResult;
   if (needsSvgFilters) {

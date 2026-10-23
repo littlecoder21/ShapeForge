@@ -7,7 +7,7 @@ import { noiseFilterMarkup } from './noise';
 import { curveBands } from './curve';
 import { layerMaskPath } from './layerMask';
 import { textureOverlay as textureLayout } from './textures';
-import type { GradientLayer, GradientProject } from './model';
+import { IDENTITY, type GradientLayer, type GradientProject } from './model';
 
 /* ═══════════ SVG generation ═══════════
  * linear / radial → native <linearGradient> / <radialGradient> (spreadMethod="repeat" for repeating).
@@ -74,7 +74,21 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
       const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
       const rr = pointRadii(p, project.canvas), cx = (p.x / 100) * w, cy = (p.y / 100) * h;
       defs.push(`<radialGradient id="${id}-p${i}" gradientUnits="userSpaceOnUse" cx="${r2(cx)}" cy="${r2(cy)}" r="${r2((rr.rx / 100) * w)}" gradientTransform="translate(${r2(cx)} ${r2(cy)}) scale(1 ${r2(rr.ry / 100 * h / ((rr.rx / 100) * w), 4)}) translate(${r2(-cx)} ${r2(-cy)})">${tag(p.color, p.alpha, 0)}${Math.abs(mid - 50) > 0.5 ? tag(p.color, p.alpha * (1 - mid / 100) * 0.9 + 0.0, mid / 100) : ''}${tag(p.color, 0, 1)}</radialGradient>`);
-      sq.push(`<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-p${i})"/>`);
+      const transform = { ...IDENTITY, ...(p.transform ?? {}) };
+      const transforms = [
+        transform.x || transform.y ? `translate(${r2(transform.x * w / 100)} ${r2(transform.y * h / 100)})` : '',
+        `translate(${r2(cx)} ${r2(cy)})`,
+        transform.rotate ? `rotate(${r2(transform.rotate)})` : '',
+        transform.skewX ? `skewX(${r2(transform.skewX)})` : '',
+        transform.skewY ? `skewY(${r2(transform.skewY)})` : '',
+        transform.scale !== 1 ? `scale(${r2(transform.scale, 3)})` : '',
+        `translate(${r2(-cx)} ${r2(-cy)})`,
+      ].filter(Boolean).join(' ');
+      const pointFilters = activeEffects(p.effects ?? []);
+      const pointFilterId = `${id}-p${i}-f`;
+      if (pointFilters.length) defs.push(`<filter id="${pointFilterId}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">${pointFilters.map(effect => EFFECTS[effect.type].svg(effect.params)).join('')}</filter>`);
+      const rect = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-p${i})"/>`;
+      sq.push(`<g${transforms ? ` transform="${transforms}"` : ''}${pointFilters.length ? ` filter="url(#${pointFilterId})"` : ''}>${rect}</g>`);
     });
     inner = `${layer.mesh.base ? `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${layer.mesh.base}"/>` : ''}${sq.reverse().join('')}`;
   } else if (layer.type === 'noise') {

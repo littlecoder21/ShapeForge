@@ -2,7 +2,7 @@ import { apply, axisValueToPos, deg, invert, layerMatrix, linearLine, normDeg, p
 import { pointRadii } from './mesh';
 import { curvePoint } from './curve';
 import { layerMaskPath } from './layerMask';
-import type { GradientLayer } from './model';
+import { IDENTITY, type GradientLayer } from './model';
 
 /* ═══════════ Direct manipulation: handles + drag maths ═══════════
  * Handles live in the layer's own coordinate space and are mapped to the canvas with the layer matrix, so they stay
@@ -62,7 +62,9 @@ export function layerOverlay(layer: GradientLayer, canvas: Canvas, mode: 'gradie
   if (layer.type === 'noise') return { matrix: M, local, handles };
   if (layer.type === 'mesh') {
     layer.mesh.points.forEach(p => {
-      const c = { x: (p.x / 100) * w, y: (p.y / 100) * h }, rr = pointRadii(p, canvas);
+      const transform = { ...IDENTITY, ...(p.transform ?? {}) };
+      const c = { x: ((p.x + transform.x) / 100) * w, y: ((p.y + transform.y) / 100) * h }, rr = pointRadii(p, canvas);
+      rr.rx *= transform.scale; rr.ry *= transform.scale;
       if (p.id === selectedId) local.push({ kind: 'shape', d: `M${c.x - (rr.rx / 100) * w} ${c.y}a${(rr.rx / 100) * w} ${(rr.ry / 100) * h} 0 1 0 ${(rr.rx / 100) * w * 2} 0a${(rr.rx / 100) * w} ${(rr.ry / 100) * h} 0 1 0 ${-(rr.rx / 100) * w * 2} 0`, dash: true });
       handles.push({ id: `pt-${p.id}`, kind: 'point', stopId: p.id, ...map(c), r: 14, pri: 3, color: p.color, locked: p.locked });
       if (p.id === selectedId) handles.push({ id: `ps-${p.id}`, kind: 'psize', stopId: p.id, ...map({ x: c.x + (rr.rx / 100) * w, y: c.y }), r: 12, pri: 4, color: '#8fb4ff', label: `${Math.round(p.size)}%`, locked: p.locked });
@@ -214,7 +216,9 @@ export function dragHandle({ start, handle, pointer, startPointer, canvas, shift
     case 'psize': {
       const sp = start.mesh.points.find(x => x.id === handle.stopId);
       if (!sp) break;
-      next.mesh = { ...next.mesh, points: next.mesh.points.map(x => (x.id === sp.id ? { ...x, size: Math.round(Math.max(4, Math.min(160, (Math.abs(p.x - (sp.x / 100) * w) / w) * 100)) * 10) / 10 } : x)) };
+      const pointTransform = { ...IDENTITY, ...(sp.transform ?? {}) };
+      const centerX = ((sp.x + pointTransform.x) / 100) * w;
+      next.mesh = { ...next.mesh, points: next.mesh.points.map(x => (x.id === sp.id ? { ...x, size: Math.round(Math.max(4, Math.min(160, (Math.abs(p.x - centerX) / w / pointTransform.scale) * 100)) * 10) / 10 } : x)) };
       break;
     }
     case 'tf-scale': {

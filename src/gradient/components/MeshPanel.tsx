@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
-import { Copy, ImageUp, Lock, Plus, Shuffle, Trash2, Unlock } from 'lucide-react';
+import { Copy, ImageUp, Lock, Plus, RotateCcw, Shuffle, Trash2, Unlock } from 'lucide-react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
 import { EFFECTS, EFFECT_LIST, newEffect } from '../engine/effects';
 import { hslToHex, hexToHsl, rgbToHex } from '../engine/color';
 import { generateMesh, meshLayout, MESH_PATTERNS, newMeshPoint, type MeshPattern } from '../engine/mesh';
-import { uid, type GradientLayer, type MeshPoint } from '../engine/model';
+import { IDENTITY, uid, type GradientLayer, type MeshPoint } from '../engine/model';
 import { mulberry } from '../engine/rng';
 import { useStore } from '../engine/store';
 import { ColorInput, useStudio } from './ui';
@@ -41,6 +41,8 @@ const keepPointSettings = (fresh: MeshPoint[], previous: MeshPoint[]) => fresh.m
     core: old.core,
     locked: old.locked,
     group: old.group,
+    transform: old.transform ? { ...old.transform } : undefined,
+    effects: old.effects?.map(effect => ({ ...effect, params: { ...effect.params } })),
   } : point;
 });
 
@@ -65,7 +67,7 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
     store.selectStop(np.id);
   };
   const remove = () => { if (!sel) return; if (pts.length <= 1) { announce('Keep at least one point'); return; } setMesh(m => ({ ...m, points: m.points.filter(x => x.id !== sel.id) })); store.selectStop(null); };
-  const dup = () => { if (!sel) return; const c = { ...sel, id: uid('m'), x: Math.min(100, sel.x + 6), y: Math.min(100, sel.y + 6), locked: false }; setMesh(m => ({ ...m, points: [...m.points, c] })); store.selectStop(c.id); };
+  const dup = () => { if (!sel) return; const c = { ...sel, id: uid('m'), x: Math.min(100, sel.x + 6), y: Math.min(100, sel.y + 6), locked: false, transform: sel.transform ? { ...sel.transform } : undefined, effects: sel.effects?.map(effect => ({ ...effect, id: uid('e'), params: { ...effect.params } })) }; setMesh(m => ({ ...m, points: [...m.points, c] })); store.selectStop(c.id); };
   const palette = (cols: string[]) => setMesh(m => ({ ...m, points: m.points.map((p, i) => ({ ...p, color: cols[i % cols.length] })) }));
   const relayout = (pat: MeshPattern, sd: number) => {
     const positions = meshLayout(pts.length, pat, sd);
@@ -121,6 +123,8 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
         return {
           id: old?.id ?? uid('m'), ...position, color: sample(position.x, position.y),
           alpha: 1, size: old?.size ?? 54, core: old?.core, locked: false, group: old?.group,
+          transform: old?.transform ? { ...old.transform } : undefined,
+          effects: old?.effects?.map(effect => ({ ...effect, params: { ...effect.params } })),
         };
       });
       setMesh(m => ({ ...m, seed, points }));
@@ -134,6 +138,11 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
     }
   };
   const setFx = (id: string, fn: (e: GradientLayer['effects'][number]) => GradientLayer['effects'][number], key?: string) => store.updateLayer(layerId, l => ({ ...l, effects: l.effects.map(e => e.id === id ? fn(e) : e) }), { coalesce: key });
+  const setPointFx = (id: string, fn: (e: NonNullable<MeshPoint['effects']>[number]) => NonNullable<MeshPoint['effects']>[number], key?: string) => {
+    if (!sel) return;
+    setPt(sel.id, { effects: (sel.effects ?? []).map(effect => effect.id === id ? fn(effect) : effect) }, key);
+  };
+  const pointTransform = { ...IDENTITY, ...(sel?.transform ?? {}) };
 
   return <div data-testid="mesh-panel">
     <Section title="Colour points" hint={`${pts.length} points`}>
@@ -150,6 +159,29 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
         <ValueControl label="Size" value={sel.size} min={4} max={160} step={0.5} unit="%" def={48} onChange={v => setPt(sel.id, { size: v }, `ms-${sel.id}`)} testId="mesh-size" {...sliderGesture} />
         <ValueControl label="Point falloff" value={sel.core ?? layer.mesh.core} min={0} max={100} unit="%" def={layer.mesh.core} onChange={v => setPt(sel.id, { core: v }, `mf-${sel.id}`)} testId="mesh-point-falloff" {...sliderGesture} />
         <div className="gs-btnrow"><button type="button" className="btn" onClick={() => setPt(sel.id, { locked: !sel.locked })} aria-pressed={!!sel.locked} data-testid="mesh-lock">{sel.locked ? <Unlock /> : <Lock />}{sel.locked ? 'Unlock point' : 'Lock point'}</button><button type="button" className="btn" onClick={dup}><Copy />Duplicate</button><button type="button" className="btn danger" onClick={remove} data-testid="mesh-delete"><Trash2 />Delete</button></div>
+        <Section title="Point transform" hint="Adjust this point without changing the rest of the mesh">
+          {(['x', 'y', 'scale', 'rotate', 'skewX', 'skewY'] as const).map(key => {
+            const position = key === 'x' || key === 'y';
+            const scale = key === 'scale';
+            const label = key === 'x' ? 'Offset X' : key === 'y' ? 'Offset Y' : key === 'rotate' ? 'Rotate' : key === 'skewX' ? 'Skew X' : key === 'skewY' ? 'Skew Y' : 'Scale';
+            const value = pointTransform[key] * (scale ? 100 : 1);
+            return <ValueControl key={key} label={label} value={value} min={position ? -100 : scale ? 10 : -180} max={position ? 100 : scale ? 500 : 180} step={0.5} unit={position ? '%' : scale ? '%' : '°'} def={scale ? 100 : 0} onChange={v => setPt(sel.id, { transform: { ...pointTransform, [key]: scale ? v / 100 : v } }, `mesh-ptf-${sel.id}-${key}`)} testId={`mesh-point-transform-${key}`} {...sliderGesture} />;
+          })}
+          <button type="button" className="btn wide" onClick={() => setPt(sel.id, { transform: { ...IDENTITY } })} data-testid="mesh-point-transform-reset"><RotateCcw />Reset point transform</button>
+        </Section>
+        <Section title="Point effects" hint={`${(sel.effects ?? []).filter(effect => effect.enabled).length} active`}>
+          <div className="gs-chips gs-addchips" role="group" aria-label="Add point effect">
+            {EFFECT_LIST.map(effect => <button key={effect.id} type="button" className="chip" title={effect.hint} onClick={() => setPt(sel.id, { effects: [...(sel.effects ?? []), newEffect(effect.id, { seed })] })} data-testid={`mesh-point-add-fx-${effect.id}`}>+ {effect.label}</button>)}
+          </div>
+          {(sel.effects ?? []).map(effect => {
+            const def = EFFECTS[effect.type];
+            if (!def) return null;
+            return <div key={effect.id} className={`gs-fxcard ${effect.enabled ? '' : 'off'}`} data-testid="mesh-point-fx-card">
+              <div className="gs-fxhead"><b>{def.label}</b><Switch label="" checked={effect.enabled} onChange={enabled => setPointFx(effect.id, current => ({ ...current, enabled }))} testId={`mesh-point-fx-on-${effect.type}`} /><button type="button" className="icon-btn" aria-label={`Remove point ${def.label}`} onClick={() => setPt(sel.id, { effects: (sel.effects ?? []).filter(current => current.id !== effect.id) })}><Trash2 /></button></div>
+              {def.params.map(param => <ValueControl key={param.key} label={param.label} value={effect.params[param.key] ?? param.def} min={param.min} max={param.max} step={param.step} unit={param.unit} def={param.def} onChange={value => setPointFx(effect.id, current => ({ ...current, params: { ...current.params, [param.key]: value } }), `mesh-point-fx-${effect.id}-${param.key}`)} testId={`mesh-point-fx-${effect.type}-${param.key}`} {...sliderGesture} />)}
+            </div>;
+          })}
+        </Section>
       </div> : <p className="gs-empty">Select a point to edit its colour, position and size.</p>}
       <button type="button" className="btn wide" onClick={add} data-testid="mesh-add"><Plus />Add point</button>
       <input ref={imageInput} type="file" accept="image/*" hidden data-testid="mesh-image-input" onChange={e => { void importImage(e.currentTarget.files?.[0]); }} />

@@ -35,6 +35,6 @@ export default function MeshBuilder() {
       <button type="button" className="btn primary" onClick={() => create('add')} data-testid="meshgen-create">Create mesh layer</button>
       <button type="button" className="btn" disabled={!canUpdate} onClick={() => create('update')} data-testid="meshgen-update">Update selected</button>
     </div>
-    <p className="hint">Every point is draggable on the canvas and can have its own colour, size and drift animation.</p>
+    <p className="hint">Every point is draggable on the canvas and can have its own colour, size, transform, effects and drift animation.</p>
   </div>;
 }

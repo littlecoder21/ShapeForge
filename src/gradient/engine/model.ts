@@ -60,7 +60,10 @@ export interface AnimTrack { id: string; prop: AnimProp; from: number | string; 
 export interface LayerAnimation { enabled: boolean; duration: number; delay: number; easing: string; direction: AnimDirection; iterations?: number | 'infinite'; tracks: AnimTrack[] }
 
 /** Mesh gradient: soft colour points you can move. Rendered as one radial gradient per point over an optional base colour. */
-export interface MeshPoint { id: string; x: number; y: number; color: string; alpha: number; size: number; core?: number; locked?: boolean; group?: string }
+export interface MeshPoint {
+  id: string; x: number; y: number; color: string; alpha: number; size: number;
+  core?: number; locked?: boolean; group?: string; transform?: Transform; effects?: EffectInstance[];
+}
 export interface MeshData {
   points: MeshPoint[];
   /** solid colour under the points ('' = none) */
@@ -236,11 +239,24 @@ export function cloneLayer(l: GradientLayer, keepId = false): GradientLayer {
     c.stops.forEach(s => { const n = uid('s'); map.set(s.id, n); s.id = n; });
     c.mesh.points.forEach(p => { const n = uid('m'); map.set(p.id, n); p.id = n; });
     c.effects.forEach(e => { e.id = uid('e'); });
+    c.mesh.points.forEach(p => p.effects?.forEach(e => { e.id = uid('e'); }));
     c.anim.tracks.forEach(t => { t.id = uid('t'); if (t.stopId) t.stopId = map.get(t.stopId) ?? t.stopId; });
   }
   return c;
 }
 export const cloneProject = (p: GradientProject): GradientProject => JSON.parse(JSON.stringify(p));
+
+function normalizePointTransform(transform?: Transform): Transform {
+  const bounded = (value: number, fallback: number, min: number, max: number) => Number.isFinite(value) ? clamp(value, min, max) : fallback;
+  return {
+    x: bounded(transform?.x ?? IDENTITY.x, IDENTITY.x, -100, 100),
+    y: bounded(transform?.y ?? IDENTITY.y, IDENTITY.y, -100, 100),
+    scale: bounded(transform?.scale ?? IDENTITY.scale, IDENTITY.scale, 0.1, 5),
+    rotate: bounded(transform?.rotate ?? IDENTITY.rotate, IDENTITY.rotate, -180, 180),
+    skewX: bounded(transform?.skewX ?? IDENTITY.skewX, IDENTITY.skewX, -60, 60),
+    skewY: bounded(transform?.skewY ?? IDENTITY.skewY, IDENTITY.skewY, -60, 60),
+  };
+}
 
 /** Give every id in a project fresh values (used when a preset is instantiated). */
 export function freshIds(p: GradientProject): GradientProject {
@@ -272,6 +288,13 @@ export function normalizeProject(raw: unknown): GradientProject {
       core: p.core === undefined ? undefined : clamp(Number(p.core), 0, 100),
       locked: p.locked ?? false,
       group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
+      transform: normalizePointTransform(p.transform),
+      effects: (p.effects ?? []).filter(effect => effect && typeof effect.type === 'string').map(effect => ({
+        ...effect,
+        id: effect.id || uid('e'),
+        enabled: effect.enabled !== false,
+        params: effect.params && typeof effect.params === 'object' ? effect.params : {},
+      })),
     })) };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
     const curve = l.curve ?? DEFAULT_CURVE;

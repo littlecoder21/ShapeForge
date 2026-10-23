@@ -2,7 +2,7 @@ import { rgbaString } from './color';
 import { EFFECTS, activeEffects } from './effects';
 import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } from './geom';
 import { meshCoord, meshParts } from './mesh';
-import { outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
+import { IDENTITY, outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
 import { noiseDataUri } from './noise';
 import { curveSvgDataUri } from './curve';
 import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
@@ -175,6 +175,16 @@ export function effectDefs(project: GradientProject, names: Names): string {
       ?? (filter.startsWith('url(#') ? `<filter id="${id}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">${EFFECTS[e.type].svg(e.params)}</filter>` : '');
     if (def) out.push(def);
   }));
+  project.layers.filter(l => l.visible && l.type === 'mesh').forEach(layer => {
+    const key = `${names.scope}-${names.cls(layer)}`;
+    layer.mesh.points.forEach((point, index) => activeEffects(point.effects ?? []).forEach(effect => {
+      const id = `fx-${key}-point-${index}-${effect.id}`;
+      const filter = EFFECTS[effect.type].css(effect.params, id);
+      const def = EFFECTS[effect.type].defs?.(effect.params, id, project.canvas)
+        ?? (filter.startsWith('url(#') ? `<filter id="${id}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">${EFFECTS[effect.type].svg(effect.params)}</filter>` : '');
+      if (def) out.push(def);
+    }));
+  });
   return out.join('');
 }
 
@@ -252,6 +262,7 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   const decls: string[] = [];
   if (bleed > 0) decls.push(`inset: -${r2(bleed * 100, 1)}%`);
   const items = layerImages(layer, project, { cls: key });
+  const meshCtx = layer.type === 'mesh' ? makeCtx(layer, project, { cls: key }) : null;
   if (layer.type === 'mesh' && layer.mesh.base) decls.push(`background-color: ${layer.mesh.base}`);
   decls.push('contain: layout');
   if (layer.mask.enabled) {
@@ -268,8 +279,8 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   const texture = layer.texture.enabled ? textureOverlay(layer.texture) : undefined;
   if (texture?.rotation) decls.push('overflow: hidden');
   if (layer.solidColor !== undefined) decls.push(`background-color: ${layer.solidColor}`);
-  else if (o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
-  else decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
+  else if (layer.type !== 'mesh' && o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
+  else if (layer.type !== 'mesh') decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
   if (items[0]?.size) decls.push(`background-size: ${items[0].size}`);
   if (layer.opacity < 1) decls.push(`opacity: ${r2(layer.opacity, 3)}`);
   if (layer.blend !== 'normal') decls.push(`mix-blend-mode: ${layer.blend}`);
@@ -282,6 +293,36 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   }
   const head = o.pretty && o.comments ? `/* ${cls.replace(/^.*-(\d+)$/, '$1')} · ${layer.name}${bleed > 0 ? ' (blurred layers extend past the edge so the blur stays full)' : ''} */\n` : '';
   let css = `${head}${o.rootSel} .${cls} {\n${decls.map(d => `  ${d};`).join('\n')}\n}`;
+  if (layer.type === 'mesh' && meshCtx) {
+    const points = layer.mesh.points.map((point, index) => {
+      const { x: animatedX, y: animatedY } = meshCtx.ptVar.get(point.id) ?? {};
+      const transform = { ...IDENTITY, ...(point.transform ?? {}) };
+      const left = `calc(${animatedX ?? `${r2(meshCoord(point.x, s))}%`}${transform.x ? ` + ${r2(transform.x / s)}%` : ''})`;
+      const top = `calc(${animatedY ?? `${r2(meshCoord(point.y, s))}%`}${transform.y ? ` + ${r2(transform.y / s)}%` : ''})`;
+      const mid = 25 + (point.core ?? layer.mesh.core) * 0.5;
+      const color = rgbaString(point.color, point.alpha);
+      const fade = rgbaString(point.color, point.alpha * (1 - mid / 100));
+      const background = `radial-gradient(ellipse at center, ${color} 0%, ${fade} ${r2(mid, 1)}%, ${rgbaString(point.color, 0)} 100%)`;
+      const pointClass = `mesh-point-${index}`;
+      const fxKey = `fx-${key}-point-${index}`;
+      const filters = activeEffects(point.effects ?? []).map(effect => EFFECTS[effect.type].css(effect.params, `${fxKey}-${effect.id}`)).filter(Boolean);
+      const pointTransform = [
+        'translate(-50%, -50%)',
+        transform.rotate ? `rotate(${r2(transform.rotate)}deg)` : '',
+        transform.skewX || transform.skewY ? `skew(${r2(transform.skewX)}deg, ${r2(transform.skewY)}deg)` : '',
+        transform.scale !== 1 ? `scale(${r2(transform.scale, 3)})` : '',
+      ].filter(Boolean).join(' ');
+      const rule = [
+        'position: absolute', `left: ${left}`, `top: ${top}`,
+        `width: ${r2((2 * point.size) / s)}%`,
+        `height: ${r2((2 * point.size * project.canvas.w / project.canvas.h) / s)}%`,
+        `background-image: ${background}`, `transform: ${pointTransform}`, 'transform-origin: center',
+        ...(filters.length ? [`filter: ${filters.join(' ')}`] : []),
+      ];
+      return `${o.rootSel} .${cls} > .${pointClass} {\n${rule.map(value => `  ${value};`).join('\n')}\n}`;
+    });
+    if (points.length) css += `\n\n${points.join('\n\n')}`;
+  }
   if (texture) {
     // Shared helper: the tile is axis-aligned at full strength, this rule applies the opacity once, and a rotated texture rotates
     // the whole repeating overlay (oversized so it still covers the layer) — the repeat stays seamless at any angle.
@@ -332,7 +373,7 @@ export function layeredOutput(project: GradientProject) {
   const visible = project.layers.filter(l => l.visible);
   const defs = effectDefs(project, names);
   const anyAnim = visible.some(l => l.anim.enabled && l.anim.tracks.length);
-  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}"></i>`);
+  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
   const html = `<div ${root.attr} aria-hidden="true">\n${rows.join('\n')}${defs ? `\n  <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n</div>`;
   const css = [rootCss(project, o), ...[...visible].reverse().map(l => layerCss(l, project, o)), ...(anyAnim ? [`${out.comments ? '/* Respect reduced-motion preferences */\n' : ''}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : [])].join('\n\n');
   return { html, css, all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>` };
@@ -352,7 +393,15 @@ function flatten(layer: GradientLayer, warnings: string[], flatTexture: boolean)
   if (l.type === 'noise') { if (t.rotate || t.x || t.y || t.scale !== 1) warnings.push(`${name}: transforming grain needs layered output`); l.transform = { x: 0, y: 0, scale: 1, rotate: 0, skewX: 0, skewY: 0 }; return l; }
   if (l.type === 'mesh') {
     if (t.rotate) warnings.push(`${name}: rotating a mesh needs layered output`);
-    l.mesh.points.forEach(p => { p.x = 50 + (p.x - 50) * t.scale + t.x; p.y = 50 + (p.y - 50) * t.scale + t.y; p.size *= t.scale; });
+    l.mesh.points.forEach(p => {
+      if (activeEffects(p.effects ?? []).length) warnings.push(`${name}: point effects need layered output`);
+      const pointTransform = { ...IDENTITY, ...(p.transform ?? {}) };
+      if (pointTransform.rotate || pointTransform.skewX || pointTransform.skewY) warnings.push(`${name}: rotated or skewed points need layered output`);
+      p.x += pointTransform.x;
+      p.y += pointTransform.y;
+      p.size *= pointTransform.scale;
+      p.transform = { ...IDENTITY };
+    });
     l.transform = { x: 0, y: 0, scale: 1, rotate: 0, skewX: 0, skewY: 0 };
     return l;
   }
