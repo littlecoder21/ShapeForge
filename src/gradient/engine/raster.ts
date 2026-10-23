@@ -1,9 +1,11 @@
 import { hexToRgb as hexRgb, rgbaCss, type RGBA } from './color';
 import { EFFECTS, activeEffects, blurOf } from './effects';
 import { bleedOf, layerMatrix, linearLine, offsetOf, periodOf, radii, rad } from './geom';
-import { rampRange, rampStops } from './ramp';
+import { colorAtPos, rampRange, rampStops } from './ramp';
 import { pointRadii } from './mesh';
+import { curveBands } from './curve';
 import { noiseCanvas } from './noise';
+import { clipLayerMask } from './layerMask';
 import type { BlendMode, GradientLayer, GradientProject } from './model';
 import { projectSvg } from './svg';
 
@@ -28,6 +30,7 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   const { w, h } = project.canvas, bleed = bleedOf(layer, project.canvas), bx = bleed * w, by = bleed * h;
   ctx.save();
   ctx.beginPath(); ctx.rect(-bx, -by, w + 2 * bx, h + 2 * by); ctx.clip();
+  if (layer.mask.enabled) clipLayerMask(ctx, layer.mask, project.canvas);
   if (layer.type === 'mesh') {
     if (layer.mesh.base) { ctx.fillStyle = layer.mesh.base; ctx.fillRect(-bx, -by, w + 2 * bx, h + 2 * by); }
     [...layer.mesh.points].reverse().forEach(p => {
@@ -43,6 +46,17 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   if (layer.type === 'noise') {
     const tile = noiseCanvas(layer.noise), pat = ctx.createPattern(tile, 'repeat');
     if (pat) { ctx.fillStyle = pat; ctx.fillRect(-bx, -by, w + 2 * bx, h + 2 * by); }
+    ctx.restore(); return true;
+  }
+  if (layer.type === 'curve') {
+    curveBands(layer.curve, project.canvas).forEach(band => {
+      ctx.fillStyle = rgbaCss(colorAtPos(layer, band.progress * 100));
+      ctx.beginPath();
+      ctx.moveTo(band.points[0].x, band.points[0].y);
+      band.points.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.closePath();
+      ctx.fill();
+    });
     ctx.restore(); return true;
   }
   const stops = rampStops(layer), { lo, hi } = rampRange(layer);

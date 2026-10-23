@@ -4,6 +4,9 @@ import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } fro
 import { meshCoord, meshParts } from './mesh';
 import { outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
 import { noiseDataUri } from './noise';
+import { curveSvgDataUri } from './curve';
+import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
+import { curveProgress } from './ramp';
 import { textureDataUri } from './textures';
 
 /* ═══════════════════════════ CSS generation ═══════════════════════════
@@ -64,7 +67,16 @@ export function stopTokens(layer: GradientLayer, ctx: Ctx): string[] {
     out.push(`${colorOf(x)} ${posOf(x)}`);
     if (!nx) return;
     if (x.hard) out.push(`${colorOf(x)} ${posOf(nx)}`);
-    else if (x.mid !== undefined && Math.abs(x.mid - 50) > 0.5 && nx.pos - x.pos > 0.01 && !ctx.posVar.has(x.id) && !ctx.posVar.has(nx.id)) {
+    else if (x.curve && nx.pos - x.pos > 0.01) {
+      const steps = 24;
+      for (let k = 1; k < steps; k++) {
+        const progress = k / steps, eased = curveProgress(x, progress);
+        const p = x.pos + (nx.pos - x.pos) * progress;
+        const first = r2((1 - eased) * 100, 3), second = r2(eased * 100, 3);
+        const color = `color-mix(in ${layer.space}, ${colorOf(x)} ${first}%, ${colorOf(nx)} ${second}%)`;
+        out.push(`${color} ${posCss(layer, p, ctx)}`);
+      }
+    } else if (x.mid !== undefined && Math.abs(x.mid - 50) > 0.5 && nx.pos - x.pos > 0.01 && !ctx.posVar.has(x.id) && !ctx.posVar.has(nx.id)) {
       out.push(posCss(layer, x.pos + ((nx.pos - x.pos) * x.mid) / 100, ctx));
     }
   });
@@ -116,6 +128,7 @@ export interface ImageItem { text: string; parts?: GradientParts; label: string;
 export function layerImages(layer: GradientLayer, project: GradientProject, o: { alphaMul?: number; flat?: boolean; cls?: string } = {}): ImageItem[] {
   const line = (g: GradientParts) => `${g.fn}(${[g.head, ...g.stops].join(', ')})`;
   if (layer.type === 'noise') return [{ text: noiseDataUri(layer.noise), label: 'Grain', size: `${Math.round(layer.noise.tile)}px ${Math.round(layer.noise.tile)}px` }];
+  if (layer.type === 'curve') return [{ text: curveSvgDataUri(layer, project.canvas), label: `${layer.name} (curve)` }];
   if (layer.type === 'mesh') {
     const ctx = makeCtx(layer, project, o);
     const items = meshParts(layer, project, { alphaMul: ctx.alphaMul, flat: !!o.flat, s: ctx.s, vars: ctx.ptVar }).map((g, i) => ({ text: line(g), parts: g, label: `Point ${i + 1}` }));
@@ -241,6 +254,16 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   const items = layerImages(layer, project, { cls: key });
   if (layer.type === 'mesh' && layer.mesh.base) decls.push(`background-color: ${layer.mesh.base}`);
   decls.push('contain: layout');
+  if (layer.mask.enabled) {
+    if (layer.mask.curved) {
+      const image = layerMaskSvgDataUri(layer.mask);
+      decls.push(`mask-image: ${image}`, 'mask-size: 100% 100%', 'mask-repeat: no-repeat');
+      decls.push(`-webkit-mask-image: ${image}`, '-webkit-mask-size: 100% 100%', '-webkit-mask-repeat: no-repeat');
+    } else {
+      const polygon = layerMaskPolygon(layer.mask);
+      decls.push(`clip-path: ${polygon}`, `-webkit-clip-path: ${polygon}`);
+    }
+  }
   if (layer.solidColor !== undefined) decls.push(`background-color: ${layer.solidColor}`);
   else if (o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
   else decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
@@ -315,11 +338,12 @@ export function layeredOutput(project: GradientProject) {
 /* ───────────────────────── flat output ───────────────────────── */
 
 /** Fold transforms into the gradient where CSS can express them; report what cannot be expressed. */
-function flatten(layer: GradientLayer, warnings: string[]): GradientLayer {
+function flatten(layer: GradientLayer, warnings: string[], flatTexture: boolean): GradientLayer {
   const l: GradientLayer = JSON.parse(JSON.stringify(layer)), t = l.transform;
   const name = `“${l.name}”`;
+  if (l.mask.enabled) warnings.push(`${name}: custom layer shape needs layered output`);
   if (activeEffects(l.effects).length) warnings.push(`${name}: effects (blur/filters) need layered output`);
-  if (l.texture.enabled) warnings.push(`${name}: texture overlay needs layered output`);
+  if (l.texture.enabled && !flatTexture) warnings.push(`${name}: texture overlay needs layered output`);
   if (l.anim.enabled && l.anim.tracks.length) warnings.push(`${name}: animation needs layered output`);
   if (t.skewX || t.skewY) warnings.push(`${name}: skew needs layered output`);
   if (l.type === 'noise') { if (t.rotate || t.x || t.y || t.scale !== 1) warnings.push(`${name}: transforming grain needs layered output`); l.transform = { x: 0, y: 0, scale: 1, rotate: 0, skewX: 0, skewY: 0 }; return l; }
@@ -348,7 +372,12 @@ function flatten(layer: GradientLayer, warnings: string[]): GradientLayer {
 
 export function flatOutput(project: GradientProject) {
   const warnings: string[] = [];
-  const vis = project.layers.filter(l => l.visible).map(l => ({ src: l, flat: flatten(l, warnings) }));
+  const visible = project.layers.filter(l => l.visible);
+  const flatTexture = visible.length === 1
+    && visible[0].opacity === 1
+    && visible[0].blend === 'normal'
+    && isIdentityTransform(visible[0]);
+  const vis = visible.map(l => ({ src: l, flat: flatten(l, warnings, flatTexture) }));
   const solidBase = vis.length === 1 && vis[0].src.solidColor !== undefined
     && vis[0].src.opacity === 1 && vis[0].src.blend === 'normal'
     && !activeEffects(vis[0].src.effects).length

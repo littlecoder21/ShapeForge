@@ -42,7 +42,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
   const [compareSplit, setCompareSplit] = useState(50);
   const [playEpoch, setPlayEpoch] = useState(0);
 
-  const overlay = useMemo(() => (layer && layer.visible && layer.solidColor === undefined ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
+  const overlay = useMemo(() => (layer && layer.visible && (layer.solidColor === undefined || layer.mask.enabled) ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const live = useRef({ overlay, layer, canvas: project.canvas }); live.current = { overlay, layer, canvas: project.canvas };
 
@@ -139,7 +139,8 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
       const next = dragHandle({ start: g.start, handle: g.handle, pointer: p, startPointer: g.p0, canvas: live.current.canvas, shift: false });
       store.updateLayer(g.start.id, () => next);
       const hk = g.handle.kind;
-      setRead(hk === 'stop' ? `Stop ${next.stops.find(s => s.id === g.handle.stopId)?.pos.toFixed(1)}%` : hk === 'angle' || hk === 'from' ? `${next.angle.toFixed(1)}°` : hk === 'tf-scale' ? `Scale ${Math.round(next.transform.scale * 100)}%` : hk === 'tf-rotate' ? `Rotate ${next.transform.rotate}°` : hk === 'rx' || hk === 'ry' ? `${next.shape === 'circle' ? 'Radius' : hk === 'rx' ? 'Rx' : 'Ry'} ${(hk === 'ry' ? next.ry : next.rx).toFixed(1)}%` : hk === 'point' ? (() => { const q = next.mesh.points.find(x => x.id === g.handle.stopId); return `X ${q?.x}%  Y ${q?.y}%`; })() : hk === 'psize' ? `Size ${next.mesh.points.find(x => x.id === g.handle.stopId)?.size}%` : hk === 'move' || hk === 'tf-move' ? `X ${next.transform.x}%  Y ${next.transform.y}%` : `${next.cx}% · ${next.cy}%`);
+      const maskPoint = g.handle.maskIndex === undefined ? undefined : next.mask[g.handle.kind === 'mask-corner' ? 'corners' : 'controls'][g.handle.maskIndex];
+      setRead(hk === 'mask-corner' ? `Corner ${g.handle.maskIndex! + 1}: ${maskPoint?.x.toFixed(1)}% · ${maskPoint?.y.toFixed(1)}%` : hk === 'mask-control' ? `Curve handle ${g.handle.maskIndex! + 1}: ${maskPoint?.x.toFixed(1)}% · ${maskPoint?.y.toFixed(1)}%` : hk === 'stop' ? `Stop ${next.stops.find(s => s.id === g.handle.stopId)?.pos.toFixed(1)}%` : hk === 'curve-point' ? `P${g.handle.pointIndex}: ${next.curve[`p${g.handle.pointIndex}` as keyof typeof next.curve].x.toFixed(1)}% · ${next.curve[`p${g.handle.pointIndex}` as keyof typeof next.curve].y.toFixed(1)}%` : hk === 'angle' || hk === 'from' ? `${next.angle.toFixed(1)}°` : hk === 'tf-scale' ? `Scale ${Math.round(next.transform.scale * 100)}%` : hk === 'tf-rotate' ? `Rotate ${next.transform.rotate}°` : hk === 'rx' || hk === 'ry' ? `${next.shape === 'circle' ? 'Radius' : hk === 'rx' ? 'Rx' : 'Ry'} ${(hk === 'ry' ? next.ry : next.rx).toFixed(1)}%` : hk === 'point' ? (() => { const q = next.mesh.points.find(x => x.id === g.handle.stopId); return `X ${q?.x}%  Y ${q?.y}%`; })() : hk === 'psize' ? `Size ${next.mesh.points.find(x => x.id === g.handle.stopId)?.size}%` : hk === 'move' || hk === 'tf-move' ? `X ${next.transform.x}%  Y ${next.transform.y}%` : `${next.cx}% · ${next.cy}%`);
     }
   };
   const schedule = () => { if (!raf.current) raf.current = requestAnimationFrame(frame); };
@@ -204,11 +205,11 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
             {overlay.local.map((p, i) => <g key={i}><path className={`gs-line ${p.kind} ${p.dash ? 'dash' : ''}`} d={p.d} /></g>)}
           </g>
           {overlay.handles.map(hd => {
-            const sel = hd.stopId && hd.stopId === stopId, sq = hd.kind === 'rx' || hd.kind === 'ry' || hd.kind === 'tf-scale';
+            const sel = hd.stopId && hd.stopId === stopId, sq = hd.kind === 'rx' || hd.kind === 'ry' || hd.kind === 'tf-scale' || hd.kind === 'mask-control';
             return <g key={hd.id} transform={`translate(${hd.x} ${hd.y})`} data-testid={`gs-handle-${hd.kind}`}>
               <g style={INV}>
                 {hd.kind === 'stop' && sel && <circle r={19} className="gs-halo" />}
-                {sq ? <rect x={-8} y={-8} width={16} height={16} rx={3} className="gs-h" style={{ fill: hd.color }} />
+                {sq ? <rect x={hd.kind === 'mask-control' ? -6 : -8} y={hd.kind === 'mask-control' ? -6 : -8} width={hd.kind === 'mask-control' ? 12 : 16} height={hd.kind === 'mask-control' ? 12 : 16} rx={3} className={`gs-h ${hd.kind}`} style={{ fill: hd.color }} />
                   : <circle r={hd.kind === 'stop' ? (sel ? 13 : 11) : hd.kind === 'origin' || hd.kind === 'move' || hd.kind === 'tf-move' ? 9 : 10} className={`gs-h ${hd.kind}`} style={{ fill: hd.kind === 'stop' ? stopColor(hd.stopId) : hd.color }} />}
                 {hd.label && <text className="gs-hl" x={14} y={-12}>{hd.label}</text>}
               </g>

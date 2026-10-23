@@ -1,5 +1,7 @@
 import { apply, axisValueToPos, deg, invert, layerMatrix, linearLine, normDeg, pivotOf, radii, rad, stopAxisValue, type Canvas, type Mat, type Pt } from './geom';
 import { pointRadii } from './mesh';
+import { curvePoint } from './curve';
+import { layerMaskPath } from './layerMask';
 import type { GradientLayer } from './model';
 
 /* ═══════════ Direct manipulation: handles + drag maths ═══════════
@@ -7,8 +9,8 @@ import type { GradientLayer } from './model';
  * glued to the gradient when the layer is moved / rotated / scaled. All maths is pure (testable without a DOM).
  */
 
-export type HandleKind = 'origin' | 'move' | 'angle' | 'from' | 'rx' | 'ry' | 'stop' | 'tf-move' | 'tf-scale' | 'tf-rotate' | 'point' | 'psize';
-export interface Handle { id: string; kind: HandleKind; x: number; y: number; stopId?: string; color?: string; r: number; pri: number; label?: string; locked?: boolean }
+export type HandleKind = 'origin' | 'move' | 'angle' | 'from' | 'rx' | 'ry' | 'stop' | 'curve-point' | 'mask-corner' | 'mask-control' | 'tf-move' | 'tf-scale' | 'tf-rotate' | 'point' | 'psize';
+export interface Handle { id: string; kind: HandleKind; x: number; y: number; stopId?: string; pointIndex?: number; maskIndex?: number; color?: string; r: number; pri: number; label?: string; locked?: boolean }
 export interface Overlay {
   /** matrix applied to `local` geometry (layer space → canvas) */
   matrix: Mat;
@@ -24,6 +26,24 @@ export function layerOverlay(layer: GradientLayer, canvas: Canvas, mode: 'gradie
   const { w, h } = canvas, M = layerMatrix(layer, canvas), map = (p: Pt) => apply(M, p);
   const handles: Handle[] = [], local: Overlay['local'] = [];
   const sorted = [...layer.stops];
+
+  if (layer.mask.enabled) {
+    local.push({ kind: 'shape', d: layerMaskPath(layer.mask, canvas) });
+    layer.mask.corners.forEach((p, i) => handles.push({
+      id: `mask-corner-${i}`, kind: 'mask-corner', maskIndex: i, ...map({ x: p.x * w / 100, y: p.y * h / 100 }),
+      r: 14, pri: 6, color: '#69dfb5', label: `C${i + 1}`,
+    }));
+    if (layer.mask.curved) {
+      layer.mask.controls.forEach((p, i) => handles.push({
+        id: `mask-control-${i}`, kind: 'mask-control', maskIndex: i, ...map({ x: p.x * w / 100, y: p.y * h / 100 }),
+        r: 12, pri: 5, color: '#c792ff', label: `H${i + 1}`,
+      }));
+      layer.mask.controls.forEach((p, i) => {
+        const corner = layer.mask.corners[Math.floor(i / 2)];
+        local.push({ kind: 'axis', d: `M${corner.x * w / 100} ${corner.y * h / 100}L${p.x * w / 100} ${p.y * h / 100}`, dash: true });
+      });
+    }
+  }
 
   if (mode === 'transform') {
     const piv = pivotOf(layer, canvas), t = layer.transform;
@@ -47,6 +67,19 @@ export function layerOverlay(layer: GradientLayer, canvas: Canvas, mode: 'gradie
       handles.push({ id: `pt-${p.id}`, kind: 'point', stopId: p.id, ...map(c), r: 14, pri: 3, color: p.color, locked: p.locked });
       if (p.id === selectedId) handles.push({ id: `ps-${p.id}`, kind: 'psize', stopId: p.id, ...map({ x: c.x + (rr.rx / 100) * w, y: c.y }), r: 12, pri: 4, color: '#8fb4ff', label: `${Math.round(p.size)}%`, locked: p.locked });
     });
+    return { matrix: M, local, handles };
+  }
+  if (layer.type === 'curve') {
+    const { p0, p1, p2, p3 } = layer.curve;
+    local.push({ kind: 'axis', d: `M${p0.x * w / 100} ${p0.y * h / 100}C${p1.x * w / 100} ${p1.y * h / 100} ${p2.x * w / 100} ${p2.y * h / 100} ${p3.x * w / 100} ${p3.y * h / 100}` });
+    local.push({ kind: 'axis', d: `M${p0.x * w / 100} ${p0.y * h / 100}L${p1.x * w / 100} ${p1.y * h / 100}M${p2.x * w / 100} ${p2.y * h / 100}L${p3.x * w / 100} ${p3.y * h / 100}`, dash: true });
+    ([p0, p1, p2, p3] as const).forEach((p, i) => handles.push({
+      id: `curve-point-${i}`, kind: 'curve-point', pointIndex: i, ...map({ x: (p.x / 100) * w, y: (p.y / 100) * h }),
+      r: 13, pri: i === 0 || i === 3 ? 4 : 3, color: i === 0 ? '#69dfb5' : i === 3 ? '#ffd166' : '#8fb4ff', label: `P${i}`,
+    }));
+    sorted.forEach(s => handles.push({
+      id: `stop-${s.id}`, kind: 'stop', stopId: s.id, ...map(curvePoint(layer.curve, s.pos / 100, canvas)), r: 11, pri: 4, color: s.color,
+    }));
     return { matrix: M, local, handles };
   }
   if (layer.type === 'linear') {
@@ -122,16 +155,51 @@ export function dragHandle({ start, handle, pointer, startPointer, canvas, shift
       let v: number;
       if (start.type === 'linear') { const ln = linearLine(start.angle, w, h); v = (p.x - ln.x1) * ln.dx + (p.y - ln.y1) * ln.dy; }
       else if (start.type === 'radial') v = (start.cy / 100) * h - p.y;
+      else if (start.type === 'curve') {
+        let closest = { distance: Infinity, progress: 0 };
+        for (let i = 0; i <= 300; i++) {
+          const progress = i / 300, q = curvePoint(start.curve, progress, canvas), distance = Math.hypot(q.x - p.x, q.y - p.y);
+          if (distance < closest.distance) closest = { distance, progress };
+        }
+        v = closest.progress * 100;
+      }
       else {
         const c = { x: (start.cx / 100) * w, y: (start.cy / 100) * h };
         v = normDeg(angleFrom(c, p) - start.angle);
         if (start.repeating) { const per = start.repeat.unit === '%' ? start.repeat.size * 3.6 : start.repeat.size, off = start.repeat.unit === '%' ? start.repeat.offset * 3.6 : start.repeat.offset; v = off + ((((v - off) % per) + per) % per); }
         else if (v > 345 && s.pos < 15) v -= 360;
       }
-      let pos = axisValueToPos(start, canvas, v);
+      let pos = start.type === 'curve' ? v : axisValueToPos(start, canvas, v);
       pos = Math.max(0, Math.min(100, pos));
       if (!shift) { pos = snapTo(pos, 25, 1.2); next.stops.forEach(o => { if (o.id !== s.id && Math.abs(o.pos - pos) < 1.2) pos = o.pos; }); }
       s.pos = Math.round(pos * 10) / 10;
+      break;
+    }
+    case 'curve-point': {
+      if (handle.pointIndex === undefined) break;
+      const key = (`p${handle.pointIndex}`) as keyof GradientLayer['curve'];
+      const point = start.curve[key];
+      const x = point.x + ((p.x - p0.x) / w) * 100, y = point.y + ((p.y - p0.y) / h) * 100;
+      next.curve = {
+        ...start.curve,
+        [key]: {
+          x: r1(Math.max(-25, Math.min(125, x))),
+          y: r1(Math.max(-25, Math.min(125, y))),
+        },
+      };
+      break;
+    }
+    case 'mask-corner': case 'mask-control': {
+      if (handle.maskIndex === undefined) break;
+      const key = handle.kind === 'mask-corner' ? 'corners' : 'controls';
+      const points = [...start.mask[key]];
+      const point = points[handle.maskIndex];
+      if (!point) break;
+      points[handle.maskIndex] = {
+        x: r1(Math.max(-25, Math.min(125, point.x + ((p.x - p0.x) / w) * 100))),
+        y: r1(Math.max(-25, Math.min(125, point.y + ((p.y - p0.y) / h) * 100))),
+      };
+      next.mask = { ...start.mask, [key]: points };
       break;
     }
     case 'point': {

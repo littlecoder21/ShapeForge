@@ -5,6 +5,8 @@ import { rampRange, rampStops, colorAtPos } from './ramp';
 import { meshCoord as _mc, pointRadii } from './mesh';
 import { noiseFilterMarkup } from './noise';
 import { textureTileSvg } from './textures';
+import { curveBands } from './curve';
+import { layerMaskPath } from './layerMask';
 import type { GradientLayer, GradientProject } from './model';
 
 /* ═══════════ SVG generation ═══════════
@@ -59,7 +61,7 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   const defs: string[] = [];
   let fill = '';
   let inner = '';
-  const isStop = layer.type === 'linear' || layer.type === 'radial' || layer.type === 'conic';
+  const isStop = layer.type === 'linear' || layer.type === 'radial' || layer.type === 'conic' || layer.type === 'curve';
   const stops = () => (isStop ? rampStops(layer).map(s => stopTag(s.offset, s.color)).join('') : '');
   const { lo } = isStop ? rampRange(layer) : { lo: 0 };
 
@@ -102,6 +104,8 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
     // fr = inner radius (supported by all current browsers)
     defs.push(`<radialGradient id="${id}-g" gradientUnits="userSpaceOnUse" cx="${r2(cx)}" cy="${r2(cy)}" fx="${r2(cx)}" fy="${r2(cy)}" r="${r2(Math.max(0.01, r1))}"${r0 > 0 ? ` fr="${r2(r0)}"` : ''} gradientTransform="translate(${r2(cx)} ${r2(cy)}) scale(1 ${r2(scaleY, 4)}) translate(${r2(-cx)} ${r2(-cy)})"${spread}>${stops()}</radialGradient>`);
     fill = `url(#${id}-g)`;
+  } else if (layer.type === 'curve') {
+    inner = curveBands(layer.curve, project.canvas).map(band => `<path d="${band.d}" fill="${rgbaCss(colorAtPos(layer, band.progress * 100))}"/>`).join('');
   } else {
     defs.push(`<clipPath id="${id}-c"><rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}"/></clipPath>`);
     inner = `<g clip-path="url(#${id}-c)">${conicWedges(layer, w, h, bx, by)}</g>`;
@@ -116,6 +120,11 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
   }
   const m = layerMatrix(layer, project.canvas);
   const tf = isIdentityTransform(layer) ? '' : ` transform="matrix(${m.map(v => r2(v, 5)).join(' ')})"`;
+  let clipAttr = '';
+  if (layer.mask.enabled) {
+    defs.push(`<clipPath id="${id}-mask" clipPathUnits="userSpaceOnUse"><path d="${layerMaskPath(layer.mask, project.canvas)}"/></clipPath>`);
+    clipAttr = ` clip-path="url(#${id}-mask)"`;
+  }
   const style = layer.blend !== 'normal' ? ` style="mix-blend-mode:${layer.blend}"` : '';
   const op = layer.opacity < 1 ? ` opacity="${r2(layer.opacity, 3)}"` : '';
   const content = inner || `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${fill}"/>`;
@@ -126,7 +135,7 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
     defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${offsetX}" y="${offsetY}" width="${r2(size)}" height="${r2(size)}"><image href="${tile}" xlink:href="${tile}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
     textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(layer.texture.opacity / 100, 3)}" style="mix-blend-mode:${layer.texture.blend}"/>`;
   }
-  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}>${content}${textureOverlay}</g>` };
+  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}${clipAttr}>${content}${textureOverlay}</g>` };
 }
 
 export function projectSvgParts(project: GradientProject, prefix = 'g'): SvgParts {

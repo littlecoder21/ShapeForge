@@ -8,8 +8,8 @@ import StopEditor from './StopEditor';
 import { uid, type AnimTrack } from '../engine/model';
 import { ColorInput, Dial, Empty, useStudio } from './ui';
 
-type StopGradientKind = Extract<GradientKind, 'linear' | 'radial' | 'conic'>;
-const KINDS: { id: StopGradientKind; label: string }[] = [{ id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'conic', label: 'Conic' }];
+type StopGradientKind = Extract<GradientKind, 'linear' | 'radial' | 'conic' | 'curve'>;
+const KINDS: { id: StopGradientKind; label: string }[] = [{ id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'conic', label: 'Conic' }, { id: 'curve', label: 'Curve' }];
 const spinTrack = (l: GradientLayer): AnimTrack | undefined => (l.anim.enabled ? l.anim.tracks.find(t => t.prop === 'angle') : undefined);
 const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
 
@@ -54,6 +54,7 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
   const commit = () => undefined;
   const changeType = (t: StopGradientKind) => set({
     type: t, angle: t === 'conic' ? 0 : t === 'linear' ? 135 : layer.angle,
+    repeating: t === 'curve' ? false : layer.repeating,
     repeat: { ...layer.repeat, unit: t === 'conic' ? 'deg' : layer.repeat.unit === 'deg' ? 'px' : layer.repeat.unit, size: t === 'conic' ? 45 : layer.repeat.unit === 'deg' ? 40 : layer.repeat.size },
     anim: { ...layer.anim, tracks: t === 'radial' ? layer.anim.tracks.filter(x => x.prop !== 'angle') : layer.anim.tracks },
   });
@@ -67,10 +68,19 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
     <Section title="Colour stops" hint={`${layer.stops.length} stops`}><StopEditor layerId={layerId} /></Section>
     <Section title="Type">
       <Seg value={t} label="Gradient type" options={KINDS.map(k => ({ id: k.id, label: k.label }))} onChange={changeType} testId="gradient-type" />
-      <Switch label="Repeating" checked={layer.repeating} onChange={v => set({ repeating: v })} testId="gradient-repeating" />
+      {t !== 'curve' && <Switch label="Repeating" checked={layer.repeating} onChange={v => set({ repeating: v })} testId="gradient-repeating" />}
       <div className="field-label">Colour interpolation</div>
       <Seg value={layer.space} label="Colour space" options={[{ id: 'srgb', label: 'sRGB' }, { id: 'srgb-linear', label: 'Linear RGB' }, { id: 'oklab', label: 'OKLab' }, { id: 'oklch', label: 'OKLCH' }]} onChange={v => set({ space: v })} testId="gradient-space" />
     </Section>
+    {t === 'curve' && <Section title="Curve path" hint="Drag the four points on the preview">
+      <p className="hint">P0 and P3 are the endpoints. P1 and P2 bend the path. Drag a colour-stop handle to move its colour along the curve.</p>
+      {(['p0', 'p1', 'p2', 'p3'] as const).map((key, index) => <div key={key} className="gs-curve-point-controls">
+        <div className="field-label">P{index}{index === 0 || index === 3 ? ' · endpoint' : ' · control'}</div>
+        <ValueControl label={`P${index} X`} value={layer.curve[key].x} min={-25} max={125} step={0.5} unit="%" onChange={x => set({ curve: { ...layer.curve, [key]: { ...layer.curve[key], x } } }, `curve-${key}-x`)} testId={`curve-${key}-x`} />
+        <ValueControl label={`P${index} Y`} value={layer.curve[key].y} min={-25} max={125} step={0.5} unit="%" onChange={y => set({ curve: { ...layer.curve, [key]: { ...layer.curve[key], y } } }, `curve-${key}-y`)} testId={`curve-${key}-y`} />
+      </div>)}
+      <p className="hint">The curve is a procedural gradient exported as SVG artwork, PNG, and a CSS SVG data image.</p>
+    </Section>}
     {t === 'linear' && <Section title="Direction">
       <div className="gs-anglerow"><Dial value={layer.angle} onChange={a => set({ angle: a }, 'angle')} onCommit={commit} />
         <div className="gs-anglechips">{ANGLES.map(a => <button key={a} type="button" className={`chip ${layer.angle === a ? 'active' : ''}`} onClick={() => set({ angle: a })}>{a}°</button>)}</div></div>

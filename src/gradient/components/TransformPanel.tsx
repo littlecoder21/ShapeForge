@@ -1,6 +1,6 @@
 import { RotateCcw } from 'lucide-react';
-import { Section, ValueControl } from '../../shared/controls';
-import { BLEND_MODES, IDENTITY, type GradientLayer, type Transform } from '../engine/model';
+import { Section, Switch, ValueControl } from '../../shared/controls';
+import { BLEND_MODES, DEFAULT_LAYER_MASK, IDENTITY, type GradientLayer, type LayerMask, type Transform } from '../engine/model';
 import { useStore } from '../engine/store';
 import { Empty, useStudio } from './ui';
 
@@ -27,6 +27,20 @@ export default function TransformPanel({ layerId }: { layerId: string }) {
       <ValueControl label="Skew X" value={t.skewX} min={-60} max={60} step={0.5} unit="°" def={0} onChange={v => tf('skewX', v)} testId="tf-skewx" />
       <ValueControl label="Skew Y" value={t.skewY} min={-60} max={60} step={0.5} unit="°" def={0} onChange={v => tf('skewY', v)} testId="tf-skewy" />
       <button type="button" className="btn wide" onClick={() => set({ transform: { ...IDENTITY } })} data-testid="tf-reset"><RotateCcw />Reset transform</button>
+    </Section>
+    <Section title="Layer shape" hint="Reshape the boundary without warping its contents">
+      <Switch label="Custom boundary" checked={layer.mask.enabled} onChange={enabled => set({ mask: { ...layer.mask, enabled } })} testId="mask-enabled" />
+      {layer.mask.enabled && <>
+        <Switch label="Curved edges" checked={layer.mask.curved} onChange={curved => set({ mask: { ...layer.mask, curved } })} testId="mask-curved" />
+        <p className="hint">Drag the four green corner handles on the preview. Curved edges reveal purple handles for adjusting each Bézier section.</p>
+        {layer.mask.corners.map((point, index) => <div className="gs-curve-point-controls" key={`corner-${index}`}>
+          <div className="field-label">Corner {index + 1}</div>
+          <ValueControl label={`Corner ${index + 1} X`} value={point.x} min={-25} max={125} step={0.5} unit="%" onChange={x => set({ mask: { ...layer.mask, corners: layer.mask.corners.map((p, i) => i === index ? { ...p, x } : p) as LayerMask['corners'] } }, `mask-corner-${index}-x`)} testId={`mask-corner-${index}-x`} />
+          <ValueControl label={`Corner ${index + 1} Y`} value={point.y} min={-25} max={125} step={0.5} unit="%" onChange={y => set({ mask: { ...layer.mask, corners: layer.mask.corners.map((p, i) => i === index ? { ...p, y } : p) as LayerMask['corners'] } }, `mask-corner-${index}-y`)} testId={`mask-corner-${index}-y`} />
+        </div>)}
+        {layer.mask.curved && <button type="button" className="btn wide" onClick={() => set({ mask: { ...layer.mask, controls: DEFAULT_LAYER_MASK.controls.map(p => ({ ...p })) as LayerMask['controls'] } })} data-testid="mask-reset-curves"><RotateCcw />Reset curve handles</button>}
+        <button type="button" className="btn wide" onClick={() => set({ mask: { ...DEFAULT_LAYER_MASK, corners: DEFAULT_LAYER_MASK.corners.map(p => ({ ...p })) as LayerMask['corners'], controls: DEFAULT_LAYER_MASK.controls.map(p => ({ ...p })) as LayerMask['controls'] } })} data-testid="mask-reset"><RotateCcw />Reset layer shape</button>
+      </>}
     </Section>
   </div>;
 }

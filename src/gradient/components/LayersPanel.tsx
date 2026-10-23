@@ -2,6 +2,7 @@ import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, GripVertical, Trash2 } from 'lucide-react';
 import { gradientFn } from '../engine/css';
 import { BLEND_MODES, cloneLayer, newSolidLayer, type GradientLayer, type GradientProject } from '../engine/model';
+import { SOLID_SWATCHES, setSolidColor } from '../engine/solidColors';
 import { useStore } from '../engine/store';
 import { LAYER_TEMPLATES, typeIcon } from '../engine/templates';
 import { ValueControl } from '../../shared/controls';
@@ -65,7 +66,7 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
           <button type="button" className="gs-eye" onClick={() => toggle(l)} aria-label={l.visible ? `Hide ${l.name}` : `Show ${l.name}`} aria-pressed={l.visible} data-testid="layer-eye">{l.visible ? <Eye /> : <EyeOff />}</button>
           <button type="button" className="gs-layerbtn" onClick={() => select(l.id)} aria-label={`Select ${l.name}`} aria-current={l.id === layerId} data-testid="layer-select">
             <LayerThumb layer={l} />
-            <span className="gs-lname">{l.name}<small>{typeIcon[l.type]} {l.solidColor !== undefined ? 'solid color' : `${l.repeating ? 'repeating ' : ''}${l.type}`}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
+            <span className="gs-lname">{l.name}<small>{l.solidColor !== undefined ? '■' : typeIcon[l.type]} {l.solidColor !== undefined ? 'solid color' : `${l.repeating ? 'repeating ' : ''}${l.type}`}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
           </button>
           <span className="gs-lact">
             {l.id === layerId && <>
@@ -87,14 +88,23 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
           color={selected.solidColor}
           alpha={1}
           showAlpha={false}
-          onChange={color => store.updateLayer(selected.id, layer => ({
-            ...layer,
-            solidColor: color,
-            stops: layer.stops.map((item, i) => ({ ...item, color, alpha: 1, pos: i === 0 ? 0 : 100 })),
-          }), { coalesce: 'solid-color' })}
+          onChange={color => store.updateLayer(selected.id, layer => setSolidColor(layer, color), { coalesce: 'solid-color' })}
           label="Solid color"
           testId="solid-color"
         />
+        <div className="chips wrap" role="group" aria-label="Solid color swatches">
+          {SOLID_SWATCHES.map(swatch => <button
+            key={swatch.id}
+            type="button"
+            className={`chip ${selected.solidColor === swatch.color ? 'active' : ''}`}
+            onClick={() => store.updateLayer(selected.id, layer => setSolidColor(layer, swatch.color))}
+            aria-label={`Set solid color to ${swatch.label}`}
+            title={swatch.label}
+            data-testid={`solid-swatch-${swatch.id}`}
+          >
+            <span aria-hidden="true" style={{ display: 'inline-block', width: 10, height: 10, marginRight: 6, borderRadius: 3, background: swatch.color, border: '1px solid rgba(128,128,128,.5)', verticalAlign: '-1px' }} />{swatch.label}
+          </button>)}
+        </div>
       </div>}
       <label className="nf"><span className="nf-label">Blend mode</span><select className="generate-select" value={selected.blend} onChange={e => store.updateLayer(selected.id, { blend: e.target.value as GradientLayer['blend'] })} data-testid="quick-blend" aria-label="Blend mode">{BLEND_MODES.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
       <ValueControl label="Opacity" value={Math.round(selected.opacity * 100)} min={0} max={100} unit="%" def={100} onChange={v => store.updateLayer(selected.id, { opacity: v / 100 }, { coalesce: 'opacity' })} testId="quick-opacity" />

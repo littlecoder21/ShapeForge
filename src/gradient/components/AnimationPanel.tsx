@@ -7,7 +7,7 @@ import { useStore } from '../engine/store';
 import { ColorInput, Empty, useStudio } from './ui';
 
 const PROPS: { id: AnimProp; label: string; min: number; max: number; step: number; unit: string }[] = [
-  { id: 'x', label: 'Move X', min: -60, max: 60, step: 0.5, unit: '%' }, { id: 'y', label: 'Move Y', min: -60, max: 60, step: 0.5, unit: '%' },
+  { id: 'x', label: 'Move X', min: -100, max: 100, step: 0.5, unit: '%' }, { id: 'y', label: 'Move Y', min: -100, max: 100, step: 0.5, unit: '%' },
   { id: 'scale', label: 'Scale', min: 0.2, max: 3, step: 0.05, unit: '×' }, { id: 'rotate', label: 'Rotate', min: -360, max: 360, step: 1, unit: '°' },
   { id: 'opacity', label: 'Opacity', min: 0, max: 1, step: 0.05, unit: '' }, { id: 'angle', label: 'Angle', min: 0, max: 360, step: 1, unit: '°' },
   { id: 'hue', label: 'Hue shift', min: 0, max: 360, step: 1, unit: '°' }, { id: 'stopPos', label: 'Stop position', min: 0, max: 100, step: 0.5, unit: '%' },
@@ -35,6 +35,7 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
   const layer = useStore(store, s => s.project.layers.find(l => l.id === layerId) ?? null);
   if (!layer) return <Empty>Select a layer first.</Empty>;
   const a = layer.anim;
+  const repeatMode = (a.iterations ?? 'infinite') === 'infinite' ? 'infinite' : 'counted';
   const setAnim = (patch: Partial<LayerAnimation>, key?: string) => store.updateLayer(layerId, l => ({ ...l, anim: { ...l.anim, ...patch } }), { coalesce: key });
   const setTrack = (id: string, patch: Partial<AnimTrack>, key?: string) => setAnim({ tracks: a.tracks.map(t => (t.id === id ? { ...t, ...patch } : t)) }, key);
   const setPointMotion = (stopId: string, patch: Pick<AnimTrack, 'duration' | 'direction'>, key: string) => setAnim({
@@ -50,6 +51,7 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
   const avail = PROPS.filter(p => {
     if (layer.type === 'noise') return ['x', 'y', 'opacity'].includes(p.id);
     if (layer.type === 'mesh') return !['angle', 'stopPos', 'stopColor'].includes(p.id);
+    if (layer.type === 'curve') return ['x', 'y', 'rotate', 'scale', 'opacity', 'hue'].includes(p.id);
     return stopKind && !(p.id === 'angle' && layer.type === 'radial') && p.id !== 'meshX' && p.id !== 'meshY';
   });
   const float = () => {
@@ -89,8 +91,8 @@ export default function AnimationPanel({ layerId }: { layerId: string }) {
       </div>
       <ValueControl label="Duration" value={a.duration} min={1} max={90} step={0.5} unit="s" def={12} onChange={v => setAnim({ duration: v }, 'dur')} testId="anim-duration" />
       <ValueControl label="Delay" value={a.delay} min={-30} max={30} step={0.5} unit="s" def={0} onChange={v => setAnim({ delay: v }, 'delay')} testId="anim-delay" />
-      <Switch label="Loop indefinitely" checked={(a.iterations ?? 'infinite') === 'infinite'} onChange={v => setAnim({ iterations: v ? 'infinite' : 1 })} testId="anim-infinite" />
-      {a.iterations !== undefined && a.iterations !== 'infinite' && <ValueControl label="Iterations" value={a.iterations} min={1} max={100} step={1} def={1} onChange={v => setAnim({ iterations: v }, 'iterations')} testId="anim-iterations" />}
+      <Seg value={repeatMode} label="Repeat" options={[{ id: 'infinite', label: 'Forever' }, { id: 'counted', label: 'Set count' }]} onChange={v => setAnim({ iterations: v === 'infinite' ? 'infinite' : 1 })} testId="anim-repeat-mode" />
+      {repeatMode === 'counted' && <ValueControl label="Repeat count" value={a.iterations === 'infinite' || a.iterations === undefined ? 1 : a.iterations} min={1} max={100} step={1} def={1} onChange={v => setAnim({ iterations: v }, 'iterations')} testId="anim-iterations" />}
       <label className="field-label" htmlFor="anim-ease">Easing</label>
       <select id="anim-ease" className="generate-select" value={a.easing} onChange={e => setAnim({ easing: e.target.value })}>{EASINGS.map(x => <option key={x} value={x}>{x.startsWith('cubic') ? x.replace('cubic-bezier', 'bezier') : x}</option>)}</select>
       <Seg value={a.direction} label="Direction" options={[{ id: 'alternate', label: 'Ping-pong' }, { id: 'normal', label: 'Loop' }, { id: 'reverse', label: 'Reverse' }, { id: 'alternate-reverse', label: 'Reverse ping-pong' }]} onChange={v => setAnim({ direction: v })} testId="anim-direction" />

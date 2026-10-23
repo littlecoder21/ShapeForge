@@ -90,6 +90,7 @@
 .gs-stopchip i { width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; } .gs-stopchip small { color: #7f8994; font: 9px var(--app-font-mono, monospace); }
 .gs-stopchip.sel { border-color: #3e7c68; background: #27342f; color: #75e4bc; }
 .gs-stopprops { display: grid; gap: 10px; padding: 12px; border: 1px solid #343a43; border-radius: 10px; background: #1b1f25; }
+.gs-curve-point-controls { display: grid; gap: 8px; padding: 10px; border: 1px solid #343a43; border-radius: 9px; background: #1b1f25; }
 .gs-btnrow { display: flex; gap: 7px; flex-wrap: wrap; } .gs-btnrow .btn { flex: 1 1 90px; justify-content: center; }
 .gs-empty { margin: 4px 0; color: #77828d; font-size: 11.5px; line-height: 1.5; }
 .gs-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 0; } .gs-chips.wrap { flex-wrap: wrap; overflow: visible; }

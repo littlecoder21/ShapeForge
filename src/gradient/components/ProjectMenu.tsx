@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { ColorInput } from './ui';
 import { CANVAS_PRESETS, newProject } from '../engine/model';
+import { SOLID_SWATCHES, newSolidProject } from '../engine/solidColors';
 import { useStore } from '../engine/store';
 import { NumField } from '../../shared/controls';
 import { useStudio } from './ui';
@@ -27,5 +28,19 @@ export default function ProjectMenu({ onClose }: { onClose: () => void }) {
       <button type="button" className="btn" onClick={() => set({ background: '' })} data-testid="project-bg-clear">Transparent</button>
       <button type="button" className="btn danger" onClick={() => { store.replace(newProject()); announce('New project'); onClose(); }} data-testid="project-new">New project</button>
     </div>
+    <div className="field-label">Start a new project from a solid color</div>
+    <div className="chips wrap" role="group" aria-label="Start from a solid color">
+      {SOLID_SWATCHES.map(swatch => <button
+        key={swatch.id}
+        type="button"
+        className="chip"
+        onClick={() => { store.replace(newSolidProject(swatch.color)); announce(`New ${swatch.label.toLowerCase()} solid project`); onClose(); }}
+        title={`Replace this project with a ${swatch.label.toLowerCase()} solid color layer`}
+        data-testid={`project-start-solid-${swatch.id}`}
+      >
+        <span aria-hidden="true" style={{ display: 'inline-block', width: 10, height: 10, marginRight: 6, borderRadius: 3, background: swatch.color, border: '1px solid rgba(128,128,128,.5)', verticalAlign: '-1px' }} />{swatch.label}
+      </button>)}
+    </div>
+    <p className="hint">Starting a new project replaces the current one (you can undo it).</p>
   </div>;
 }

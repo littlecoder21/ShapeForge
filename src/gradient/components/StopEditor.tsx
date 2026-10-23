@@ -1,8 +1,8 @@
 import { useMemo, useRef, type KeyboardEvent as RKeyboardEvent, type PointerEvent as RPointerEvent } from 'react';
 import { Copy, Plus, Trash2 } from 'lucide-react';
-import { ValueControl, Switch } from '../../shared/controls';
+import { ValueControl, Switch, Seg } from '../../shared/controls';
 import { gradientFn } from '../engine/css';
-import { colorAtPos } from '../engine/ramp';
+import { colorAtPos, CURVE_PRESETS, curvePreset, curveProgress, type CurvePreset } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
 import { sortedStops, stop as makeStop, uid, type ColorStop, type GradientLayer, type GradientProject } from '../engine/model';
 import { useStore } from '../engine/store';
@@ -40,6 +40,17 @@ export default function StopEditor({ layerId }: { layerId: string }) {
     return r && r.width > 0 ? Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100)) : 0;
   };
   const next = sel ? sorted[sorted.findIndex(s => s.id === sel.id) + 1] : undefined;
+  const curveMode = sel ? curvePreset(sel) : 'linear';
+  const curve = sel?.curve ?? CURVE_PRESETS.ease;
+  const curvePath = sel ? Array.from({ length: 33 }, (_, i) => {
+    const x = i / 32, y = curveProgress(sel, x);
+    return `${i === 0 ? 'M' : 'L'}${(x * 100).toFixed(2)} ${(100 - y * 100).toFixed(2)}`;
+  }).join(' ') : '';
+  const setCurvePreset = (preset: CurvePreset) => {
+    if (!sel) return;
+    const nextCurve = preset === 'linear' || preset === 'midpoint' ? undefined : preset === 'custom' ? (sel.curve ?? CURVE_PRESETS.ease) : CURVE_PRESETS[preset];
+    patchStop(sel.id, { curve: nextCurve, mid: preset === 'midpoint' ? (sel.mid ?? 65) : undefined }, `stop-curve-${sel.id}`);
+  };
 
   const addAt = (pos: number) => {
     const c = colorAtPos(layer, pos), ns = makeStop(rgbToHex(c), r1(pos), c.a);
@@ -109,7 +120,26 @@ export default function StopEditor({ layerId }: { layerId: string }) {
       <ColorInput color={sel.color} alpha={sel.alpha} onChange={(c, a) => patchStop(sel.id, { color: c, alpha: a }, `stop-color-${sel.id}`)} label="Stop colour" testId="stop-color" />
       <ValueControl label="Opacity" value={Math.round(sel.alpha * 100)} min={0} max={100} unit="%" def={100} onChange={v => patchStop(sel.id, { alpha: v / 100 }, `stop-a-${sel.id}`)} testId="stop-alpha" {...sliderGesture} />
       <ValueControl label="Position" value={sel.pos} min={0} max={100} step={0.1} unit="%" onChange={v => patchStop(sel.id, { pos: v }, `stop-p-${sel.id}`)} testId="stop-pos" {...sliderGesture} />
-      {next && !sel.hard && <ValueControl label="Transition midpoint" value={sel.mid ?? 50} min={5} max={95} unit="%" def={50} onChange={v => patchStop(sel.id, { mid: v === 50 ? undefined : v }, `stop-m-${sel.id}`)} testId="stop-mid" {...sliderGesture} />}
+      {next && !sel.hard && <div className="gs-curve-editor" data-testid="stop-curve">
+        <div className="field-label">Transition curve</div>
+        <Seg value={curveMode} label="Transition curve" options={[
+          { id: 'linear', label: 'Linear' }, { id: 'ease-in', label: 'Ease in' }, { id: 'ease-out', label: 'Ease out' },
+          { id: 'ease-in-out', label: 'In / out' }, { id: 'ease', label: 'Ease' }, { id: 'custom', label: 'Custom' }, { id: 'midpoint', label: 'Midpoint' },
+        ]} onChange={v => setCurvePreset(v as CurvePreset)} testId="stop-curve-preset" />
+        <svg viewBox="0 0 100 100" role="img" aria-label="Transition curve preview" style={{ width: '100%', height: 64, borderRadius: 6, background: '#11151a' }}>
+          <path d="M0 100L100 0" fill="none" stroke="#59616c" strokeDasharray="3 3" />
+          <path d={curvePath} fill="none" stroke="#75e4bc" strokeWidth="3" />
+        </svg>
+        {curveMode === 'midpoint' && <ValueControl label="Transition midpoint" value={sel.mid ?? 65} min={5} max={95} unit="%" def={65} onChange={v => patchStop(sel.id, { mid: v === 50 ? undefined : v }, `stop-m-${sel.id}`)} testId="stop-mid" {...sliderGesture} />}
+        {curveMode === 'custom' && <>
+          <p className="hint">Control points shape the colour blend from this stop to the next.</p>
+          <ValueControl label="Control 1 X" value={curve.x1} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, x1: v } }, `stop-curve-x1-${sel.id}`)} testId="stop-curve-x1" {...sliderGesture} />
+          <ValueControl label="Control 1 Y" value={curve.y1} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, y1: v } }, `stop-curve-y1-${sel.id}`)} testId="stop-curve-y1" {...sliderGesture} />
+          <ValueControl label="Control 2 X" value={curve.x2} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, x2: v } }, `stop-curve-x2-${sel.id}`)} testId="stop-curve-x2" {...sliderGesture} />
+          <ValueControl label="Control 2 Y" value={curve.y2} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, y2: v } }, `stop-curve-y2-${sel.id}`)} testId="stop-curve-y2" {...sliderGesture} />
+        </>}
+        <p className="hint">Custom curves are approximated with sampled CSS colour mixes and rendered directly for PNG/SVG.</p>
+      </div>}
       <Switch label="Hard edge after this stop" checked={!!sel.hard} onChange={v => patchStop(sel.id, { hard: v || undefined })} testId="stop-hard" />
       <div className="gs-btnrow">
         <button type="button" className="btn" onClick={duplicate} data-testid="stop-duplicate"><Copy />Duplicate</button>

@@ -5,9 +5,9 @@ import { clamp } from './color';
  * so everything stays editable. Nothing here knows about React or ShapeForge shapes.
  */
 
-export type GradientKind = 'linear' | 'radial' | 'conic' | 'mesh' | 'noise';
+export type GradientKind = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 /** Kinds that are true colour-stop gradients (the rest are a mesh of points / a grain texture). */
-export const isStopKind = (k: GradientKind) => k === 'linear' || k === 'radial' || k === 'conic';
+export const isStopKind = (k: GradientKind) => k === 'linear' || k === 'radial' || k === 'conic' || k === 'curve';
 export type ColorSpace = 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
 
 export const BLEND_MODES = [
@@ -21,6 +21,8 @@ export interface ColorStop {
   color: string;      // #rrggbb
   alpha: number;      // 0…1
   pos: number;        // 0…100 along the gradient
+  /** Optional cubic-bezier easing for the transition from this stop to the next. */
+  curve?: { x1: number; y1: number; x2: number; y2: number };
   /** Hold this colour until the next stop's position, then switch abruptly (hard edge). */
   hard?: boolean;
   /** Transition midpoint toward the next stop, 0…100 (50 = linear). Emitted as a CSS colour hint. */
@@ -67,6 +69,26 @@ export interface MeshData {
   /** Reproduces generated positions and mesh effects. */
   seed: number;
 }
+export interface CurvePoint { x: number; y: number }
+export interface CurveData { p0: CurvePoint; p1: CurvePoint; p2: CurvePoint; p3: CurvePoint }
+export const DEFAULT_CURVE: CurveData = {
+  p0: { x: 8, y: 78 }, p1: { x: 30, y: 85 }, p2: { x: 65, y: 15 }, p3: { x: 92, y: 22 },
+};
+export interface LayerMask {
+  enabled: boolean;
+  curved: boolean;
+  corners: [CurvePoint, CurvePoint, CurvePoint, CurvePoint];
+  controls: [CurvePoint, CurvePoint, CurvePoint, CurvePoint, CurvePoint, CurvePoint, CurvePoint, CurvePoint];
+}
+export const DEFAULT_LAYER_MASK: LayerMask = {
+  enabled: false,
+  curved: false,
+  corners: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+  controls: [
+    { x: 33.3, y: 0 }, { x: 66.7, y: 0 }, { x: 100, y: 33.3 }, { x: 100, y: 66.7 },
+    { x: 66.7, y: 100 }, { x: 33.3, y: 100 }, { x: 0, y: 66.7 }, { x: 0, y: 33.3 },
+  ],
+};
 /** Grain / noise overlay (SVG feTurbulence, tiled). */
 export interface NoiseData { frequency: number; octaves: number; seed: number; mono: boolean; contrast: number; tile: number }
 export const DEFAULT_MESH: MeshData = { points: [], base: '', core: 40, seed: 7 };
@@ -105,6 +127,10 @@ export interface GradientLayer {
   mesh: MeshData;
   /** used when type === 'noise' */
   noise: NoiseData;
+  /** used when type === 'curve'; points are percentages of the canvas */
+  curve: CurveData;
+  /** Optional freeform clipping boundary. Applies to the whole layer, including texture overlays. */
+  mask: LayerMask;
   /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
   solidColor?: string;
 }
@@ -162,7 +188,8 @@ export function newLayer(type: GradientKind = 'linear', over: Partial<GradientLa
     shape: 'ellipse', rx: 50, ry: 50,
     repeat: { size: type === 'conic' ? 45 : 40, unit: type === 'conic' ? 'deg' : 'px', offset: 0 },
     opacity: 1, blend: 'normal', transform: { ...IDENTITY }, effects: [], texture: { ...DEFAULT_TEXTURE }, anim: { ...NO_ANIM, tracks: [] },
-    mesh: { ...DEFAULT_MESH, points: [] }, noise: { ...DEFAULT_NOISE },
+    mesh: { ...DEFAULT_MESH, points: [] }, noise: { ...DEFAULT_NOISE }, curve: { ...DEFAULT_CURVE, p0: { ...DEFAULT_CURVE.p0 }, p1: { ...DEFAULT_CURVE.p1 }, p2: { ...DEFAULT_CURVE.p2 }, p3: { ...DEFAULT_CURVE.p3 } },
+    mask: { ...DEFAULT_LAYER_MASK, corners: DEFAULT_LAYER_MASK.corners.map(p => ({ ...p })) as LayerMask['corners'], controls: DEFAULT_LAYER_MASK.controls.map(p => ({ ...p })) as LayerMask['controls'] },
   };
   const defined = Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) as Partial<GradientLayer>;
   const layer = { ...base, ...defined };
@@ -177,7 +204,7 @@ export function newSolidLayer(color = '#ffffff'): GradientLayer {
     stops: [stop(color, 0), stop(color, 100)],
   });
 }
-export const KIND_LABEL: Record<GradientKind, string> = { linear: 'Linear', radial: 'Radial', conic: 'Conic', mesh: 'Mesh', noise: 'Grain' };
+export const KIND_LABEL: Record<GradientKind, string> = { linear: 'Linear', radial: 'Radial', conic: 'Conic', curve: 'Curve', mesh: 'Mesh', noise: 'Grain' };
 export const defaultName = (l: Pick<GradientLayer, 'type' | 'repeating'>) => `${l.repeating ? 'Repeating ' : ''}${KIND_LABEL[l.type]}`;
 
 export function newProject(over: Partial<GradientProject> = {}): GradientProject {
@@ -227,7 +254,7 @@ export function normalizeProject(raw: unknown): GradientProject {
   const r = raw as Partial<GradientProject>;
   if (!Array.isArray(r.layers) || !r.layers.length) throw new Error('Project has no layers');
   const layers = r.layers.map((l, i) => {
-    const t = (['linear', 'radial', 'conic', 'mesh', 'noise'] as const).includes(l.type as GradientKind) ? l.type : 'linear';
+    const t = (['linear', 'radial', 'conic', 'curve', 'mesh', 'noise'] as const).includes(l.type as GradientKind) ? l.type : 'linear';
     const merged = newLayer(t, { ...l, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [] });
     merged.effects = merged.effects.map(effect => effect.type === 'iridescence' ? {
       ...effect,
@@ -248,10 +275,40 @@ export function normalizeProject(raw: unknown): GradientProject {
       group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
     })) };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
+    const curve = l.curve ?? DEFAULT_CURVE;
+    const curveValue = (value: number | undefined, fallback: number) => {
+      const number = Number(value ?? fallback);
+      return Number.isFinite(number) ? clamp(number, -25, 125) : fallback;
+    };
+    merged.curve = {
+      p0: { x: curveValue(curve.p0?.x, DEFAULT_CURVE.p0.x), y: curveValue(curve.p0?.y, DEFAULT_CURVE.p0.y) },
+      p1: { x: curveValue(curve.p1?.x, DEFAULT_CURVE.p1.x), y: curveValue(curve.p1?.y, DEFAULT_CURVE.p1.y) },
+      p2: { x: curveValue(curve.p2?.x, DEFAULT_CURVE.p2.x), y: curveValue(curve.p2?.y, DEFAULT_CURVE.p2.y) },
+      p3: { x: curveValue(curve.p3?.x, DEFAULT_CURVE.p3.x), y: curveValue(curve.p3?.y, DEFAULT_CURVE.p3.y) },
+    };
+    const mask = l.mask ?? DEFAULT_LAYER_MASK;
+    merged.mask = {
+      enabled: mask.enabled === true,
+      curved: mask.curved === true,
+      corners: DEFAULT_LAYER_MASK.corners.map((fallback, i) => ({
+        x: curveValue(mask.corners?.[i]?.x, fallback.x),
+        y: curveValue(mask.corners?.[i]?.y, fallback.y),
+      })) as LayerMask['corners'],
+      controls: DEFAULT_LAYER_MASK.controls.map((fallback, i) => ({
+        x: curveValue(mask.controls?.[i]?.x, fallback.x),
+        y: curveValue(mask.controls?.[i]?.y, fallback.y),
+      })) as LayerMask['controls'],
+    };
     merged.texture = { ...DEFAULT_TEXTURE, ...(l.texture ?? {}) };
     if (!/^(grain|dots|lines|crosshatch|grid|waves|geometric|woven|paper|material|organic)-(?:[1-9]|[1-9]\d)$/.test(merged.texture.pattern)) merged.texture.pattern = DEFAULT_TEXTURE.pattern;
     if (merged.solidColor !== undefined && !/^#[0-9a-f]{6}$/i.test(merged.solidColor)) merged.solidColor = '#ffffff';
-    merged.stops = merged.stops.map(s => ({ ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100) }));
+    merged.stops = merged.stops.map(s => {
+      const curve = s.curve;
+      const validCurve = curve && [curve.x1, curve.y1, curve.x2, curve.y2].every(Number.isFinite)
+        ? { x1: clamp(curve.x1, 0, 1), y1: clamp(curve.y1, 0, 1), x2: clamp(curve.x2, 0, 1), y2: clamp(curve.y2, 0, 1) }
+        : undefined;
+      return { ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100), curve: validCurve };
+    });
     if (merged.solidColor !== undefined) {
       merged.stops = merged.stops.slice(0, 2);
       while (merged.stops.length < 2) merged.stops.push(stop(merged.solidColor, 100));
