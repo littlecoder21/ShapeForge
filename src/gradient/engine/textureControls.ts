@@ -13,7 +13,7 @@ import { DEFAULT_PATTERN, resolveTextureId, type TextureFamily } from './texture
 export type TextureShape = 'auto' | 'circle' | 'square' | 'diamond' | 'triangle' | 'polygon' | 'star' | 'ring' | 'cross';
 export type TextureDistribution = 'auto' | 'grid' | 'staggered' | 'random' | 'radial' | 'poisson' | 'flow';
 export type FalloffMode = 'none' | 'linear' | 'radial' | 'smooth' | 'edge';
-export type FalloffTarget = 'opacity' | 'size' | 'density' | 'distortion' | 'detail';
+export type FalloffTarget = 'opacity' | 'size' | 'density' | 'stroke' | 'distortion' | 'detail';
 
 /** Renderer families. A preset is a recipe of one or more layers of these kinds. */
 export type TextureKind = 'noise' | 'scatter' | 'strokes' | 'lines' | 'waves' | 'rings' | 'cells' | 'tiling' | 'weave';
@@ -112,7 +112,7 @@ export const FALLOFF_OPTIONS: { id: FalloffMode; label: string }[] = [
   { id: 'none', label: 'None' }, { id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'smooth', label: 'Smooth' }, { id: 'edge', label: 'Edge' },
 ];
 export const FALLOFF_TARGET_OPTIONS: { id: FalloffTarget; label: string }[] = [
-  { id: 'opacity', label: 'Opacity' }, { id: 'size', label: 'Element size' }, { id: 'density', label: 'Density' }, { id: 'distortion', label: 'Distortion' }, { id: 'detail', label: 'Detail' },
+  { id: 'opacity', label: 'Opacity' }, { id: 'size', label: 'Element size' }, { id: 'density', label: 'Density' }, { id: 'stroke', label: 'Stroke width' }, { id: 'distortion', label: 'Distortion' }, { id: 'detail', label: 'Detail' },
 ];
 
 const warpOn = (t: TextureParams) => t.warpAmount > 0;
@@ -154,7 +154,7 @@ export const CONTROLS: TextureControl[] = [
   { id: 'warpY', label: 'Vertical distortion', hint: 'Share of the distortion applied up / down. Lower one axis to bias the direction.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 100, group: 'distortion', tier: 'advanced', needs: 'warp', when: warpOn },
   { id: 'warpOctaves', label: 'Multiscale', hint: 'Layers of finer distortion added on top of the main one.', type: 'range', min: 1, max: 3, step: 1, def: 1, group: 'distortion', tier: 'advanced', needs: 'warp', when: warpOn },
 
-  { id: 'falloff', label: 'Falloff', hint: 'Fade a property across the tile. The profile is seamless and repeats with every tile — raise the tile scale to spread it over a larger area.', type: 'select', options: FALLOFF_OPTIONS, def: 'none', group: 'spatial', tier: 'advanced', needs: 'falloff' },
+  { id: 'falloff', label: 'Falloff', hint: 'Shape a local effect across the tile. Drag the area picker to place it; the profile repeats seamlessly with every tile.', type: 'select', options: FALLOFF_OPTIONS, def: 'none', group: 'spatial', tier: 'advanced', needs: 'falloff' },
   { id: 'falloffTarget', label: 'Affects', hint: 'Which property the falloff changes.', type: 'select', options: FALLOFF_TARGET_OPTIONS, def: 'opacity', group: 'spatial', tier: 'advanced', needs: 'falloff', when: falloffOn },
   { id: 'falloffStrength', label: 'Falloff strength', hint: 'How strongly the property is reduced away from the centre.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 100, group: 'spatial', tier: 'advanced', needs: 'falloff', when: falloffOn },
   { id: 'falloffCenterX', label: 'Center X', hint: 'Horizontal position of the falloff centre, in tile coordinates.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 50, group: 'spatial', tier: 'advanced', needs: 'falloff', when: falloffOn },

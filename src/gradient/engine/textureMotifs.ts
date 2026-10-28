@@ -190,7 +190,7 @@ function renderStrokes(L: StrokesLayer, c: Ctx): void {
     const heading = dist === 'flow' ? (c.flow(x, y) * 180) / Math.PI : L.angle;
     const angle = ((heading + (R(i, 0, CH.angle) - 0.5) * 2 * spread) * Math.PI) / 180;
     const len = L.len * (P.motifSize / 100) * (1 - (L.lv ?? 0) * R(i, 0, CH.len)) * (1 - (P.sizeVariation / 100) * R(i, 0, CH.size)) * fm(c, x, y, 'size');
-    const width = Math.max(0.2, L.w * (P.strokeWidth / 100) * (1 - (L.wv ?? 0) * R(i, 0, CH.width)));
+    const width = Math.max(0.2, L.w * (P.strokeWidth / 100) * (1 - (L.wv ?? 0) * R(i, 0, CH.width)) * fm(c, x, y, 'stroke'));
     const opacity = mix(L.ov, R(i, 0, CH.opBase)) * (1 - (P.opacityVariation / 100) * R(i, 0, CH.opacity)) * fm(c, x, y, 'opacity');
     if (len < 0.3 || opacity < 0.02) continue;
     const ca = Math.cos(angle), sa = Math.sin(angle), curve = (L.curve ?? 0.15) * len * (R(i, 0, CH.curve) - 0.5) * 2;
@@ -805,7 +805,7 @@ export function describeLayers(layers: Layer[]): LayerInfo {
     switch (L.k) {
       case 'noise': all('size', 'aspect', 'threshold', 'octaves', 'detail'); tgt('opacity', 'detail'); break;
       case 'scatter': all('size', 'sx', 'sy', 'aspect', 'shape', 'dist', 'sizevar', 'jitter', 'anglevar', 'opvar', 'cover', 'phase', 'warp', 'detail', 'corner', 'sym'); tgt('opacity', 'size', 'density', 'distortion', 'detail'); if (!dists.length) { dists = L.allow ?? ALL_DISTS; defaultDist = L.dist; defaultShape = L.shape; } break;
-      case 'strokes': all('size', 'sx', 'sy', 'dist', 'sizevar', 'jitter', 'anglevar', 'opvar', 'cover', 'stroke', 'phase', 'warp', 'detail'); tgt('opacity', 'size', 'density', 'distortion', 'detail'); if (!dists.length) { dists = L.allow ?? ['random', 'poisson', 'flow', 'grid', 'staggered']; defaultDist = L.dist; } break;
+      case 'strokes': all('size', 'sx', 'sy', 'dist', 'sizevar', 'jitter', 'anglevar', 'opvar', 'cover', 'stroke', 'phase', 'warp', 'detail'); tgt('opacity', 'size', 'density', 'stroke', 'distortion', 'detail'); if (!dists.length) { dists = L.allow ?? ['random', 'poisson', 'flow', 'grid', 'staggered']; defaultDist = L.dist; } break;
       case 'lines': {
         all('stroke', 'dash', 'sizevar', 'jitter', 'opvar', 'cover', 'phase', 'warp', 'detail');
         tgt('opacity', 'distortion', 'detail');

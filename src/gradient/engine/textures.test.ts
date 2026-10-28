@@ -195,6 +195,19 @@ test('the controls offered match what the preset can do', () => {
   assert.ok(textureSupport(tex('dots-halftone', { warpAmount: 20 })).controls.some(c => c.control.id === 'warpFrequency'));
   assert.equal(textureSupport(tex('waves-soft-waves')).controls.find(c => c.control.id === 'motifSize')?.label, 'Amplitude');
   assert.ok(textureSupport(tex('grain-film-grain')).notes.length > 0);
+  assert.ok(textureSupport(tex('lines-scratched-surface', { falloff: 'radial' })).controls.find(c => c.control.id === 'falloffTarget')?.options?.some(option => option.id === 'stroke'));
+});
+
+test('spatial falloff can change stroke width in a manually positioned tile area', () => {
+  const base = tex('lines-scratched-surface', {
+    strokeWidth: 300, falloff: 'radial', falloffTarget: 'stroke', falloffStrength: 100,
+    falloffCenterX: 24, falloffCenterY: 72, falloffRadius: 18,
+  });
+  const uniform = textureTileSvg({ ...base, falloff: 'none' });
+  const localized = textureTileSvg(base);
+  const uniformWidths = numbers(uniform, 'path', 'stroke-width');
+  const localizedWidths = numbers(localized, 'path', 'stroke-width');
+  assert.notDeepEqual(localizedWidths, uniformWidths);
 });
 
 test('every control changes the output of a preset that supports it', () => {

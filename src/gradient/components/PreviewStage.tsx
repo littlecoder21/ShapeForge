@@ -6,6 +6,7 @@ import { apply as applyMat, invert, layerMatrix } from '../engine/geom';
 import { newMeshPoint } from '../engine/mesh';
 import { colorAtPos } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
+import { previewDurationMs } from '../engine/animation';
 import type { GradientLayer, GradientProject } from '../engine/model';
 import { useStore, type StudioStore } from '../engine/store';
 import { CHECKER } from './ui';
@@ -25,9 +26,9 @@ type G =
   | { t: 'pinch'; ids: [number, number]; vp: Viewport; mid: V2; dist: number }
   | { t: 'drag'; id: number; handle: Handle; start: GradientLayer; p0: V2 };
 
-interface Props { store: StudioStore; mode: 'gradient' | 'transform'; playing: boolean; onTogglePlay: () => void }
+interface Props { store: StudioStore; mode: 'gradient' | 'transform'; playing: boolean; onTogglePlay: () => void; onPlaybackComplete: () => void }
 
-function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
+function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }: Props) {
   const project = useStore(store, s => s.project);
   const layerId = useStore(store, s => s.layerId);
   const stopId = useStore(store, s => s.stopId);
@@ -41,10 +42,25 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
   const [beforeProject, setBeforeProject] = useState<GradientProject | null>(null);
   const [compareSplit, setCompareSplit] = useState(50);
   const [playEpoch, setPlayEpoch] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const completed = useRef(false);
+  const playbackDuration = useMemo(() => previewDurationMs(project), [project]);
 
   const overlay = useMemo(() => (layer && layer.visible && (layer.solidColor === undefined || layer.mask.enabled) ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const live = useRef({ overlay, layer, canvas: project.canvas }); live.current = { overlay, layer, canvas: project.canvas };
+
+  useEffect(() => {
+    if (!playing || playbackDuration === null) return;
+    completed.current = false;
+    setFinished(false);
+    const timer = setTimeout(() => {
+      completed.current = true;
+      setFinished(true);
+      onPlaybackComplete();
+    }, playbackDuration + 50);
+    return () => clearTimeout(timer);
+  }, [playing, playbackDuration, playEpoch, onPlaybackComplete]);
 
   /* ───── viewport ───── */
   const applyView = useCallback((v: Viewport) => {
@@ -195,10 +211,10 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
           <LayeredArt project={beforeProject} rootClass="gs-before-art" testId="gs-before-art" />
         </div>
         <div className="gs-compare-half" style={{ clipPath: `inset(0 0 0 ${compareSplit}%)` }}>
-          <LayeredArt key={playEpoch} project={project} rootClass="gs-after-art" playing={playing} testId="gs-after-art" />
+          <LayeredArt key={playEpoch} project={project} rootClass="gs-after-art" playing={playing || finished} className={finished ? 'gs-finished' : ''} testId="gs-after-art" />
         </div>
         <div className="gs-compare-divider" style={{ left: `${compareSplit}%` }}><span>Before</span><span>After</span></div>
-      </> : <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing} testId="gs-art" />}
+      </> : <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing || finished} className={finished ? 'gs-finished' : ''} testId="gs-art" />}
       <svg className="gs-overlay" width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
         {overlay && <>
           <g transform={`matrix(${overlay.matrix.join(' ')})`}>
@@ -226,8 +242,19 @@ function PreviewStage({ store, mode, playing, onTogglePlay }: Props) {
         <button type="button" onClick={() => zoomBy(1)} aria-label="Zoom in" data-testid="gs-zoom-in"><Plus /></button>
         <button type="button" className="fit" onClick={() => fit(true)} aria-label="Fit to screen" data-testid="gs-zoom-fit"><Maximize /><span>Fit</span></button>
       </div>
-      <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={onTogglePlay} aria-pressed={playing} aria-label={playing ? 'Pause animation preview' : 'Play animation preview'} data-testid="gs-play">{playing ? <Pause /> : <Play />}</button>
-      <button type="button" className="gs-play-btn" onClick={() => setPlayEpoch(epoch => epoch + 1)} aria-label="Reset animation preview" data-testid="gs-animation-reset"><RotateCcw /></button>
+      <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={() => {
+        if (!playing && completed.current) {
+          completed.current = false;
+          setFinished(false);
+          setPlayEpoch(epoch => epoch + 1);
+        }
+        onTogglePlay();
+      }} aria-pressed={playing} aria-label={playing ? 'Pause animation preview' : 'Play animation preview'} data-testid="gs-play">{playing ? <Pause /> : <Play />}</button>
+      <button type="button" className="gs-play-btn" onClick={() => {
+        completed.current = false;
+        setFinished(false);
+        setPlayEpoch(epoch => epoch + 1);
+      }} aria-label="Reset animation preview" data-testid="gs-animation-reset"><RotateCcw /></button>
       <button type="button" className={`gs-play-btn ${beforeProject ? 'on' : ''}`} onClick={() => setBeforeProject(beforeProject ? null : store.snapshot())} aria-pressed={!!beforeProject} aria-label={beforeProject ? 'Close before and after comparison' : 'Capture current preview for comparison'} data-testid="gs-compare"><Columns2 />{beforeProject && <span>Compare</span>}</button>
       {beforeProject && <label className="gs-compare-slider"><span>Split</span><DirectionAwareRange min="10" max="90" value={compareSplit} onValueChange={value => setCompareSplit(Number(value))} aria-label="Before and after split" data-testid="gs-compare-split" /></label>}
     </div>

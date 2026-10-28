@@ -11,9 +11,11 @@
 .gs-stage { position: relative; flex: 1; min-height: 140px; overflow: hidden; background: #12151a; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; --inv: 1; }
 .gs-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: 0 10px 40px #0008; }
 .gs-checker { position: absolute; inset: 0; }
-.gs-art-root { position: absolute; inset: 0; isolation: isolate; overflow: hidden; }
+.gs-art-root { position: absolute; inset: 0; isolation: isolate; overflow: hidden; contain: layout paint; }
 .gs-art-root > :where(.g-layer) { position: absolute; inset: 0; pointer-events: none; }
 .gs-art-root:not(.gs-play) :where(.g-layer) { animation: none !important; }
+.gs-art-root.gs-play :where(.g-layer) { animation-fill-mode: both; }
+.gs-art-root.gs-finished :where(.g-layer) { will-change: auto !important; }
 .gs-compare-half { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .gs-compare-divider { position: absolute; z-index: 3; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 8px #000; pointer-events: none; }
 .gs-compare-divider span { position: absolute; top: 8px; left: 8px; padding: 3px 6px; border-radius: 4px; background: #111c; color: #fff; font: 10px var(--app-font-mono, monospace); }
@@ -143,6 +145,12 @@
 .gs-texture-thumb { display: block; width: 100%; aspect-ratio: 1.7 / 1; border-radius: 5px; border: 1px solid #ffffff18; background-color: #11151b; background-size: 40px 40px; background-position: center; }
 .gs-texture-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; font-weight: 650; }
 .gs-texture-color { display: grid; gap: 5px; }
+.gs-texture-area { position: relative; width: min(100%, 220px); aspect-ratio: 1; margin: 8px auto; overflow: hidden; border: 1px solid #ffffff35; border-radius: 8px; background-color: #11151b; background-repeat: repeat; touch-action: none; cursor: crosshair; }
+.gs-texture-area:focus-visible { outline: 2px solid #69dfb5; outline-offset: 3px; }
+.gs-texture-area::before { position: absolute; inset: 0; content: ""; pointer-events: none; background: linear-gradient(45deg, #0002 25%, transparent 25% 75%, #0002 75%), linear-gradient(45deg, #0002 25%, transparent 25% 75%, #0002 75%); background-position: 0 0, 8px 8px; background-size: 16px 16px; }
+.gs-texture-area-ring { position: absolute; z-index: 1; width: 50%; height: 50%; left: 50%; top: 50%; transform: translate(-50%, -50%); border: 1px solid #75e4bc; border-radius: 50%; background: #69dfb522; box-shadow: 0 0 0 1px #1118; pointer-events: none; }
+.gs-texture-area-center { position: absolute; z-index: 2; left: 50%; top: 50%; width: 10px; height: 10px; transform: translate(-50%, -50%); border: 2px solid #fff; border-radius: 50%; background: #69dfb5; box-shadow: 0 1px 4px #000b; pointer-events: none; }
+.gs-texture-area-hint { margin: 0 2px 6px; color: #8a949f; font-size: 10px; line-height: 1.4; }
 
 /* presets */
 .gs-search { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 12px; border-radius: 10px; background: #242930; border: 1px solid #3a414a; color: #8a949f; }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Search } from 'lucide-react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
 import { BLEND_MODES, DEFAULT_TEXTURE, newLayer, stop, type TextureData } from '../engine/model';
@@ -22,6 +22,73 @@ const thumbnail = (id: string) => {
 };
 
 const kebab = (name: string) => name.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
+
+function TextureAreaPicker({ texture, onChange }: { texture: TextureData; onChange: (patch: Partial<Pick<TextureData, 'falloffCenterX' | 'falloffCenterY' | 'falloffRadius'>>) => void }) {
+  const dragMode = useRef<'center' | 'radius' | null>(null);
+  const updateArea = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100));
+    const y = Math.max(0, Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100));
+    if (dragMode.current === 'radius') {
+      onChange({ falloffRadius: Math.max(2, Math.min(100, Math.round(Math.hypot(x - texture.falloffCenterX, y - texture.falloffCenterY)))) });
+    } else {
+      onChange({ falloffCenterX: Math.round(x), falloffCenterY: Math.round(y) });
+    }
+  };
+  const moveWithKeys = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === '+' || event.key === '=') {
+      event.preventDefault();
+      onChange({ falloffRadius: Math.min(100, texture.falloffRadius + (event.shiftKey ? 5 : 1)) });
+      return;
+    }
+    if (event.key === '-') {
+      event.preventDefault();
+      onChange({ falloffRadius: Math.max(2, texture.falloffRadius - (event.shiftKey ? 5 : 1)) });
+      return;
+    }
+    const step = event.shiftKey ? 5 : 1;
+    const x = texture.falloffCenterX + (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0);
+    const y = texture.falloffCenterY + (event.key === 'ArrowDown' ? step : event.key === 'ArrowUp' ? -step : 0);
+    if (x === texture.falloffCenterX && y === texture.falloffCenterY) return;
+    event.preventDefault();
+    onChange({ falloffCenterX: Math.max(0, Math.min(100, x)), falloffCenterY: Math.max(0, Math.min(100, y)) });
+  };
+
+  return <div>
+    <div
+      className="gs-texture-area"
+      role="group"
+      aria-label={`Texture falloff area. Drag the center to move it, drag the ring edge to resize it. Center ${texture.falloffCenterX}, ${texture.falloffCenterY}; radius ${texture.falloffRadius}. Use arrow keys to move and plus or minus to resize.`}
+      tabIndex={0}
+      style={{ backgroundImage: textureDataUri(texture, 100), backgroundSize: '100% 100%' }}
+      onPointerDown={event => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const x = ((event.clientX - bounds.left) / bounds.width) * 100;
+        const y = ((event.clientY - bounds.top) / bounds.height) * 100;
+        const distance = Math.hypot(x - texture.falloffCenterX, y - texture.falloffCenterY);
+        dragMode.current = Math.abs(distance - texture.falloffRadius) <= Math.max(8, texture.falloffRadius * 0.15) ? 'radius' : 'center';
+        event.currentTarget.setPointerCapture(event.pointerId);
+        updateArea(event);
+      }}
+      onPointerMove={event => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) updateArea(event);
+      }}
+      onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); dragMode.current = null; }}
+      onPointerCancel={() => { dragMode.current = null; }}
+      onKeyDown={moveWithKeys}
+      data-testid="texture-falloff-area"
+    >
+      <span className="gs-texture-area-ring" style={{
+        left: `${texture.falloffCenterX}%`,
+        top: `${texture.falloffCenterY}%`,
+        width: `${texture.falloffRadius * 2}%`,
+        height: `${texture.falloffRadius * 2}%`,
+      }} />
+      <span className="gs-texture-area-center" style={{ left: `${texture.falloffCenterX}%`, top: `${texture.falloffCenterY}%` }} />
+    </div>
+    <p className="gs-texture-area-hint">Drag the center to reposition; drag the ring edge to resize. Arrow keys move the center, + / − resize.</p>
+  </div>;
+}
 
 /** Advanced controls are grouped into collapsible sections; a section only appears when the selected texture has controls for it. */
 const ADVANCED_SECTIONS: { group: ControlGroup; title: string; hint: string }[] = [
@@ -161,7 +228,11 @@ export default function TexturePanel({ layerId }: { layerId: string }) {
       {basicControls.map(renderControl)}
     </Section>}
     {advancedSections.map(section => (
-      <Section key={section.group} title={section.title} hint={section.hint} open={false}>
+      <Section key={section.group} title={section.title} hint={section.hint} open={section.group === 'spatial'}>
+        {section.group === 'spatial' && texture.falloff !== 'none' && <TextureAreaPicker
+          texture={texture}
+          onChange={patch => set(patch, 'texture-falloff-area')}
+        />}
         {section.controls.map(renderControl)}
       </Section>
     ))}

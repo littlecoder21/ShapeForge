@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
-import { sortedStops, stop as makeStop, type GradientKind, type GradientLayer } from '../engine/model';
+import { DEFAULT_CURVE, sortedStops, stop as makeStop, type GradientKind, type GradientLayer } from '../engine/model';
+import { curveFromGradient } from '../engine/curve';
 import { useStore } from '../engine/store';
 import MeshPanel from './MeshPanel';
 import NoisePanel from './NoisePanel';
@@ -12,6 +13,9 @@ type StopGradientKind = Extract<GradientKind, 'linear' | 'radial' | 'conic' | 'c
 const KINDS: { id: StopGradientKind; label: string }[] = [{ id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'conic', label: 'Conic' }, { id: 'curve', label: 'Curve' }];
 const spinTrack = (l: GradientLayer): AnimTrack | undefined => (l.anim.enabled ? l.anim.tracks.find(t => t.prop === 'angle') : undefined);
 const ANGLES = [0, 45, 90, 135, 180, 225, 270, 315];
+const isDefaultCurve = (curve: GradientLayer['curve']) => (['p0', 'p1', 'p2', 'p3'] as const).every(key =>
+  curve[key].x === DEFAULT_CURVE[key].x && curve[key].y === DEFAULT_CURVE[key].y,
+);
 
 /** Stripes from the layer's own colours: each colour becomes one hard-edged band, optionally separated by a transparent gap. */
 export function buildStripes(layer: GradientLayer, stripe: number, gap: number): Partial<GradientLayer> {
@@ -56,6 +60,7 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
     type: t, angle: t === 'conic' ? 0 : t === 'linear' ? 135 : layer.angle,
     repeating: t === 'curve' ? false : layer.repeating,
     repeat: { ...layer.repeat, unit: t === 'conic' ? 'deg' : layer.repeat.unit === 'deg' ? 'px' : layer.repeat.unit, size: t === 'conic' ? 45 : layer.repeat.unit === 'deg' ? 40 : layer.repeat.size },
+    ...(t === 'curve' && layer.type !== 'curve' && isDefaultCurve(layer.curve) ? { curve: curveFromGradient(layer, store.getState().project.canvas) } : {}),
     anim: { ...layer.anim, tracks: t === 'radial' ? layer.anim.tracks.filter(x => x.prop !== 'angle') : layer.anim.tracks },
   });
   const t = layer.type;

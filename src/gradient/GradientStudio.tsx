@@ -49,6 +49,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const announce = useCallback((m: string) => { setToast(m); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setToast(''), 2200); }, []);
+  const stopPlayback = useCallback(() => setPlaying(false), []);
   const ctx = useMemo(() => ({ store, announce }), [store, announce]);
 
   useEffect(() => store.subscribe(() => saveProject(store.getState().project)), [store]);
@@ -122,7 +123,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
       {header}
       {wide ? <>
         <aside className="gs-left" aria-label="Layers"><div className="gs-panelhead">Layers</div><div className="gs-panelbody"><LayersPanel /></div></aside>
-        <section className="gs-center"><PreviewStage store={store} mode={activeTab === 'transform' ? 'transform' : 'gradient'} playing={playing} onTogglePlay={() => setPlaying(p => !p)} /></section>
+        <section className="gs-center"><PreviewStage store={store} mode={activeTab === 'transform' ? 'transform' : 'gradient'} playing={playing} onTogglePlay={() => setPlaying(p => !p)} onPlaybackComplete={stopPlayback} /></section>
         <aside className="gs-right" aria-label="Tools">{tabBar('panel-tabs')}<div className="gs-panelbody">{body(activeTab)}</div></aside>
         <section className={`gs-bottom ${outOpen ? 'open' : ''}`} aria-label="Output">
           <div className="gs-bottom-bar"><b>Output</b>{outbar}</div>
@@ -130,7 +131,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
         </section>
       </> : <>
         <div className="gs-main">
-          <PreviewStage store={store} mode={activeTab === 'transform' ? 'transform' : 'gradient'} playing={playing} onTogglePlay={() => setPlaying(p => !p)} />
+          <PreviewStage store={store} mode={activeTab === 'transform' ? 'transform' : 'gradient'} playing={playing} onTogglePlay={() => setPlaying(p => !p)} onPlaybackComplete={stopPlayback} />
           <div className="gs-tabrow">{tabBar('gs-tabs')}
             <button type="button" className="icon-btn" onClick={() => setDockOpen(!dockOpen)} aria-label={dockOpen ? 'Collapse panel' : 'Expand panel'} data-testid="gs-dock-toggle">{dockOpen ? <ChevronDown /> : <ChevronUp />}</button>
             {dockOpen && <button type="button" className="icon-btn" onClick={() => setDockTall(!dockTall)} aria-label="Resize panel" data-testid="gs-dock-size"><Frame /></button>}

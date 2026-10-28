@@ -1,7 +1,25 @@
 import { rgbaCss } from './color';
-import type { Canvas, Pt } from './geom';
+import { linearLine, type Canvas, type Pt } from './geom';
 import { colorAtPos } from './ramp';
 import type { CurveData, GradientLayer } from './model';
+
+/** Places a new curve on the gradient's existing colour-flow axis instead of using a fixed default path. */
+export function curveFromGradient(layer: GradientLayer, canvas: Canvas): CurveData {
+  const { w, h } = canvas;
+  let start: Pt, end: Pt;
+  if (layer.type === 'radial') {
+    const radiusY = layer.shape === 'circle' ? (layer.rx * Math.min(w, h)) / h : layer.ry;
+    start = { x: layer.cx, y: layer.cy };
+    end = { x: layer.cx, y: layer.cy - radiusY };
+  } else {
+    const angle = layer.type === 'conic' ? layer.angle + 90 : layer.angle;
+    const line = linearLine(angle, w, h);
+    start = { x: (line.x1 / w) * 100, y: (line.y1 / h) * 100 };
+    end = { x: (line.x2 / w) * 100, y: (line.y2 / h) * 100 };
+  }
+  const interpolate = (t: number) => ({ x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t });
+  return { p0: start, p1: interpolate(1 / 3), p2: interpolate(2 / 3), p3: end };
+}
 
 export interface CurveBand { d: string; points: [Pt, Pt, Pt, Pt]; progress: number }
 
