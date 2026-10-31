@@ -17,12 +17,16 @@ export interface ShaderGeometry {
   originY: number;
   radiusX: number;
   radiusY: number;
+  space?: 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
 }
 
 export interface ShaderStop {
   color: string;
   position: number;
   alpha?: number;
+  hard?: boolean;
+  mid?: number;
+  curve?: { x1: number; y1: number; x2: number; y2: number };
 }
 
 export interface ShaderMeshPoint {
@@ -55,6 +59,13 @@ export interface InteractiveSettings {
   rippleStrength: number;
   rippleSpeed: number;
   maximumRipples: number;
+  toneMapping: number;
+  vignette: number;
+  sheen: number;
+  filmGrain: number;
+  idleMotion: boolean;
+  paletteWrap: 'mirror' | 'repeat';
+  renderBackend: 'css' | 'webgl' | 'overlay';
 }
 
 export interface InteractiveUpdate {
@@ -89,6 +100,13 @@ export const DEFAULT_INTERACTIVE_SETTINGS: Readonly<InteractiveSettings> = Objec
   rippleStrength: 0.65,
   rippleSpeed: 0.32,
   maximumRipples: 5,
+  toneMapping: 0,
+  vignette: 0,
+  sheen: 0,
+  filmGrain: 0,
+  idleMotion: false,
+  paletteWrap: 'mirror',
+  renderBackend: 'overlay',
 });
 
 export const DEFAULT_SHADER_LAYER: Readonly<ShaderLayerConfig> = Object.freeze({ enabled: false, style: 'flow' });
@@ -148,5 +166,12 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     rippleStrength: finite('rippleStrength', 0, 1),
     rippleSpeed: finite('rippleSpeed', 0.05, 1),
     maximumRipples: Math.floor(finite('maximumRipples', 1, 8)),
+    toneMapping: finite('toneMapping', 0, 1),
+    vignette: finite('vignette', 0, 1),
+    sheen: finite('sheen', 0, 1),
+    filmGrain: finite('filmGrain', 0, 1),
+    idleMotion: value.idleMotion === true,
+    paletteWrap: choice('paletteWrap', ['mirror', 'repeat'], DEFAULT_INTERACTIVE_SETTINGS.paletteWrap),
+    renderBackend: choice('renderBackend', ['css', 'webgl', 'overlay'], DEFAULT_INTERACTIVE_SETTINGS.renderBackend),
   };
 }

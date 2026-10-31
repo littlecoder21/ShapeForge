@@ -18,7 +18,7 @@ export const INTERACTIVE_PRESETS: InteractivePreset[] = [
     id: 'liquid-mesh',
     name: 'Liquid Mesh',
     description: 'Slow, soft liquid movement with a little turbulence.',
-    settings: { style: 'liquid', speed: 0.24, distortion: 0.42, distortionScale: 1.4, turbulence: 0.3 },
+    settings: { style: 'liquid', speed: 0.24, distortion: 0.42, distortionScale: 1.4, turbulence: 0.3, sheen: 0.28 },
   },
   {
     id: 'aurora-motion',
@@ -48,13 +48,13 @@ export const INTERACTIVE_PRESETS: InteractivePreset[] = [
     id: 'holographic-flow',
     name: 'Holographic Flow',
     description: 'An elegant shifting iridescent color field.',
-    settings: { style: 'holographic', speed: 0.3, distortion: 0.2, turbulence: 0.16, glow: 0.4 },
+    settings: { style: 'holographic', speed: 0.3, distortion: 0.2, turbulence: 0.16, glow: 0.4, sheen: 0.24 },
   },
   {
     id: 'ambient-drift',
     name: 'Ambient Color Drift',
     description: 'Subtle slow movement for ambient backgrounds.',
-    settings: { style: 'flow', speed: 0.1, distortion: 0.16, turbulence: 0.12, interactionStrength: 0.2 },
+    settings: { style: 'flow', speed: 0.1, distortion: 0.16, turbulence: 0.12, interactionStrength: 0.2, idleMotion: true },
   },
   {
     id: 'plasma-field',
@@ -66,7 +66,7 @@ export const INTERACTIVE_PRESETS: InteractivePreset[] = [
     id: 'silk-ribbons',
     name: 'Silk Ribbons',
     description: 'Smooth, flowing silk-like bands with restrained motion.',
-    settings: { style: 'silk', speed: 0.18, distortion: 0.18, turbulence: 0.2, glow: 0.48 },
+    settings: { style: 'silk', speed: 0.18, distortion: 0.18, turbulence: 0.2, glow: 0.48, sheen: 0.4 },
   },
   {
     id: 'deep-nebula',

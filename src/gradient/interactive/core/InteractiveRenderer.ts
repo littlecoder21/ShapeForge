@@ -3,6 +3,8 @@ import fragmentShaderSource from '../shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from '../shaders/gradient.vert.glsl?raw';
 import { PointerManager } from '../input/PointerManager';
 import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_GEOMETRY, normalizeInteractiveSettings, type InteractiveRendererStatus, type InteractiveSettings, type InteractiveUpdate, type ShaderGeometry, type ShaderMeshPoint, type ShaderStop } from '../types';
+import { bakePaletteLut } from '../paletteLut';
+import { UNIFORM_NAMES } from '../uniforms';
 
 type GL = WebGLRenderingContext | WebGL2RenderingContext;
 type Uniforms = Record<string, WebGLUniformLocation | null>;
@@ -10,6 +12,7 @@ type Uniforms = Record<string, WebGLUniformLocation | null>;
 const MAX_STOPS = 8;
 const MAX_RIPPLES = 8;
 const MAX_MESH_POINTS = 8;
+const LUT_SIZE = 512;
 const QUALITY_SCALE = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 } as const;
 const STYLE_ID = { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9 } as const;
 const POINTER_MODE_ID = {
@@ -26,6 +29,9 @@ function normalizePalette(stops: ShaderStop[]): ShaderStop[] {
       color: stop.color,
       position: clamp(stop.position, 0, 1),
       alpha: clamp(Number.isFinite(stop.alpha) ? stop.alpha! : 1, 0, 1),
+      hard: stop.hard,
+      mid: stop.mid,
+      curve: stop.curve,
     }))
     .sort((a, b) => a.position - b.position);
   return valid.length ? valid : [
@@ -42,6 +48,7 @@ function shaderSource(source: string, stage: 'vertex' | 'fragment', webgl2: bool
   return `#version 300 es\n${source
     .replace(/\bvarying\b/g, 'in')
     .replace(/\bgl_FragColor\b/g, 'fragmentColor')
+    .replace(/\btexture2D\b/g, 'texture')
     .replace('precision highp float;', 'precision highp float;\nout vec4 fragmentColor;')}`;
 }
 
@@ -66,7 +73,21 @@ export class InteractiveRenderer {
   private gl: GL | null = null;
   private program: WebGLProgram | null = null;
   private buffer: WebGLBuffer | null = null;
+  private paletteTexture: WebGLTexture | null = null;
   private uniforms: Uniforms = {};
+  private readonly paletteColors = new Float32Array(MAX_STOPS * 4);
+  private readonly paletteAlphas = new Float32Array(MAX_STOPS);
+  private readonly meshPointData = new Float32Array(MAX_MESH_POINTS * 4);
+  private readonly meshColorData = new Float32Array(MAX_MESH_POINTS * 4);
+  private readonly rippleData = new Float32Array(MAX_RIPPLES * 4);
+  private paletteLut: Uint8Array = new Uint8Array(LUT_SIZE * 4);
+  private lutEnabled = false;
+  private cachedRippleCount = -1;
+  private shaderTime = 0;
+  private frameEma = 0;
+  private slowFrameCount = 0;
+  private adaptiveScale = 1;
+  private maxFragmentUniformVectors = 0;
   private positionAttribute = -1;
   private uvAttribute = -1;
   private resizeObserver: ResizeObserver | null = null;
@@ -88,6 +109,7 @@ export class InteractiveRenderer {
     this.settings = normalizeInteractiveSettings({ ...DEFAULT_INTERACTIVE_SETTINGS, ...options.settings });
     this.palette = normalizePalette(options.palette ?? []);
     this.meshPoints = (options.meshPoints ?? []).slice(0, MAX_MESH_POINTS);
+    this.refreshMeshData();
     this.meshBase = /^#[0-9a-f]{6}$/i.test(options.meshBase ?? '') ? options.meshBase! : '';
     if (options.geometry) {
       this.geometry = {
@@ -97,8 +119,10 @@ export class InteractiveRenderer {
         originY: clamp(options.geometry.originY, -100, 200),
         radiusX: clamp(options.geometry.radiusX, 1, 200),
         radiusY: clamp(options.geometry.radiusY, 1, 200),
+        space: options.geometry.space,
       };
     }
+    this.refreshPaletteData();
     this.onStatusChange = options.onStatusChange;
     this.pointer = new PointerManager(canvas, {
       touchEnabled: this.settings.touchEnabled,
@@ -113,7 +137,7 @@ export class InteractiveRenderer {
       depth: false,
       premultipliedAlpha: false,
       preserveDrawingBuffer: false,
-      powerPreference: 'low-power',
+      powerPreference: 'default',
     };
     const context2 = canvas.getContext('webgl2', contextOptions);
     const context1 = context2 ? null : canvas.getContext('webgl', contextOptions);
@@ -144,15 +168,20 @@ export class InteractiveRenderer {
   update(update: InteractiveUpdate) {
     if (update.settings) {
       this.settings = normalizeInteractiveSettings({ ...this.settings, ...update.settings });
+      this.frameEma = 0;
+      this.slowFrameCount = 0;
+      this.adaptiveScale = 1;
       this.pointer.updateOptions({
         touchEnabled: this.settings.touchEnabled,
         ripplesEnabled: this.settings.ripplesEnabled,
         maximumRipples: this.settings.maximumRipples,
       });
       this.resize();
+      if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
     }
     if (update.palette) {
       this.palette = normalizePalette(update.palette);
+      this.refreshPaletteData();
       if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
     }
     if (update.geometry) {
@@ -163,9 +192,14 @@ export class InteractiveRenderer {
         originY: clamp(update.geometry.originY, -100, 200),
         radiusX: clamp(update.geometry.radiusX, 1, 200),
         radiusY: clamp(update.geometry.radiusY, 1, 200),
+        space: update.geometry.space,
       };
+      this.refreshPaletteData();
     }
-    if (update.meshPoints) this.meshPoints = update.meshPoints.slice(0, MAX_MESH_POINTS);
+    if (update.meshPoints) {
+      this.meshPoints = update.meshPoints.slice(0, MAX_MESH_POINTS);
+      this.refreshMeshData();
+    }
     if (update.meshBase !== undefined) this.meshBase = /^#[0-9a-f]{6}$/i.test(update.meshBase) ? update.meshBase : '';
     this.schedule();
   }
@@ -195,9 +229,11 @@ export class InteractiveRenderer {
     if (this.gl) {
       if (this.buffer) this.gl.deleteBuffer(this.buffer);
       if (this.program) this.gl.deleteProgram(this.program);
+      if (this.paletteTexture) this.gl.deleteTexture(this.paletteTexture);
     }
     this.buffer = null;
     this.program = null;
+    this.paletteTexture = null;
     this.gl = null;
   }
 
@@ -205,13 +241,14 @@ export class InteractiveRenderer {
     event.preventDefault();
     cancelAnimationFrame(this.frameId);
     this.frameId = 0;
+    this.paletteTexture = null;
     this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
   };
 
   private readonly handleContextRestored = () => {
     try {
       const options: WebGLContextAttributes = {
-        alpha: true, antialias: false, depth: false, premultipliedAlpha: false, powerPreference: 'low-power',
+        alpha: true, antialias: false, depth: false, premultipliedAlpha: false, powerPreference: 'default',
       };
       if (this.webgl2) {
         const context = this.canvas.getContext('webgl2', options);
@@ -251,8 +288,8 @@ export class InteractiveRenderer {
   }
 
   private paletteNotice() {
-    return this.palette.length > MAX_STOPS
-      ? `Shader rendering supports up to ${MAX_STOPS} stops; the CSS preview retains the complete gradient.`
+    return this.adaptiveScale < 1
+      ? `Adaptive resolution reduced to ${Math.round(this.adaptiveScale * 100)}% to maintain performance.`
       : '';
   }
 
@@ -288,9 +325,7 @@ export class InteractiveRenderer {
     if (!this.gl || this.disposed) return;
     const widthCss = this.canvas.clientWidth;
     const heightCss = this.canvas.clientHeight;
-    const quality = QUALITY_SCALE[this.settings.quality];
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const scale = clamp(dpr * quality * this.settings.resolutionScale, 0.35, 2);
+    const scale = clamp(this.baseResolutionScale() * this.adaptiveScale, 0.35, this.settings.quality === 'ultra' ? 1.75 : 2);
     const width = Math.max(1, Math.min(4096, Math.round(widthCss * scale)));
     const height = Math.max(1, Math.min(4096, Math.round(heightCss * scale)));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -299,6 +334,11 @@ export class InteractiveRenderer {
       this.gl.viewport(0, 0, width, height);
       this.schedule();
     }
+  }
+
+  private baseResolutionScale() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    return clamp(dpr * QUALITY_SCALE[this.settings.quality] * this.settings.resolutionScale, 0.35, this.settings.quality === 'ultra' ? 1.75 : 2);
   }
 
   private createProgram() {
@@ -323,14 +363,8 @@ export class InteractiveRenderer {
     if (this.program) gl.deleteProgram(this.program);
     this.program = program;
     this.uniforms = {};
-    const names = [
-      'uResolution', 'uPointer', 'uVelocity', 'uPointerActive', 'uPointerDown', 'uTime', 'uClock', 'uAspect',
-      'uStyle', 'uGradientKind', 'uGradientAngle', 'uGradientOrigin', 'uGradientRadius', 'uPointerMode', 'uInteractionColor', 'uStopCount', 'uSpeed', 'uIntensity', 'uDistortion', 'uDistortionScale',
-      'uTurbulence', 'uInteractionRadius', 'uInteractionStrength', 'uGlow', 'uRippleStrength', 'uRippleSpeed',
-      'uRippleCount', 'uMeshCount', 'uMeshBase', 'uMeshPoints[0]', 'uMeshColors[0]',
-      'uPalette[0]', 'uPaletteAlpha[0]', 'uRipples[0]',
-    ];
-    names.forEach(name => { this.uniforms[name] = gl.getUniformLocation(program, name); });
+    this.maxFragmentUniformVectors = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) as number;
+    UNIFORM_NAMES.forEach(name => { this.uniforms[name] = gl.getUniformLocation(program, name); });
 
     const buffer = gl.createBuffer();
     if (!buffer) throw new Error('Could not allocate the WebGL vertex buffer.');
@@ -356,6 +390,10 @@ export class InteractiveRenderer {
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    this.uploadPaletteTexture(gl);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
+    gl.uniform1i(this.uniforms.uPaletteLut ?? null, 0);
   }
 
   private compileShader(type: number, source: string) {
@@ -383,14 +421,28 @@ export class InteractiveRenderer {
     this.frameId = 0;
     const gl = this.gl, program = this.program;
     if (this.disposed || !gl || !program || !this.visible || this.status !== 'ready') return;
-    const delta = this.previousFrame ? Math.min(0.05, (now - this.previousFrame) / 1000) : 0;
+    const rawDelta = this.previousFrame ? (now - this.previousFrame) / 1000 : 0;
+    const delta = Math.min(0.05, rawDelta);
     this.previousFrame = now;
     this.clock += delta;
+    const animated = this.settings.animate && !this.paused && !this.reducedMotion;
+    if (animated) this.shaderTime += delta * this.settings.speed;
+    else if (!this.settings.animate) this.shaderTime = 0;
+    if (rawDelta > 0) {
+      this.frameEma = this.frameEma ? this.frameEma * 0.9 + rawDelta * 0.1 : rawDelta;
+      this.slowFrameCount = this.frameEma > 0.024 ? this.slowFrameCount + 1 : 0;
+      if (this.slowFrameCount >= 45 && this.baseResolutionScale() * this.adaptiveScale > 0.5) {
+        this.adaptiveScale = Math.max(0.5 / this.baseResolutionScale(), this.adaptiveScale * 0.85);
+        this.slowFrameCount = 0;
+        this.resize();
+        this.setStatus('ready', this.paletteNotice());
+      }
+    }
     const pointer = this.pointer.advance(delta, this.clock);
     this.draw(gl, program, pointer);
 
-    const animated = this.settings.animate && !this.paused && !this.reducedMotion;
-    if (animated || this.pointer.hasActivity()) this.schedule();
+    const idleMotion = this.settings.idleMotion && !this.paused && !this.reducedMotion;
+    if (animated || idleMotion || this.pointer.hasActivity()) this.schedule();
   };
 
   private draw(gl: GL, program: WebGLProgram, pointer: ReturnType<PointerManager['advance']>) {
@@ -402,13 +454,16 @@ export class InteractiveRenderer {
 
     const set1f = (name: string, value: number) => gl.uniform1f(this.uniforms[name] ?? null, value);
     const set2f = (name: string, x: number, y: number) => gl.uniform2f(this.uniforms[name] ?? null, x, y);
-    const animated = this.settings.animate && !this.paused && !this.reducedMotion;
+    const idlePointer = this.settings.idleMotion && pointer.active < 0.003 && !this.paused && !this.reducedMotion;
+    const pointerX = idlePointer ? 0.5 + Math.sin(this.clock * 0.17) * 0.28 : pointer.x;
+    const pointerY = idlePointer ? 0.5 + Math.sin(this.clock * 0.23 + 1.4) * 0.24 : pointer.y;
+    const pointerActive = idlePointer ? 0.42 : pointer.active;
     set2f('uResolution', this.canvas.width, this.canvas.height);
-    set2f('uPointer', pointer.x, pointer.y);
+    set2f('uPointer', pointerX, pointerY);
     set2f('uVelocity', pointer.velocityX, pointer.velocityY);
-    set1f('uPointerActive', this.settings.interactionEnabled ? pointer.active : 0);
+    set1f('uPointerActive', this.settings.interactionEnabled || idlePointer ? pointerActive : 0);
     set1f('uPointerDown', this.settings.interactionEnabled ? pointer.down : 0);
-    set1f('uTime', animated ? this.clock * this.settings.speed : 0);
+    set1f('uTime', this.settings.animate ? this.shaderTime : 0);
     set1f('uClock', this.clock);
     set1f('uAspect', this.canvas.width / Math.max(1, this.canvas.height));
     set1f('uStyle', STYLE_ID[this.settings.style]);
@@ -429,39 +484,98 @@ export class InteractiveRenderer {
     set1f('uGlow', this.settings.glow);
     set1f('uRippleStrength', this.settings.rippleStrength);
     set1f('uRippleSpeed', this.settings.rippleSpeed);
+    set1f('uOctaves', { low: 3, medium: 4, high: 5, ultra: 6 }[this.settings.quality]);
+    set1f('uWarpDepth', this.settings.quality === 'low' ? 1 : 2);
+    set1f('uWrapMode', this.settings.paletteWrap === 'repeat' ? 2 : 0);
+    set1f('uToneMap', this.settings.toneMapping);
+    set1f('uVignette', this.settings.vignette);
+    set1f('uSheen', this.settings.sheen);
+    set1f('uGrain', this.settings.filmGrain);
+    set1f('uLutEnabled', this.lutEnabled ? 1 : 0);
+    set1f('uProjectOutput', this.settings.renderBackend === 'webgl' ? 1 : 0);
+    gl.uniform1i(this.uniforms.uPaletteLut ?? null, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
+    gl.uniform1f(this.uniforms.uStopCount ?? null, MAX_STOPS);
+    gl.uniform4fv(this.uniforms['uPalette[0]'] ?? null, this.paletteColors);
+    gl.uniform1fv(this.uniforms['uPaletteAlpha[0]'] ?? null, this.paletteAlphas);
 
-    const colors = new Float32Array(MAX_STOPS * 4);
-    const alphas = new Float32Array(MAX_STOPS);
-    for (let i = 0; i < MAX_STOPS; i++) {
-      const stop = this.palette[Math.min(i, this.palette.length - 1)];
-      const color = hexToRgb(stop.color);
-      colors.set([color.r / 255, color.g / 255, color.b / 255, stop.position], i * 4);
-      alphas[i] = stop.alpha ?? 1;
-    }
-    gl.uniform1f(this.uniforms.uStopCount ?? null, Math.min(this.palette.length, MAX_STOPS));
-    gl.uniform4fv(this.uniforms['uPalette[0]'] ?? null, colors);
-    gl.uniform1fv(this.uniforms['uPaletteAlpha[0]'] ?? null, alphas);
-
-    const meshPointData = new Float32Array(MAX_MESH_POINTS * 4);
-    const meshColorData = new Float32Array(MAX_MESH_POINTS * 4);
-    this.meshPoints.forEach((point, index) => {
-      const color = hexToRgb(point.color);
-      meshPointData.set([point.x / 100, 1 - point.y / 100, point.size / 100, point.alpha], index * 4);
-      meshColorData.set([color.r / 255, color.g / 255, color.b / 255, 1], index * 4);
-    });
     const meshBase = this.meshBase ? hexToRgb(this.meshBase) : { r: 0, g: 0, b: 0 };
     gl.uniform1f(this.uniforms.uMeshCount ?? null, this.meshPoints.length);
     gl.uniform4f(this.uniforms.uMeshBase ?? null, meshBase.r / 255, meshBase.g / 255, meshBase.b / 255, this.meshBase ? 1 : 0);
-    gl.uniform4fv(this.uniforms['uMeshPoints[0]'] ?? null, meshPointData);
-    gl.uniform4fv(this.uniforms['uMeshColors[0]'] ?? null, meshColorData);
+    gl.uniform4fv(this.uniforms['uMeshPoints[0]'] ?? null, this.meshPointData);
+    gl.uniform4fv(this.uniforms['uMeshColors[0]'] ?? null, this.meshColorData);
 
-    const rippleData = new Float32Array(MAX_RIPPLES * 4);
-    const ripples = this.settings.ripplesEnabled ? this.pointer.getRipples().slice(-MAX_RIPPLES) : [];
-    ripples.forEach((ripple, index) => {
-      rippleData.set([ripple.x, ripple.y, ripple.startedAt, ripple.strength], index * 4);
-    });
-    set1f('uRippleCount', ripples.length);
-    gl.uniform4fv(this.uniforms['uRipples[0]'] ?? null, rippleData);
+    const rippleCount = this.refreshRippleData();
+    set1f('uRippleCount', rippleCount);
+    gl.uniform4fv(this.uniforms['uRipples[0]'] ?? null, this.rippleData);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  private refreshPaletteData() {
+    this.paletteLut = bakePaletteLut(this.palette, this.geometry.space ?? 'srgb', LUT_SIZE);
+    for (let i = 0; i < MAX_STOPS; i++) {
+      const sample = Math.round(i / (MAX_STOPS - 1) * (LUT_SIZE - 1)) * 4;
+      const offset = i * 4;
+      this.paletteColors[offset] = this.paletteLut[sample] / 255;
+      this.paletteColors[offset + 1] = this.paletteLut[sample + 1] / 255;
+      this.paletteColors[offset + 2] = this.paletteLut[sample + 2] / 255;
+      this.paletteColors[offset + 3] = i / (MAX_STOPS - 1);
+      this.paletteAlphas[i] = this.paletteLut[sample + 3] / 255;
+    }
+    if (this.gl) this.uploadPaletteTexture(this.gl);
+  }
+
+  private uploadPaletteTexture(gl: GL) {
+    if (!this.paletteTexture) this.paletteTexture = gl.createTexture();
+    if (!this.paletteTexture) {
+      this.lutEnabled = false;
+      return;
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LUT_SIZE, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.paletteLut);
+    this.lutEnabled = gl.getError() === gl.NO_ERROR && this.maxFragmentUniformVectors >= 16;
+  }
+
+  private refreshMeshData() {
+    this.meshPointData.fill(0);
+    this.meshColorData.fill(0);
+    this.meshPoints.forEach((point, index) => {
+      const color = hexToRgb(point.color);
+      this.meshPointData.set([point.x / 100, 1 - point.y / 100, point.size / 100, point.alpha], index * 4);
+      this.meshColorData.set([color.r / 255, color.g / 255, color.b / 255, 1], index * 4);
+    });
+  }
+
+  private refreshRippleData() {
+    const ripples = this.settings.ripplesEnabled ? this.pointer.getRipples() : [];
+    const start = Math.max(0, ripples.length - MAX_RIPPLES);
+    const count = ripples.length - start;
+    let changed = count !== this.cachedRippleCount;
+    if (!changed) {
+      for (let i = 0; i < count; i++) {
+        const ripple = ripples[start + i];
+        const offset = i * 4;
+        if (this.rippleData[offset] !== ripple.x || this.rippleData[offset + 1] !== ripple.y
+          || this.rippleData[offset + 2] !== ripple.startedAt || this.rippleData[offset + 3] !== ripple.strength) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (changed) {
+      this.rippleData.fill(0);
+      for (let i = 0; i < count; i++) {
+        const ripple = ripples[start + i];
+        this.rippleData.set([ripple.x, ripple.y, ripple.startedAt, ripple.strength], i * 4);
+      }
+      this.cachedRippleCount = count;
+    }
+    return count;
   }
 }

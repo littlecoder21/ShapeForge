@@ -36,6 +36,9 @@ function layerPalette(layer: GradientLayer): ShaderStop[] {
     color: stop.color,
     position: stop.pos / 100,
     alpha: stop.alpha,
+    hard: stop.hard,
+    mid: stop.mid,
+    curve: stop.curve,
   }));
 }
 
@@ -63,7 +66,7 @@ export function gradientLayerToShader(layer: GradientLayer, project: GradientPro
   }
   if (layer.type === 'curve') notes.push('Curve handles still define the layer shape; shader colors follow the curve layer stop ramp.');
   if (layer.type === 'noise') notes.push('Noise layers use their shader color ramp; the original grain remains as a texture overlay.');
-  if (palette.length > 8) notes.push(`Shader rendering supports up to 8 color stops; the layer retains all ${palette.length} stops in CSS and exports.`);
+  if (layer.repeating) notes.push('Repeating gradient geometry remains CSS-backed; the WebGL shader adds effects over the CSS gradient.');
   const meshPoints = layer.type === 'mesh' ? layer.mesh.points.slice(0, 8).map(point => ({
     color: point.color,
     x: point.x,
@@ -85,6 +88,7 @@ export function gradientLayerToShader(layer: GradientLayer, project: GradientPro
       originY: layer.cy,
       radiusX: layer.rx,
       radiusY: layer.ry,
+      space: layer.space,
     },
     notes,
   };
@@ -113,16 +117,13 @@ export function gradientProjectToShaderPalette(project: GradientProject): Shader
   }
 
   const notes = [
-    'The shader combines visible layer colors into an animated palette; the exact CSS composition remains underneath and is unchanged for static exports.',
+    'The shader palette is derived from the same GradientProject layer stops used by the CSS renderer; CSS remains available as a fallback and static export.',
   ];
   if (groups.some(group => group.layer.type === 'mesh')) {
     notes.push('Mesh point colors contribute to the palette; their positions and point effects remain in the CSS layer.');
   }
   if (groups.some(group => group.layer.type === 'curve')) {
     notes.push('Curve geometry and per-layer transforms are retained by the CSS composition, not reproduced in the shader overlay.');
-  }
-  if (flattened.length > 8) {
-    notes.push(`The shader supports up to 8 color stops; it will use the first 8 of ${flattened.length}.`);
   }
   return { palette: flattened, notes };
 }

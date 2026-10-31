@@ -22,7 +22,7 @@ function LayeredArt({ project, rootClass, playing = false, interactiveShaders = 
   return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} scope={rootClass} />)}
     {[...visible].reverse().map(l => <i key={l.id} className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}>
-      {project.shader?.enabled && l.shader?.enabled && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
+      {project.shader?.enabled && l.shader?.enabled && project.shader.renderBackend !== 'css' && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
       {l.type === 'mesh' && [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ point, index }) => <i key={point.id} className={`mesh-point-${index}`} />)}
     </i>)}
     {defs && <svg width="0" height="0" style={{ position: 'absolute' }}><defs dangerouslySetInnerHTML={{ __html: defs }} /></svg>}

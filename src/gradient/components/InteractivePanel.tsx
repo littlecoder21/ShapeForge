@@ -157,6 +157,12 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
     <section className="gs-interactive-section">
       <div className="field-label">Style default for new shader layers</div>
       <Seg value={settings.style} options={STYLES} onChange={style => update({ style })} label="Default shader style" testId="shader-style" />
+      <label className="field-label" htmlFor="shader-render-backend">Renderer backend</label>
+      <select id="shader-render-backend" className="generate-select" value={settings.renderBackend} onChange={event => update({ renderBackend: event.target.value as InteractiveSettings['renderBackend'] })} data-testid="shader-render-backend">
+        <option value="css">CSS renderer</option>
+        <option value="webgl">WebGL renderer (CSS fallback)</option>
+        <option value="overlay">CSS + WebGL overlay</option>
+      </select>
       <Switch label="Animate" checked={settings.animate} onChange={animate => update({ animate })} testId="shader-animate" />
       <ValueControl label="Animation speed" value={settings.speed} min={0} max={1.5} step={0.01} unit="×" def={DEFAULT_INTERACTIVE_SETTINGS.speed} onChange={speed => update({ speed }, 'speed')} testId="shader-speed" />
       <ValueControl label="Intensity" value={settings.intensity} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.intensity} onChange={intensity => update({ intensity }, 'intensity')} testId="shader-intensity" />
@@ -188,6 +194,20 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
       <ValueControl label="Distortion" value={settings.distortion} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.distortion} onChange={distortion => update({ distortion }, 'distortion')} testId="shader-distortion" />
       <ValueControl label="Distortion scale" value={settings.distortionScale} min={0.2} max={8} step={0.1} def={DEFAULT_INTERACTIVE_SETTINGS.distortionScale} onChange={distortionScale => update({ distortionScale }, 'distortion-scale')} testId="shader-distortion-scale" />
       <ValueControl label="Turbulence" value={settings.turbulence} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.turbulence} onChange={turbulence => update({ turbulence }, 'turbulence')} testId="shader-turbulence" />
+    </section>
+
+    <section className="gs-interactive-section" data-testid="shader-finish">
+      <div className="field-label">Finish</div>
+      <ValueControl label="Tone mapping" value={settings.toneMapping} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.toneMapping} onChange={toneMapping => update({ toneMapping }, 'tone-mapping')} testId="shader-tone-mapping" />
+      <ValueControl label="Vignette" value={settings.vignette} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.vignette} onChange={vignette => update({ vignette }, 'vignette')} testId="shader-vignette" />
+      <ValueControl label="Sheen" value={settings.sheen} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.sheen} onChange={sheen => update({ sheen }, 'sheen')} testId="shader-sheen" />
+      <ValueControl label="Film grain" value={settings.filmGrain} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.filmGrain} onChange={filmGrain => update({ filmGrain }, 'film-grain')} testId="shader-film-grain" />
+      <Switch label="Idle motion" checked={settings.idleMotion} onChange={idleMotion => update({ idleMotion })} testId="shader-idle-motion" />
+      <label className="field-label" htmlFor="shader-palette-wrap">Palette wrapping</label>
+      <select id="shader-palette-wrap" className="generate-select" value={settings.paletteWrap} onChange={event => update({ paletteWrap: event.target.value as InteractiveSettings['paletteWrap'] })} data-testid="shader-palette-wrap">
+        <option value="mirror">Mirror (seam-free)</option>
+        <option value="repeat">Repeat (legacy)</option>
+      </select>
     </section>
 
     <section className="gs-interactive-section">

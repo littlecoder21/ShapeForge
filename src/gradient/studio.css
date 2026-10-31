@@ -18,6 +18,15 @@
 .gs-shader-status.note { opacity: .8; }
 .gs-shader-status.fallback, .gs-shader-status.error, .gs-shader-status.context-lost { border-color: #8d5b44; color: #ffd2b8; }
 .gs-art-root > .gs-layer-shader::after { z-index: 2; }
+.gs-art-root > .gs-webgl-ready { background-image: none !important; background-color: transparent !important; }
+.gs-art-root > .gs-webgl-ready > .mesh-point-0,
+.gs-art-root > .gs-webgl-ready > .mesh-point-1,
+.gs-art-root > .gs-webgl-ready > .mesh-point-2,
+.gs-art-root > .gs-webgl-ready > .mesh-point-3,
+.gs-art-root > .gs-webgl-ready > .mesh-point-4,
+.gs-art-root > .gs-webgl-ready > .mesh-point-5,
+.gs-art-root > .gs-webgl-ready > .mesh-point-6,
+.gs-art-root > .gs-webgl-ready > .mesh-point-7 { display: none !important; }
 .gs-interactive { display: grid; gap: 12px; }
 .gs-interactive-section { display: grid; gap: 9px; padding: 10px 0; border-top: 1px solid #343a43; }
 .gs-interactive-presets { display: flex; flex-wrap: wrap; gap: 6px; }

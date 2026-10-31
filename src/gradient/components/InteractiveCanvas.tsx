@@ -11,28 +11,41 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
   const adapted = useMemo(() => gradientLayerToShader(layer, project), [layer, project]);
   const [status, setStatus] = useState<{ value: InteractiveRendererStatus; message: string }>({ value: 'ready', message: '' });
   const settings = useMemo(() => ({ ...config, style: layer.shader?.style ?? config.style }), [config, layer.shader?.style]);
+  const rendererSettings = useMemo(() => ({
+    ...settings,
+    renderBackend: settings.renderBackend === 'webgl' && layer.repeating ? 'overlay' as const : settings.renderBackend,
+  }), [settings, layer.repeating]);
+  const backendRef = useRef(rendererSettings.renderBackend);
+  backendRef.current = rendererSettings.renderBackend;
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const renderer = new InteractiveRenderer(canvas, {
       palette: adapted.palette,
-      settings,
+      settings: rendererSettings,
       geometry: adapted.geometry,
       meshPoints: adapted.meshPoints,
       meshBase: adapted.meshBase,
-      onStatusChange: (value, message = '') => setStatus({ value, message }),
+      onStatusChange: (value, message = '') => {
+        canvas.parentElement?.classList.toggle('gs-webgl-ready', backendRef.current === 'webgl' && value === 'ready');
+        setStatus({ value, message });
+      },
     });
+    canvas.parentElement?.classList.toggle('gs-webgl-ready', rendererSettings.renderBackend === 'webgl' && renderer.getStatus().status === 'ready');
     rendererRef.current = renderer;
     return () => {
+      canvas.parentElement?.classList.remove('gs-webgl-ready');
       renderer.destroy();
       rendererRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    rendererRef.current?.update({ palette: adapted.palette, settings, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase });
-  }, [adapted, settings]);
+    rendererRef.current?.update({ palette: adapted.palette, settings: rendererSettings, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase });
+    const canvas = canvasRef.current;
+    canvas?.parentElement?.classList.toggle('gs-webgl-ready', rendererSettings.renderBackend === 'webgl' && rendererRef.current?.getStatus().status === 'ready');
+  }, [adapted, rendererSettings]);
 
   return <>
     <canvas

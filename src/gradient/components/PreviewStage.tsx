@@ -42,7 +42,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const pointers = useRef(new Map<number, V2 & { type: string }>()), gest = useRef<G>({ t: 'idle' }), raf = useRef(0), anim = useRef(0);
   const [pct, setPct] = useState(100);
   const [beforeProject, setBeforeProject] = useState<GradientProject | null>(null);
-  const shaderInputActive = shaderEnabled && project.layers.some(item => item.visible && item.shader?.enabled) && !beforeProject;
+  const shaderInputActive = shaderEnabled && project.shader?.renderBackend !== 'css' && project.layers.some(item => item.visible && item.shader?.enabled) && !beforeProject;
   const [shaderPointerInput, setShaderPointerInput] = useState(false);
   const [compareSplit, setCompareSplit] = useState(50);
   const [playEpoch, setPlayEpoch] = useState(0);
