@@ -5,6 +5,7 @@ import AnimationPanel from './components/AnimationPanel';
 import ApplySheet, { type ApplyOptions } from './components/ApplySheet';
 import ScenesPanel from './components/ScenesPanel';
 import EffectsPanel from './components/EffectsPanel';
+import InteractivePanel from './components/InteractivePanel';
 import GradientPanel from './components/GradientPanel';
 import LayersPanel from './components/LayersPanel';
 import OutputPanel, { type Fmt } from './components/OutputPanel';
@@ -20,10 +21,10 @@ import { loadProject, saveProject } from './engine/persist';
 import { createStudioStore, useStore } from './engine/store';
 import './studio.css';
 
-type Tab = 'layers' | 'gradient' | 'transform' | 'fx' | 'texture' | 'animate' | 'scenes' | 'presets';
+type Tab = 'layers' | 'gradient' | 'transform' | 'fx' | 'texture' | 'animate' | 'shader' | 'scenes' | 'presets';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'layers', label: 'Layers' }, { id: 'gradient', label: 'Gradient' }, { id: 'transform', label: 'Transform' }, { id: 'fx', label: 'FX' }, { id: 'texture', label: 'Texture' },
-  { id: 'animate', label: 'Animate' }, { id: 'scenes', label: 'Scenes' }, { id: 'presets', label: 'Presets' },
+  { id: 'animate', label: 'Animate' }, { id: 'shader', label: 'Shader' }, { id: 'scenes', label: 'Scenes' }, { id: 'presets', label: 'Presets' },
 ];
 
 export interface GradientStudioProps {
@@ -80,6 +81,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
   const body = (t: Tab) => {
     if (t === 'presets') return <PresetsPanel onApplied={() => { if (!wide) setDockTall(false); }} />;
     if (t === 'scenes') return <ScenesPanel />;
+    if (t === 'shader') return <InteractivePanel layerId={layerId} />;
     if (!layerId) return <Empty>Select a layer in the Layers tab.</Empty>;
     if (t === 'layers') return <LayersPanel />;
     if (t === 'gradient') return <GradientPanel layerId={layerId} />;

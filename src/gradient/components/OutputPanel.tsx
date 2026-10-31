@@ -4,13 +4,14 @@ import { Seg } from '../../shared/controls';
 import { buildOutputs } from '../engine/output';
 import { exportPng } from '../engine/raster';
 import { normalizeProject, outputOf } from '../engine/model';
+import { interactiveExports } from '../interactive/export';
 import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
 import OutputSettingsForm from './OutputSettingsForm';
 import { useStudio } from './ui';
 
-type Fmt = 'css' | 'html' | 'vars' | 'svg' | 'keyframes' | 'json';
-const FORMATS: { id: Fmt; label: string }[] = [{ id: 'css', label: 'CSS' }, { id: 'html', label: 'HTML + CSS' }, { id: 'vars', label: 'Variables' }, { id: 'svg', label: 'SVG' }, { id: 'keyframes', label: 'Keyframes' }, { id: 'json', label: 'JSON' }];
+type Fmt = 'css' | 'html' | 'interactive' | 'vars' | 'svg' | 'keyframes' | 'json';
+const FORMATS: { id: Fmt; label: string }[] = [{ id: 'css', label: 'CSS' }, { id: 'html', label: 'HTML + CSS' }, { id: 'interactive', label: 'Interactive' }, { id: 'vars', label: 'Variables' }, { id: 'svg', label: 'SVG' }, { id: 'keyframes', label: 'Keyframes' }, { id: 'json', label: 'JSON' }];
 
 const save = (name: string, blob: Blob) => {
   const url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -25,7 +26,9 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const { store, announce } = useStudio();
   const project = useDeferredValue(useStore(store, s => s.project));
   const out = useMemo(() => buildOutputs(project), [project]);
+  const interactive = useMemo(() => interactiveExports(project), [project]);
   const [cssMode, setCssMode] = useState<'full' | 'properties'>('full');
+  const [interactiveMode, setInteractiveMode] = useState<'html' | 'glsl' | 'react'>('html');
   const [importText, setImportText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const configuredName = outputOf(project).downloadName.trim();
@@ -81,6 +84,22 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       <CodeBlock title="SVG" text={out.svg} lang="svg" testId="code-svg" copyLabel="Copy SVG" actions={<button type="button" className="btn small" onClick={() => save(`${slug}.svg`, new Blob([out.svg], { type: 'image/svg+xml' }))} data-testid="download-svg"><Download />.svg</button>} />
     </>}
     {fmt === 'keyframes' && <CodeBlock title="Animation CSS" text={out.keyframes} testId="code-keyframes" actions={downloadButton('css', out.keyframes)} />}
+    {fmt === 'interactive' && <>
+      <div className="gs-fmt" role="tablist" aria-label="Interactive export format">
+        {([
+          { id: 'html', label: 'HTML + JS' },
+          { id: 'glsl', label: 'GLSL' },
+          { id: 'react', label: 'React + TS' },
+        ] as const).map(format => (
+          <button key={format.id} type="button" role="tab" aria-selected={interactiveMode === format.id} className={`ptab ${interactiveMode === format.id ? 'active' : ''}`} onClick={() => setInteractiveMode(format.id)} data-testid={`interactive-out-${format.id}`}>
+            {format.label}
+          </button>
+        ))}
+      </div>
+      {interactiveMode === 'html' && <CodeBlock title="Standalone interactive background" text={interactive.html} lang="html" testId="code-interactive-html" copyLabel="Copy HTML" actions={downloadButton('html', interactive.html, 'Download HTML')} />}
+      {interactiveMode === 'glsl' && <CodeBlock title="Shader sources and uniforms" text={interactive.glsl} lang="glsl" testId="code-interactive-glsl" copyLabel="Copy GLSL" actions={downloadButton('glsl', interactive.glsl, 'Download GLSL')} />}
+      {interactiveMode === 'react' && <CodeBlock title="Self-contained React + TypeScript component" text={interactive.react} lang="tsx" testId="code-interactive-react" copyLabel="Copy React component" actions={downloadButton('tsx', interactive.react, 'Download TSX')} />}
+    </>}
     {fmt === 'json' && <>
       <CodeBlock title="Project JSON" text={out.json} lang="json" testId="code-json" copyLabel="Copy JSON" actions={downloadButton('json', out.json, '.json')} />
       <label className="field-label" htmlFor="gs-import">Import project JSON</label>

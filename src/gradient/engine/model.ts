@@ -1,5 +1,6 @@
 import { clamp } from './color';
 import { TEXTURE_DEFAULTS, normalizeTexture, type TextureParams } from './textureControls';
+import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_LAYER, normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type ShaderLayerConfig } from '../interactive/types';
 
 /* ═══════════════════════════ Gradient Studio data model ═══════════════════════════
  * The project is the source of truth. CSS, SVG, PNG and keyframes are all *generated* from it,
@@ -133,6 +134,8 @@ export interface GradientLayer {
   curve: CurveData;
   /** Optional freeform clipping boundary. Applies to the whole layer, including texture overlays. */
   mask: LayerMask;
+  /** Optional shader overlay for this layer; all existing layer controls continue to apply. */
+  shader?: ShaderLayerConfig;
   /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
   solidColor?: string;
 }
@@ -170,6 +173,8 @@ export interface GradientProject {
   /** index 0 = TOP layer (same order as CSS `background`). */
   layers: GradientLayer[];
   output?: Partial<OutputSettings>;
+  /** Optional interactive shader overlay settings; absent in legacy projects. */
+  shader?: InteractiveSettings;
 }
 
 /* ───────────────────────── factories ───────────────────────── */
@@ -192,6 +197,7 @@ export function newLayer(type: GradientKind = 'linear', over: Partial<GradientLa
     opacity: 1, blend: 'normal', transform: { ...IDENTITY }, effects: [], texture: { ...DEFAULT_TEXTURE }, anim: { ...NO_ANIM, tracks: [] },
     mesh: { ...DEFAULT_MESH, points: [] }, noise: { ...DEFAULT_NOISE }, curve: { ...DEFAULT_CURVE, p0: { ...DEFAULT_CURVE.p0 }, p1: { ...DEFAULT_CURVE.p1 }, p2: { ...DEFAULT_CURVE.p2 }, p3: { ...DEFAULT_CURVE.p3 } },
     mask: { ...DEFAULT_LAYER_MASK, corners: DEFAULT_LAYER_MASK.corners.map(p => ({ ...p })) as LayerMask['corners'], controls: DEFAULT_LAYER_MASK.controls.map(p => ({ ...p })) as LayerMask['controls'] },
+    shader: { ...DEFAULT_SHADER_LAYER },
   };
   const defined = Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) as Partial<GradientLayer>;
   const layer = { ...base, ...defined };
@@ -212,6 +218,7 @@ export const defaultName = (l: Pick<GradientLayer, 'type' | 'repeating'>) => `${
 export function newProject(over: Partial<GradientProject> = {}): GradientProject {
   return {
     version: 1, name: 'Untitled gradient', canvas: { w: 1200, h: 800 }, background: '',
+    shader: { ...DEFAULT_INTERACTIVE_SETTINGS },
     layers: [
       newLayer('radial', { name: 'Glow', cx: 28, cy: 30, rx: 55, ry: 60, stops: [stop('#ff7ad9', 0, 0.9), stop('#ff7ad9', 100, 0)], blend: 'normal' }),
       newLayer('linear', { name: 'Base', angle: 135, stops: [stop('#4f46e5', 0), stop('#06b6d4', 100)] }),
@@ -270,7 +277,7 @@ export function normalizeProject(raw: unknown): GradientProject {
   if (!Array.isArray(r.layers) || !r.layers.length) throw new Error('Project has no layers');
   const layers = r.layers.map((l, i) => {
     const t = (['linear', 'radial', 'conic', 'curve', 'mesh', 'noise'] as const).includes(l.type as GradientKind) ? l.type : 'linear';
-    const merged = newLayer(t, { ...l, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [] });
+    const merged = newLayer(t, { ...l, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [], shader: normalizeShaderLayer(l.shader) });
     merged.effects = merged.effects.map(effect => effect.type === 'iridescence' ? {
       ...effect,
       params: {
@@ -339,5 +346,13 @@ export function normalizeProject(raw: unknown): GradientProject {
     if (!merged.name) merged.name = `Layer ${i + 1}`;
     return merged;
   });
-  return { version: 1, output: r.output, name: r.name || 'Imported gradient', canvas: { w: clamp(Number(r.canvas?.w) || 1200, 64, 4096), h: clamp(Number(r.canvas?.h) || 800, 64, 4096) }, background: r.background ?? '', layers };
+  return {
+    version: 1,
+    output: r.output,
+    shader: normalizeInteractiveSettings(r.shader),
+    name: r.name || 'Imported gradient',
+    canvas: { w: clamp(Number(r.canvas?.w) || 1200, 64, 4096), h: clamp(Number(r.canvas?.h) || 800, 64, 4096) },
+    background: r.background ?? '',
+    layers,
+  };
 }

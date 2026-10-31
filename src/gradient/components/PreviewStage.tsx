@@ -12,6 +12,7 @@ import { useStore, type StudioStore } from '../engine/store';
 import { CHECKER } from './ui';
 import LayeredArt from './LayeredArt';
 import { DirectionAwareRange } from '../../shared/controls';
+import { normalizeInteractiveSettings } from '../interactive/types';
 
 /* The interactive canvas. The art is a real DOM composition (the exact CSS that gets exported), scaled with a CSS transform;
  * handles are an SVG overlay. Zoom / pan / pinch only touch the transform, never the project. */
@@ -34,12 +35,15 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const stopId = useStore(store, s => s.stopId);
   const layer = project.layers.find(l => l.id === layerId) ?? null;
   const { w, h } = project.canvas;
+  const shaderEnabled = normalizeInteractiveSettings(project.shader).enabled;
 
   const wrapRef = useRef<HTMLDivElement>(null), worldRef = useRef<HTMLDivElement>(null), readRef = useRef<HTMLDivElement>(null);
   const vpRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 }), sizeRef = useRef({ w: 0, h: 0 }), fitRef = useRef(1), userMoved = useRef(false);
   const pointers = useRef(new Map<number, V2 & { type: string }>()), gest = useRef<G>({ t: 'idle' }), raf = useRef(0), anim = useRef(0);
   const [pct, setPct] = useState(100);
   const [beforeProject, setBeforeProject] = useState<GradientProject | null>(null);
+  const shaderInputActive = shaderEnabled && project.layers.some(item => item.visible && item.shader?.enabled) && !beforeProject;
+  const [shaderPointerInput, setShaderPointerInput] = useState(false);
   const [compareSplit, setCompareSplit] = useState(50);
   const [playEpoch, setPlayEpoch] = useState(0);
   const [finished, setFinished] = useState(false);
@@ -49,6 +53,11 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const overlay = useMemo(() => (layer && layer.visible && (layer.solidColor === undefined || layer.mask.enabled) ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const live = useRef({ overlay, layer, canvas: project.canvas }); live.current = { overlay, layer, canvas: project.canvas };
+  const shaderInputRef = useRef(shaderInputActive && shaderPointerInput); shaderInputRef.current = shaderInputActive && shaderPointerInput;
+
+  useEffect(() => {
+    if (!shaderInputActive) setShaderPointerInput(false);
+  }, [shaderInputActive]);
 
   useEffect(() => {
     if (!playing || playbackDuration === null) return;
@@ -124,6 +133,22 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
     return best;
   };
   const cancelDrag = () => { const g = gest.current; if (g.t === 'drag') { store.updateLayer(g.start.id, () => g.start); store.end(); } setRead(null); };
+  const relayShaderPointer = (event: RPointerEvent) => {
+    const canvases = worldRef.current?.querySelectorAll<HTMLCanvasElement>('.gs-shader-canvas');
+    if (!canvases) return;
+    canvases.forEach(canvas => {
+      if (canvas === event.target) return;
+      canvas.dispatchEvent(new PointerEvent(event.type, {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        button: event.button,
+        buttons: event.buttons,
+        pressure: event.pressure,
+      }));
+    });
+  };
   const beginPinch = () => {
     const ids = [...pointers.current.keys()].slice(0, 2) as [number, number]; cancelDrag();
     const a = pointers.current.get(ids[0])!, b = pointers.current.get(ids[1])!;
@@ -162,6 +187,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const schedule = () => { if (!raf.current) raf.current = requestAnimationFrame(frame); };
 
   const onDown = (e: RPointerEvent) => {
+    if (shaderInputRef.current) { relayShaderPointer(e); return; }
     if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
     try { wrapRef.current!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const s = local(e); pointers.current.set(e.pointerId, { ...s, type: e.pointerType });
@@ -171,6 +197,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
     gest.current = { t: 'pending', id: e.pointerId, s, hit: hitTest(s, e.pointerType), type: e.pointerType };
   };
   const onMove = (e: RPointerEvent) => {
+    if (shaderInputRef.current) { relayShaderPointer(e); return; }
     const k = pointers.current.get(e.pointerId);
     if (!k) { if (e.pointerType === 'mouse' && gest.current.t === 'idle') wrapRef.current!.style.cursor = hitTest(local(e), 'mouse') ? 'grab' : ''; return; }
     const s = local(e); k.x = s.x; k.y = s.y; schedule();
@@ -203,7 +230,16 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   /* ───── render ───── */
   const stopColor = (id?: string) => layer?.stops.find(s => s.id === id)?.color;
 
-  return <div className="gs-stage" ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={e => finish(e, false)} onPointerCancel={e => finish(e, true)} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
+  const onUp = (event: RPointerEvent) => {
+    if (shaderInputRef.current) relayShaderPointer(event);
+    else finish(event, false);
+  };
+  const onCancel = (event: RPointerEvent) => {
+    if (shaderInputRef.current) relayShaderPointer(event);
+    else finish(event, true);
+  };
+
+  return <div className={`gs-stage${shaderInputActive ? ' gs-stage-shader' : ''}`} ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
     <div className="gs-world" ref={worldRef} style={{ width: w, height: h }}>
       <div className="gs-checker" style={{ background: CHECKER }} />
       {beforeProject ? <>
@@ -214,7 +250,9 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
           <LayeredArt key={playEpoch} project={project} rootClass="gs-after-art" playing={playing || finished} className={finished ? 'gs-finished' : ''} testId="gs-after-art" />
         </div>
         <div className="gs-compare-divider" style={{ left: `${compareSplit}%` }}><span>Before</span><span>After</span></div>
-      </> : <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing || finished} className={finished ? 'gs-finished' : ''} testId="gs-art" />}
+      </> : <>
+        <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing || finished} interactiveShaders={shaderInputActive && shaderPointerInput} className={finished ? 'gs-finished' : ''} testId="gs-art" />
+      </>}
       <svg className="gs-overlay" width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
         {overlay && <>
           <g transform={`matrix(${overlay.matrix.join(' ')})`}>
@@ -242,6 +280,15 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
         <button type="button" onClick={() => zoomBy(1)} aria-label="Zoom in" data-testid="gs-zoom-in"><Plus /></button>
         <button type="button" className="fit" onClick={() => fit(true)} aria-label="Fit to screen" data-testid="gs-zoom-fit"><Maximize /><span>Fit</span></button>
       </div>
+      {shaderInputActive && <button
+        type="button"
+        className={`gs-play-btn gs-shader-input-btn ${shaderPointerInput ? 'on' : ''}`}
+        onClick={() => setShaderPointerInput(active => !active)}
+        aria-pressed={shaderPointerInput}
+        aria-label={shaderPointerInput ? 'Switch to editing shader layer controls' : 'Enable shader pointer interaction'}
+        title={shaderPointerInput ? 'Pointer and touch input are active · click to edit stops and shape' : 'Click to send pointer and touch input to the shader'}
+        data-testid="gs-shader-input-mode"
+      >{shaderPointerInput ? 'Edit layer' : 'Interact'}</button>}
       <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={() => {
         if (!playing && completed.current) {
           completed.current = false;

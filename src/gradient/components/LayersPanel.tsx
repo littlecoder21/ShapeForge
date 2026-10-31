@@ -5,6 +5,7 @@ import { BLEND_MODES, cloneLayer, newSolidLayer, type GradientLayer, type Gradie
 import { SOLID_SWATCHES, setSolidColor } from '../engine/solidColors';
 import { useStore } from '../engine/store';
 import { LAYER_TEMPLATES, typeIcon } from '../engine/templates';
+import { normalizeInteractiveSettings } from '../interactive/types';
 import { ValueControl } from '../../shared/controls';
 import LayerCssPanel from './LayerCssPanel';
 import { ColorInput, useStudio } from './ui';
@@ -26,7 +27,17 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
 
   const selected = layers.find(l => l.id === layerId) ?? null;
   const select = (id: string) => { store.select(id); onSelected?.(); };
-  const add = (make: () => GradientLayer) => { const l = make(); store.update(p => ({ ...p, layers: [l, ...p.layers] })); store.select(l.id); announce(`Added ${l.name}`); };
+  const add = (template: (typeof LAYER_TEMPLATES)[number]) => {
+    const layer = template.make();
+    store.update(project => ({
+      ...project,
+      shader: template.id === 'shader' ? normalizeInteractiveSettings({ ...project.shader, enabled: true }) : project.shader,
+      layers: [layer, ...project.layers],
+    }));
+    store.select(layer.id);
+    if (template.id === 'shader') store.selectStop(layer.mesh.points[0]?.id ?? null);
+    announce(`Added ${layer.name}`);
+  };
   const move = (id: string, to: number) => store.update(p => { const i = p.layers.findIndex(l => l.id === id); if (i < 0 || to < 0 || to >= p.layers.length || i === to) return p; const a = [...p.layers]; const [x] = a.splice(i, 1); a.splice(to, 0, x); return { ...p, layers: a }; });
   const dup = (l: GradientLayer) => { const c = cloneLayer(l); c.name = `${l.name} copy`; store.update(p => ({ ...p, layers: p.layers.flatMap(x => (x.id === l.id ? [c, x] : [x])) })); store.select(c.id); };
   const del = (l: GradientLayer) => {
@@ -52,7 +63,7 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
 
   return <div className="gs-layers" data-testid="layers-panel">
     <div className="gs-chips gs-addchips" role="group" aria-label="Add layer">
-      {LAYER_TEMPLATES.map(t => <button key={t.id} type="button" className="chip" onClick={() => add(t.make)} data-testid={`add-layer-${t.id}`}>+ {t.label}</button>)}
+      {LAYER_TEMPLATES.map(t => <button key={t.id} type="button" className="chip" onClick={() => add(t)} data-testid={`add-layer-${t.id}`}>+ {t.label}</button>)}
     </div>
     <ul className="gs-layerlist" style={{ height: layers.length * ROW }}>
       {layers.map((l, i) => {
