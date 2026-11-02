@@ -1,6 +1,7 @@
 import { analyseOutput, animationOnly, flatOutput, layerCss, layeredOutput, ordinalNames, selectorFor, variablesOutput } from './css';
 import { outputOf, type GradientProject } from './model';
 import { projectSvg } from './svg';
+import { serializeProjectFile } from './projectFile';
 
 /** Everything the Output panel shows, generated from the project in one place. */
 export function svgSizeAttrs(project: GradientProject): string {
@@ -19,7 +20,7 @@ export function buildOutputs(project: GradientProject) {
     vars: variablesOutput(project),
     keyframes: animationOnly(project),
     svg: projectSvg(project, { size: svgSizeAttrs(project) }),
-    json: JSON.stringify(project, null, 2),
+    json: serializeProjectFile(project),
   };
 }
 export type Outputs = ReturnType<typeof buildOutputs>;

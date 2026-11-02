@@ -11,6 +11,7 @@ export type GradientKind = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'n
 /** Kinds that are true colour-stop gradients (the rest are a mesh of points / a grain texture). */
 export const isStopKind = (k: GradientKind) => k === 'linear' || k === 'radial' || k === 'conic' || k === 'curve';
 export type ColorSpace = 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
+const COLOR_SPACES: readonly ColorSpace[] = ['srgb', 'srgb-linear', 'oklab', 'oklch'];
 
 export const BLEND_MODES = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light', 'soft-light',
@@ -278,7 +279,9 @@ export function normalizeProject(raw: unknown): GradientProject {
   if (!Array.isArray(r.layers) || !r.layers.length) throw new Error('Project has no layers');
   const layers = r.layers.map((l, i) => {
     const t = (['linear', 'radial', 'conic', 'curve', 'mesh', 'noise'] as const).includes(l.type as GradientKind) ? l.type : 'linear';
-    const merged = newLayer(t, { ...l, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [], shader: normalizeShaderLayer(l.shader) });
+    const merged = newLayer(t, { ...l, type: t, id: l.id || uid('l'), transform: { ...IDENTITY, ...(l.transform ?? {}) }, anim: { ...NO_ANIM, ...(l.anim ?? {}), tracks: l.anim?.tracks ?? [] }, repeat: { ...newLayer(t).repeat, ...(l.repeat ?? {}) }, effects: l.effects ?? [], shader: normalizeShaderLayer(l.shader) });
+    if (!(COLOR_SPACES as readonly string[]).includes(merged.space)) merged.space = 'srgb';
+    if (!(BLEND_MODES as readonly string[]).includes(merged.blend)) merged.blend = 'normal';
     merged.effects = merged.effects.map(effect => effect.type === 'iridescence' ? {
       ...effect,
       params: {

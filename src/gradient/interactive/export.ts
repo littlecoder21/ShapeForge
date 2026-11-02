@@ -660,8 +660,13 @@ export default function InteractiveGradientBackground({ settings, palette, geome
 }
 
 export function interactiveExports(project: GradientProject) {
+  const built = makeDocument(project);
+  const note = built.palette.notes.map(message => `<!-- ${message.replace(/--/g, '—')} -->`).join('\n');
   return {
-    html: interactiveHtmlExport(project),
+    html: `${note ? `${note}\n` : ''}${built.body}`,
+    markup: `${note ? `${note}\n` : ''}${built.markup}`,
+    stylesheet: built.stylesheet,
+    runtime: shaderRuntime(),
     javascript: interactiveJavaScriptExport(project),
     glsl: interactiveGlslExport(),
     react: interactiveReactExport(project),

@@ -1,9 +1,21 @@
-import { useDeferredValue, useMemo, useState } from 'react';
-import { Download, ImageDown } from 'lucide-react';
+import { useDeferredValue, useMemo, useRef, useState } from 'react';
+import { ChevronDown, Copy, Download, ImageDown, Upload } from 'lucide-react';
 import { Seg } from '../../shared/controls';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
 import { buildOutputs } from '../engine/output';
 import { exportPng } from '../engine/raster';
-import { normalizeProject, outputOf } from '../engine/model';
+import { outputOf } from '../engine/model';
+import { parseProjectFile } from '../engine/projectFile';
 import { interactiveExports } from '../interactive/export';
 import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
@@ -30,11 +42,22 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const [cssMode, setCssMode] = useState<'full' | 'properties'>('full');
   const [interactiveMode, setInteractiveMode] = useState<'html' | 'javascript' | 'glsl' | 'react'>('html');
   const [importText, setImportText] = useState('');
+  const [recoveryBackup, setRecoveryBackup] = useState('');
+  const [recoveryWarnings, setRecoveryWarnings] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [showSettings, setShowSettings] = useState(false);
   const configuredName = outputOf(project).downloadName.trim();
   const slug = (configuredName || project.name || 'gradient').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'gradient';
   const saveText = (extension: string, text: string, type = 'text/plain;charset=utf-8') => save(`${slug}.${extension}`, new Blob([text], { type }));
+  const saveStandaloneHtml = () => save(`${slug}.standalone.html`, new Blob([interactive.html], { type: 'text/html;charset=utf-8' }));
+  const saveStandaloneJs = () => save(`${slug}.standalone.js`, new Blob([interactive.javascript], { type: 'text/javascript;charset=utf-8' }));
+  const standaloneHtmlButton = <button type="button" className="btn small" onClick={saveStandaloneHtml} aria-label="Download standalone interactive HTML" data-testid="download-interactive-standalone-html-direct"><Download />.html</button>;
+  const standaloneJsButton = <button type="button" className="btn small" onClick={saveStandaloneJs} aria-label="Download standalone interactive JavaScript" data-testid="download-interactive-standalone-js-direct"><Download />.js</button>;
   const downloadButton = (extension: string, text: string, label = `.${extension}`) => <button type="button" className="btn small" onClick={() => saveText(extension, text)} data-testid={`download-${extension}`}><Download />{label}</button>;
+  const copyInteractiveAsset = async (label: string, text: string) => {
+    try { await navigator.clipboard.writeText(text); announce(`${label} copied`); }
+    catch { announce('Clipboard unavailable'); }
+  };
 
   const png = async (scale: number) => {
     try {
@@ -45,7 +68,25 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       announce(error instanceof Error ? `PNG export failed: ${error.message}` : 'PNG export failed');
     }
   };
-  const doImport = () => { try { store.replace(normalizeProject(JSON.parse(importText))); announce('Project imported'); setImportText(''); } catch (e) { announce(e instanceof Error ? e.message : 'Could not read that JSON'); } };
+  const doImport = (text = importText) => {
+    try {
+      const imported = parseProjectFile(text);
+      store.replace(imported.project);
+      setRecoveryBackup(imported.warnings.length ? text : '');
+      setRecoveryWarnings(imported.warnings);
+      announce(imported.warnings.length ? `Project imported with ${imported.warnings.length} compatibility adjustment${imported.warnings.length === 1 ? '' : 's'}` : 'Project imported');
+      setImportText('');
+    } catch (e) {
+      announce(e instanceof Error ? e.message : 'Could not read that JSON');
+    }
+  };
+  const readProjectFile = async (file?: File) => {
+    if (!file) return;
+    try { doImport(await file.text()); }
+    catch (error) { announce(error instanceof Error ? `Could not read file: ${error.message}` : 'Could not read project file'); }
+    if (fileInput.current) fileInput.current.value = '';
+  };
+  const downloadRecoveryBackup = () => save(`${slug}.recovery-backup.json`, new Blob([recoveryBackup], { type: 'application/json;charset=utf-8' }));
 
   return <div className="gs-output" data-testid="output-panel">
     <div className="gs-fmt" role="tablist" aria-label="Output format">
@@ -97,16 +138,78 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
           </button>
         ))}
       </div>
-      {interactiveMode === 'html' && <CodeBlock title="Standalone interactive background" text={interactive.html} lang="html" testId="code-interactive-html" copyLabel="Copy HTML" actions={downloadButton('html', interactive.html, 'Download HTML')} />}
-      {interactiveMode === 'javascript' && <CodeBlock title="Mount the exact interactive gradient into a page" text={interactive.javascript} lang="js" testId="code-interactive-javascript" copyLabel="Copy JavaScript" actions={downloadButton('js', interactive.javascript, 'Download JS')} />}
+      {interactiveMode === 'html' && <CodeBlock
+        title="Interactive HTML markup"
+        text={interactive.markup}
+        lang="html"
+        testId="code-interactive-html"
+        hideCopy
+        actions={<>{standaloneHtmlButton}<DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="btn small" aria-label="HTML, CSS, and JavaScript copy and download options" data-testid="interactive-assets-menu">
+              <Copy />Assets<ChevronDown />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" style={{ zIndex: 100 }}>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger><Copy />Copy standalone</DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent style={{ zIndex: 101 }}>
+                  <DropdownMenuItem onSelect={() => { void copyInteractiveAsset('Standalone HTML', interactive.html); }} data-testid="copy-interactive-standalone-html"><Copy />HTML</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { void copyInteractiveAsset('Standalone JavaScript', interactive.javascript); }} data-testid="copy-interactive-standalone-js"><Copy />JavaScript</DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger><Copy />Copy separate assets</DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent style={{ zIndex: 101 }}>
+                  <DropdownMenuItem onSelect={() => { void copyInteractiveAsset('HTML markup', interactive.markup); }} data-testid="copy-interactive-html"><Copy />HTML markup</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { void copyInteractiveAsset('CSS', interactive.stylesheet); }} data-testid="copy-interactive-css"><Copy />CSS</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => { void copyInteractiveAsset('Shader runtime JavaScript', interactive.runtime); }} data-testid="copy-interactive-js"><Copy />Shader runtime JS</DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger><Download />Download standalone</DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent style={{ zIndex: 101 }}>
+                  <DropdownMenuItem onSelect={saveStandaloneHtml} data-testid="download-interactive-standalone-html"><Download />HTML file</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={saveStandaloneJs} data-testid="download-interactive-standalone-js"><Download />JavaScript file</DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger><Download />Download separate assets</DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent style={{ zIndex: 101 }}>
+                  <DropdownMenuItem onSelect={() => saveText('markup.html', interactive.markup, 'text/html;charset=utf-8')} data-testid="download-interactive-html"><Download />HTML markup</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => saveText('css', interactive.stylesheet, 'text/css;charset=utf-8')} data-testid="download-interactive-css"><Download />CSS</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => saveText('shader-runtime.js', interactive.runtime, 'text/javascript;charset=utf-8')} data-testid="download-interactive-js"><Download />Shader runtime JS</DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+          </DropdownMenuContent>
+        </DropdownMenu></>}
+      />}
+      {interactiveMode === 'javascript' && <CodeBlock title="Standalone interactive JavaScript" text={interactive.javascript} lang="js" testId="code-interactive-javascript" copyLabel="Copy JavaScript" actions={standaloneJsButton} />}
       {interactiveMode === 'glsl' && <CodeBlock title="Shader sources and uniforms" text={interactive.glsl} lang="glsl" testId="code-interactive-glsl" copyLabel="Copy GLSL" actions={downloadButton('glsl', interactive.glsl, 'Download GLSL')} />}
       {interactiveMode === 'react' && <CodeBlock title="Self-contained React + TypeScript component" text={interactive.react} lang="tsx" testId="code-interactive-react" copyLabel="Copy React component" actions={downloadButton('tsx', interactive.react, 'Download TSX')} />}
     </>}
     {fmt === 'json' && <>
       <CodeBlock title="Project JSON" text={out.json} lang="json" testId="code-json" copyLabel="Copy JSON" actions={downloadButton('json', out.json, '.json')} />
+      <p className="hint">This project file includes every editable layer, gradient, effect, animation, canvas setting, and shader option. Older project JSON files can still be imported.</p>
+      <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={event => { void readProjectFile(event.currentTarget.files?.[0]); }} data-testid="project-json-file" />
+      <button type="button" className="btn" onClick={() => fileInput.current?.click()}><Upload />Choose project JSON file</button>
       <label className="field-label" htmlFor="gs-import">Import project JSON</label>
-      <textarea id="gs-import" className="boundary-input" rows={4} value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste a project exported from here" spellCheck={false} />
-      <button type="button" className="btn wide" onClick={doImport} disabled={!importText.trim()}>Load project</button>
+      <textarea id="gs-import" className="boundary-input" rows={4} value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste a project JSON file here" spellCheck={false} />
+      <button type="button" className="btn wide" onClick={() => doImport()} disabled={!importText.trim()}>Load project</button>
+      {recoveryBackup && <div className="gs-note" role="status" data-testid="project-recovery">
+        <b>Compatibility recovery applied.</b> The imported project is available in Undo; download the original file to keep an untouched backup.
+        <ul>{recoveryWarnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
+        <button type="button" className="btn small" onClick={downloadRecoveryBackup} data-testid="download-recovery-backup"><Download />Download original JSON backup</button>
+      </div>}
     </>}
   </div>;
 }
