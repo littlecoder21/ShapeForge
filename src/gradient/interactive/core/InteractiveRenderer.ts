@@ -2,7 +2,7 @@ import { hexToRgb } from '../../engine/color';
 import fragmentShaderSource from '../shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from '../shaders/gradient.vert.glsl?raw';
 import { PointerManager } from '../input/PointerManager';
-import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_GEOMETRY, normalizeInteractiveSettings, type InteractiveRendererStatus, type InteractiveSettings, type InteractiveUpdate, type ShaderGeometry, type ShaderMeshPoint, type ShaderStop } from '../types';
+import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_GEOMETRY, normalizeInteractiveSettings, type InteractiveRendererStatus, type InteractiveSettings, type InteractiveUpdate, type ShaderGeometry, type ShaderLayerColorBlend, type ShaderMeshPoint, type ShaderStop } from '../types';
 import { pointerModeId } from '../pointerModes';
 import { bakePaletteLut } from '../paletteLut';
 import { UNIFORM_NAMES } from '../uniforms';
@@ -17,8 +17,9 @@ const LUT_SIZE = 512;
 const MAX_RENDER_PIXELS = 1_200_000;
 const MAX_RENDER_SCALE = 1.25;
 const QUALITY_SCALE = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 } as const;
-const STYLE_ID = { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9 } as const;
+const STYLE_ID = { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9, smoke: 10, fire: 11 } as const;
 const GEOMETRY_ID = { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 } as const;
+const LAYER_BLEND_ID: Record<ShaderLayerColorBlend, number> = { mix: 0, multiply: 1, screen: 2, overlay: 3, add: 4 };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 function normalizePalette(stops: ShaderStop[]): ShaderStop[] {
@@ -57,6 +58,7 @@ export interface InteractiveRendererOptions {
   geometry?: ShaderGeometry;
   meshPoints?: ShaderMeshPoint[];
   meshBase?: string;
+  layerMix?: InteractiveUpdate['layerMix'];
   onStatusChange?: (status: InteractiveRendererStatus, message?: string) => void;
 }
 
@@ -66,6 +68,7 @@ export class InteractiveRenderer {
   private settings: InteractiveSettings;
   private geometry: ShaderGeometry = { ...DEFAULT_SHADER_GEOMETRY };
   private palette: ShaderStop[];
+  private layerMix: NonNullable<InteractiveUpdate['layerMix']>;
   private meshPoints: ShaderMeshPoint[];
   private meshBase: string;
   private readonly pointer: PointerManager;
@@ -73,6 +76,7 @@ export class InteractiveRenderer {
   private program: WebGLProgram | null = null;
   private buffer: WebGLBuffer | null = null;
   private paletteTexture: WebGLTexture | null = null;
+  private layerMixTexture: WebGLTexture | null = null;
   private uniforms: Uniforms = {};
   private readonly paletteColors = new Float32Array(MAX_STOPS * 4);
   private readonly paletteAlphas = new Float32Array(MAX_STOPS);
@@ -107,6 +111,7 @@ export class InteractiveRenderer {
     this.canvas = canvas;
     this.settings = normalizeInteractiveSettings({ ...DEFAULT_INTERACTIVE_SETTINGS, ...options.settings });
     this.palette = normalizePalette(options.palette ?? []);
+    this.layerMix = options.layerMix ?? { palette: [], mode: 'mix', strength: 0, speed: 0 };
     this.meshPoints = (options.meshPoints ?? []).slice(0, MAX_MESH_POINTS);
     this.refreshMeshData();
     this.meshBase = /^#[0-9a-f]{6}$/i.test(options.meshBase ?? '') ? options.meshBase! : '';
@@ -185,6 +190,10 @@ export class InteractiveRenderer {
       this.refreshPaletteData();
       if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
     }
+    if (update.layerMix) {
+      this.layerMix = update.layerMix;
+      this.refreshLayerMixTexture();
+    }
     if (update.geometry) {
       this.geometry = {
         kind: update.geometry.kind,
@@ -196,6 +205,7 @@ export class InteractiveRenderer {
         space: update.geometry.space,
       };
       this.refreshPaletteData();
+      this.refreshLayerMixTexture();
     }
     if (update.meshPoints) {
       this.meshPoints = update.meshPoints.slice(0, MAX_MESH_POINTS);
@@ -231,10 +241,12 @@ export class InteractiveRenderer {
       if (this.buffer) this.gl.deleteBuffer(this.buffer);
       if (this.program) this.gl.deleteProgram(this.program);
       if (this.paletteTexture) this.gl.deleteTexture(this.paletteTexture);
+      if (this.layerMixTexture) this.gl.deleteTexture(this.layerMixTexture);
     }
     this.buffer = null;
     this.program = null;
     this.paletteTexture = null;
+    this.layerMixTexture = null;
     this.gl = null;
   }
 
@@ -243,6 +255,7 @@ export class InteractiveRenderer {
     cancelAnimationFrame(this.frameId);
     this.frameId = 0;
     this.paletteTexture = null;
+    this.layerMixTexture = null;
     this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
   };
 
@@ -397,6 +410,7 @@ export class InteractiveRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     this.uploadPaletteTexture(gl);
+    this.uploadLayerMixTexture(gl);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
     gl.uniform1i(this.uniforms.uPaletteLut ?? null, 0);
@@ -517,10 +531,17 @@ export class InteractiveRenderer {
     set1f('uSheen', this.settings.sheen);
     set1f('uGrain', this.settings.filmGrain);
     set1f('uLutEnabled', this.lutEnabled ? 1 : 0);
+    set1f('uLayerMixEnabled', this.layerMixTexture && this.layerMix.palette.length ? 1 : 0);
+    set1f('uLayerMixMode', LAYER_BLEND_ID[this.layerMix.mode]);
+    set1f('uLayerMixStrength', this.layerMix.strength);
+    set1f('uLayerMixSpeed', this.layerMix.speed);
     set1f('uProjectOutput', this.settings.renderBackend === 'webgl' ? 1 : 0);
     gl.uniform1i(this.uniforms.uPaletteLut ?? null, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.layerMixTexture);
+    gl.uniform1i(this.uniforms.uLayerMixLut ?? null, 1);
     gl.uniform1f(this.uniforms.uStopCount ?? null, MAX_STOPS);
     gl.uniform4fv(this.uniforms['uPalette[0]'] ?? null, this.paletteColors);
     gl.uniform1fv(this.uniforms['uPaletteAlpha[0]'] ?? null, this.paletteAlphas);
@@ -565,6 +586,32 @@ export class InteractiveRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LUT_SIZE, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.paletteLut);
     this.lutEnabled = gl.getError() === gl.NO_ERROR && this.maxFragmentUniformVectors >= 16;
+  }
+
+  private refreshLayerMixTexture() {
+    if (this.gl) this.uploadLayerMixTexture(this.gl);
+  }
+
+  private uploadLayerMixTexture(gl: GL) {
+    if (!this.layerMix.palette.length) {
+      if (this.layerMixTexture) gl.deleteTexture(this.layerMixTexture);
+      this.layerMixTexture = null;
+      return;
+    }
+    const data = bakePaletteLut(this.layerMix.palette, this.layerMix.space ?? this.geometry.space ?? 'srgb', LUT_SIZE);
+    if (!this.layerMixTexture) this.layerMixTexture = gl.createTexture();
+    if (!this.layerMixTexture) return;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.layerMixTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LUT_SIZE, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    if (gl.getError() !== gl.NO_ERROR) {
+      gl.deleteTexture(this.layerMixTexture);
+      this.layerMixTexture = null;
+    }
   }
 
   private refreshMeshData() {

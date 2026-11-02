@@ -375,7 +375,10 @@ export function layeredOutput(project: GradientProject) {
   const anyAnim = visible.some(l => l.anim.enabled && l.anim.tracks.length);
   const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
   const html = `<div ${root.attr} aria-hidden="true">\n${rows.join('\n')}${defs ? `\n  <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n</div>`;
-  const css = [rootCss(project, o), ...[...visible].reverse().map(l => layerCss(l, project, o)), ...(anyAnim ? [`${out.comments ? '/* Respect reduced-motion preferences */\n' : ''}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : [])].join('\n\n');
+  const percentHeightHost = out.includeSize && !out.responsive && out.height.unit === '%'
+    ? 'html, body { height: 100%; margin: 0; }'
+    : '';
+  const css = [percentHeightHost, rootCss(project, o), ...[...visible].reverse().map(l => layerCss(l, project, o)), ...(anyAnim ? [`${out.comments ? '/* Respect reduced-motion preferences */\n' : ''}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : [])].filter(Boolean).join('\n\n');
   return { html, css, all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>` };
 }
 

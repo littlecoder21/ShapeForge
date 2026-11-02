@@ -9,8 +9,21 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
   const rendererRef = useRef<InteractiveRenderer | null>(null);
   const config = useMemo(() => normalizeInteractiveSettings(project.shader), [project.shader]);
   const adapted = useMemo(() => gradientLayerToShader(layer, project), [layer, project]);
+  const mixLayer = project.layers.find(candidate => candidate.id === layer.shader?.mixLayerId && candidate.visible && candidate.id !== layer.id);
+  const mixAdapted = useMemo(() => mixLayer ? gradientLayerToShader(mixLayer, project) : null, [mixLayer, project]);
+  const layerMix = useMemo(() => ({
+    palette: mixAdapted?.palette ?? [],
+    space: mixAdapted?.geometry.space,
+    mode: layer.shader?.mixMode ?? 'mix',
+    strength: mixAdapted ? layer.shader?.mixStrength ?? 0 : 0,
+    speed: layer.shader?.mixSpeed ?? 0,
+  }), [mixAdapted, layer.shader]);
   const [status, setStatus] = useState<{ value: InteractiveRendererStatus; message: string }>({ value: 'ready', message: '' });
-  const settings = useMemo(() => ({ ...config, style: layer.shader?.style ?? config.style }), [config, layer.shader?.style]);
+  const settings = useMemo(() => ({
+    ...config,
+    ...layer.shader?.controls,
+    style: layer.shader?.style ?? config.style,
+  }), [config, layer.shader?.controls, layer.shader?.style]);
   const rendererSettings = useMemo(() => ({
     ...settings,
     interactionColor: settings.interactionColorSource === 'layer'
@@ -33,6 +46,7 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
       geometry: adapted.geometry,
       meshPoints: adapted.meshPoints,
       meshBase: adapted.meshBase,
+      layerMix,
       onStatusChange: (value, message = '') => {
         canvas.parentElement?.classList.toggle('gs-webgl-ready', backendRef.current === 'webgl' && value === 'ready');
         setStatus({ value, message });
@@ -48,10 +62,10 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
   }, []);
 
   useEffect(() => {
-    rendererRef.current?.update({ palette: adapted.palette, settings: rendererSettings, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase });
+    rendererRef.current?.update({ palette: adapted.palette, settings: rendererSettings, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase, layerMix });
     const canvas = canvasRef.current;
     canvas?.parentElement?.classList.toggle('gs-webgl-ready', rendererSettings.renderBackend === 'webgl' && rendererRef.current?.getStatus().status === 'ready');
-  }, [adapted, rendererSettings]);
+  }, [adapted, rendererSettings, layerMix]);
 
   return <>
     <canvas

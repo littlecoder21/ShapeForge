@@ -1,14 +1,21 @@
 import { normalizePointerMode, type PointerMode } from './pointerModes';
 
-export type InteractiveStyle = 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours';
-const SHADER_STYLES: InteractiveStyle[] = ['flow', 'aurora', 'liquid', 'holographic', 'plasma', 'silk', 'nebula', 'ribbons', 'metaballs', 'contours'];
+export type InteractiveStyle = 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours' | 'smoke' | 'fire';
+const SHADER_STYLES: InteractiveStyle[] = ['flow', 'aurora', 'liquid', 'holographic', 'plasma', 'silk', 'nebula', 'ribbons', 'metaballs', 'contours', 'smoke', 'fire'];
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type { PointerMode } from './pointerModes';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
+export type ShaderLayerColorBlend = 'mix' | 'multiply' | 'screen' | 'overlay' | 'add';
+export type ShaderLayerControls = Pick<InteractiveSettings, 'speed' | 'intensity' | 'distortion' | 'distortionScale' | 'turbulence'>;
 
 export interface ShaderLayerConfig {
   enabled: boolean;
   style: InteractiveStyle;
+  controls?: ShaderLayerControls;
+  mixLayerId: string;
+  mixMode: ShaderLayerColorBlend;
+  mixStrength: number;
+  mixSpeed: number;
 }
 
 export interface ShaderGeometry {
@@ -84,6 +91,7 @@ export interface InteractiveSettings {
 export interface InteractiveUpdate {
   settings?: Partial<InteractiveSettings>;
   palette?: ShaderStop[];
+  layerMix?: { palette: ShaderStop[]; space?: ShaderGeometry['space']; mode: ShaderLayerColorBlend; strength: number; speed: number };
   geometry?: ShaderGeometry;
   meshPoints?: ShaderMeshPoint[];
   meshBase?: string;
@@ -134,7 +142,14 @@ export const DEFAULT_INTERACTIVE_SETTINGS: Readonly<InteractiveSettings> = Objec
   renderBackend: 'overlay',
 });
 
-export const DEFAULT_SHADER_LAYER: Readonly<ShaderLayerConfig> = Object.freeze({ enabled: false, style: 'flow' });
+export const DEFAULT_SHADER_LAYER: Readonly<ShaderLayerConfig> = Object.freeze({
+  enabled: false,
+  style: 'flow',
+  mixLayerId: '',
+  mixMode: 'mix',
+  mixStrength: 0.5,
+  mixSpeed: 0.35,
+});
 export const DEFAULT_SHADER_GEOMETRY: Readonly<ShaderGeometry> = Object.freeze({
   kind: 'linear',
   angle: 135,
@@ -146,10 +161,32 @@ export const DEFAULT_SHADER_GEOMETRY: Readonly<ShaderGeometry> = Object.freeze({
 
 export function normalizeShaderLayer(raw: unknown): ShaderLayerConfig {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const rawControls = value.controls && typeof value.controls === 'object'
+    ? value.controls as Record<string, unknown>
+    : null;
+  const normalizeControl = (key: keyof ShaderLayerControls, fallback: number, min: number, max: number) => {
+    const candidate = Number(rawControls?.[key]);
+    return Number.isFinite(candidate) ? Math.min(max, Math.max(min, candidate)) : fallback;
+  };
   const styles = SHADER_STYLES;
   return {
     enabled: value.enabled === true,
     style: typeof value.style === 'string' && styles.includes(value.style as InteractiveStyle) ? value.style as InteractiveStyle : DEFAULT_SHADER_LAYER.style,
+    ...(rawControls ? {
+      controls: {
+        speed: normalizeControl('speed', DEFAULT_INTERACTIVE_SETTINGS.speed, 0, 2),
+        intensity: normalizeControl('intensity', DEFAULT_INTERACTIVE_SETTINGS.intensity, 0, 1),
+        distortion: normalizeControl('distortion', DEFAULT_INTERACTIVE_SETTINGS.distortion, 0, 1),
+        distortionScale: normalizeControl('distortionScale', DEFAULT_INTERACTIVE_SETTINGS.distortionScale, 0.2, 8),
+        turbulence: normalizeControl('turbulence', DEFAULT_INTERACTIVE_SETTINGS.turbulence, 0, 1),
+      },
+    } : {}),
+    mixLayerId: typeof value.mixLayerId === 'string' ? value.mixLayerId : '',
+    mixMode: typeof value.mixMode === 'string' && ['mix', 'multiply', 'screen', 'overlay', 'add'].includes(value.mixMode)
+      ? value.mixMode as ShaderLayerColorBlend
+      : DEFAULT_SHADER_LAYER.mixMode,
+    mixStrength: Number.isFinite(Number(value.mixStrength)) ? Math.min(1, Math.max(0, Number(value.mixStrength))) : DEFAULT_SHADER_LAYER.mixStrength,
+    mixSpeed: Number.isFinite(Number(value.mixSpeed)) ? Math.min(2, Math.max(0, Number(value.mixSpeed))) : DEFAULT_SHADER_LAYER.mixSpeed,
   };
 }
 

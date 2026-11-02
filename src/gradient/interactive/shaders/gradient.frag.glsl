@@ -50,7 +50,12 @@ uniform float uSheen;
 uniform float uGrain;
 uniform float uLutEnabled;
 uniform float uProjectOutput;
+uniform float uLayerMixEnabled;
+uniform float uLayerMixMode;
+uniform float uLayerMixStrength;
+uniform float uLayerMixSpeed;
 uniform sampler2D uPaletteLut;
+uniform sampler2D uLayerMixLut;
 uniform vec4 uPalette[8];
 uniform float uPaletteAlpha[8];
 uniform vec4 uRipples[8];
@@ -130,6 +135,14 @@ vec4 samplePalette(float t) {
     previousAlpha = uPaletteAlpha[i];
   }
   return vec4(previous.rgb, previousAlpha);
+}
+
+vec3 blendLayerColors(vec3 base, vec3 other, float mode) {
+  if (mode < 0.5) return other;
+  if (mode < 1.5) return base * other;
+  if (mode < 2.5) return 1.0 - (1.0 - base) * (1.0 - other);
+  if (mode < 3.5) return mix(2.0 * base * other, 1.0 - 2.0 * (1.0 - base) * (1.0 - other), step(vec3(0.5), base));
+  return min(base + other, 1.0);
 }
 
 vec3 sampleInteractionPalette(float t) {
@@ -491,12 +504,40 @@ void main() {
     float blobs = 1.0 - smoothstep(-0.02, 0.04, metaballField);
     rimLight = exp(-abs(metaballField) * 24.0);
     colorPosition = wrapT(basePosition * 0.32 + blobs * 0.12 + n * 0.15);
-  } else {
+  } else if (uStyle < 9.5) {
     float contours = sin((basePosition * 7.0 + n * 2.8) * 6.2831853);
     colorPosition = wrapT(basePosition + 0.12 * n + 0.5);
     float lineWidth = 0.14 + 1.0 / max(1.0, uResolution.y) * 2.0;
     bands = 1.0 - smoothstep(lineWidth, lineWidth + 0.2, abs(contours));
     alpha *= 0.45 + bands * 0.55;
+  } else if (uStyle < 10.5) {
+    float smokeDrift = field(vec2(warped.x * 2.1 + t * 0.08, warped.y * 1.1 - t * 0.18));
+    vec2 smokeUv = warped * (1.3 + uDistortionScale * 0.24);
+    smokeUv.x += (smokeDrift - 0.5) * (0.32 + uDistortion * 0.55);
+    smokeUv.y -= t * (0.06 + uSpeed * 0.12);
+    float smokeCloud = field(smokeUv * 2.1 + vec2(t * 0.035, -t * 0.11));
+    float smokeDetail = field(smokeUv * 4.2 + vec2(-t * 0.06, -t * 0.17));
+    float smokeShape = exp(-pow(abs(warped.x) / (0.17 + max(warped.y, 0.0) * 0.19), 1.55))
+      * smoothstep(-0.5, 0.08, warped.y) * (1.0 - smoothstep(0.7, 1.2, warped.y));
+    float smokeDensity = smoothstep(0.2, 0.76, smokeCloud * 0.72 + smokeDetail * (0.18 + uTurbulence * 0.2) + 0.1);
+    bands = smokeShape * smokeDensity;
+    colorPosition = wrapT(basePosition * 0.22 + smokeCloud * 0.48 + smokeDetail * 0.22 + 0.08);
+    alpha *= bands * (0.42 + uIntensity * 0.58);
+  } else {
+    float fireDrift = field(vec2(warped.x * 2.5 + t * 0.13, warped.y * 1.8 - t * 0.34));
+    vec2 fireUv = warped * (2.0 + uDistortionScale * 0.3);
+    fireUv.x += (fireDrift - 0.5) * (0.2 + uDistortion * 0.65);
+    fireUv.y -= t * (0.12 + uSpeed * 0.22);
+    float flameNoise = field(fireUv * 2.8 + vec2(t * 0.08, -t * 0.2));
+    float flameDetail = field(fireUv * 5.2 + vec2(-t * 0.11, -t * 0.29));
+    float flameWidth = 0.24 + max(warped.y, 0.0) * 0.18;
+    float flameEnvelope = exp(-pow(abs(warped.x) / flameWidth, 1.7))
+      * smoothstep(-0.58, -0.24, warped.y) * (1.0 - smoothstep(0.62, 1.08, warped.y));
+    float flame = smoothstep(0.18, 0.82, flameNoise * 0.72 + flameDetail * (0.18 + uTurbulence * 0.2) + 0.08);
+    bands = flameEnvelope * flame;
+    colorPosition = clamp(0.02 + (1.0 - warped.y) * 0.68 + flameNoise * 0.18 + flameDetail * 0.12, 0.0, 1.0);
+    alpha *= bands * (0.5 + uIntensity * 0.5);
+    rimLight = smoothstep(0.54, 0.9, flame) * flameEnvelope * 0.45;
   }
 
   float colorDistortion = interactionWarp * (interactionWave * 0.12 + cos(pointerDistance * 13.0 + uClock) * 0.06);
@@ -508,6 +549,12 @@ void main() {
     vec4 meshColor = sampleMesh(warped / vec2(uAspect, 1.0) + 0.5);
     color.rgb = mix(color.rgb, meshColor.rgb, 0.82);
     color.a = meshColor.a;
+  }
+  if (uLayerMixEnabled > 0.5) {
+    float mixMotion = sin(uClock * uLayerMixSpeed + colorPosition * 6.2831853 + n * 2.0) * 0.055;
+    vec4 otherLayer = texture2D(uLayerMixLut, vec2(wrapT(colorPosition + mixMotion), 0.5));
+    float mixAmount = clamp(uLayerMixStrength * (0.72 + 0.18 * sin(uClock * uLayerMixSpeed + n * 3.0) + influence * 0.45), 0.0, 1.0) * otherLayer.a;
+    color.rgb = mix(color.rgb, blendLayerColors(color.rgb, otherLayer.rgb, uLayerMixMode), mixAmount);
   }
   if (advancedChromatic > 0.0) {
     vec3 refracted = vec3(

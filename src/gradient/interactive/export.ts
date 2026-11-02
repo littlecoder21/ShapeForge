@@ -1,7 +1,7 @@
 import { layeredOutput } from '../engine/css';
-import type { GradientLayer, GradientProject } from '../engine/model';
+import type { ColorSpace, GradientLayer, GradientProject } from '../engine/model';
 import { gradientLayerToShader, gradientProjectToShaderPalette, interactionColorsForLayer, supportsDirectShaderGeometry, type ShaderLayerAdapter } from './adapter';
-import { normalizeInteractiveSettings, type InteractiveSettings } from './types';
+import { normalizeInteractiveSettings, type InteractiveSettings, type ShaderLayerColorBlend } from './types';
 import { POINTER_MODES } from './pointerModes';
 import { bakePaletteLut, encodePaletteLut } from './paletteLut';
 import { UNIFORM_NAMES } from './uniforms';
@@ -27,10 +27,11 @@ function shaderRuntime(rootExpression = 'document') {
   const geometry = JSON.parse(canvas.dataset.shaderGeometry);
   const meshPoints = JSON.parse(canvas.dataset.shaderMeshPoints || '[]');
   const meshBase = JSON.parse(canvas.dataset.shaderMeshBase || '""');
+  const layerMix = JSON.parse(canvas.dataset.shaderMixSettings || '{}');
   let gl = canvas.getContext('webgl2', glOptions), isWebGL2 = !!gl;
   if (!gl) gl = canvas.getContext('webgl', glOptions);
   if (!gl) { canvas.dataset.shaderStatus = 'fallback'; return; }
-  let program = null, buffer = null, paletteTexture = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
+  let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
   let frameId = 0, lastFrame = 0, clock = 0, shaderTime = 0, visible = true, lost = false;
   let frameEma = 0, slowFrameCount = 0, adaptiveScale = 1;
   let current = { x: 0.5, y: 0.5, active: 0, down: 0 }, target = { x: 0.5, y: 0.5, active: 0, down: 0 };
@@ -39,11 +40,18 @@ function shaderRuntime(rootExpression = 'document') {
   const meshPointData = new Float32Array(maxStops * 4), meshColorData = new Float32Array(maxStops * 4);
   const rippleData = new Float32Array(maxRipples * 4);
   let paletteLut = null;
+  let layerMixLut = null;
   const encodedLut = canvas.dataset.shaderLut || '';
   if (encodedLut) {
     const binary = atob(encodedLut);
     paletteLut = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) paletteLut[i] = binary.charCodeAt(i);
+  }
+  const encodedLayerMixLut = canvas.dataset.shaderMixLut || '';
+  if (encodedLayerMixLut) {
+    const binary = atob(encodedLayerMixLut);
+    layerMixLut = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) layerMixLut[i] = binary.charCodeAt(i);
   }
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const convertShader = (source, vertex) => {
@@ -150,7 +158,21 @@ function shaderRuntime(rootExpression = 'document') {
         if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(paletteTexture); paletteTexture = null; }
       }
     }
+    if (layerMixLut && layerMixLut.length === 512 * 4) {
+      layerMixTexture = gl.createTexture();
+      if (layerMixTexture) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, layerMixTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 512, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, layerMixLut);
+        if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(layerMixTexture); layerMixTexture = null; }
+      }
+    }
     gl.uniform1i(locations.uPaletteLut, 0);
+    gl.uniform1i(locations.uLayerMixLut, 1);
     canvas.dataset.shaderStatus = 'ready';
     if (settings.renderBackend === 'webgl') canvas.parentElement && canvas.parentElement.classList.add('gs-webgl-ready');
   };
@@ -159,7 +181,7 @@ function shaderRuntime(rootExpression = 'document') {
     const widthCss = canvas.clientWidth, heightCss = canvas.clientHeight;
     const quality = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 }[settings.quality] || 1;
     const pixelBudgetScale = Math.sqrt(maxRenderPixels / Math.max(1, widthCss * heightCss));
-    const scale = clamp(Math.min((window.devicePixelRatio || 1) * quality * settings.resolutionScale * adaptiveScale, maxRenderScale, pixelBudgetScale), 0.35, maxRenderScale);
+    const scale = clamp(Math.min(Math.min(window.devicePixelRatio || 1, 2) * quality * settings.resolutionScale * adaptiveScale, maxRenderScale, pixelBudgetScale), 0.35, maxRenderScale);
     const width = Math.max(1, Math.min(4096, Math.round(widthCss * scale)));
     const height = Math.max(1, Math.min(4096, Math.round(heightCss * scale)));
     if (canvas.width !== width || canvas.height !== height) {
@@ -199,7 +221,7 @@ function shaderRuntime(rootExpression = 'document') {
     gl.uniform1f(locations.uTime, settings.animate ? shaderTime : 0);
     gl.uniform1f(locations.uClock, clock);
     gl.uniform1f(locations.uAspect, canvas.width / Math.max(1, canvas.height));
-    gl.uniform1f(locations.uStyle, { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9 }[settings.style] || 0);
+    gl.uniform1f(locations.uStyle, { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9, smoke: 10, fire: 11 }[settings.style] || 0);
     gl.uniform1f(locations.uGradientKind, { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 }[geometry.kind] || 0);
     gl.uniform1f(locations.uGradientAngle, geometry.angle * Math.PI / 180);
     gl.uniform2f(locations.uGradientOrigin, geometry.originX / 100, 1 - geometry.originY / 100);
@@ -242,10 +264,17 @@ function shaderRuntime(rootExpression = 'document') {
     gl.uniform1f(locations.uSheen, settings.sheen || 0);
     gl.uniform1f(locations.uGrain, settings.filmGrain || 0);
     gl.uniform1f(locations.uLutEnabled, paletteTexture ? 1 : 0);
+    gl.uniform1f(locations.uLayerMixEnabled, layerMixTexture ? 1 : 0);
+    gl.uniform1f(locations.uLayerMixMode, ({ mix: 0, multiply: 1, screen: 2, overlay: 3, add: 4 })[layerMix.mode] ?? 0);
+    gl.uniform1f(locations.uLayerMixStrength, clamp(layerMix.strength || 0, 0, 1));
+    gl.uniform1f(locations.uLayerMixSpeed, clamp(layerMix.speed || 0, 0, 2));
     gl.uniform1f(locations.uProjectOutput, settings.renderBackend === 'webgl' ? 1 : 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, paletteTexture);
     gl.uniform1i(locations.uPaletteLut, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, layerMixTexture);
+    gl.uniform1i(locations.uLayerMixLut, 1);
     gl.uniform1f(locations.uStopCount, maxStops);
     gl.uniform4fv(locations['uPalette[0]'], colors);
     gl.uniform1fv(locations['uPaletteAlpha[0]'], alphas);
@@ -291,7 +320,7 @@ function shaderRuntime(rootExpression = 'document') {
     if (rawDelta > 0) {
       frameEma = frameEma ? frameEma * 0.9 + rawDelta * 0.1 : rawDelta;
       slowFrameCount = frameEma > 0.02 ? slowFrameCount + 1 : 0;
-      const baseScale = (window.devicePixelRatio || 1) * ({ low: 0.55, medium: 0.75, high: 1, ultra: 1.35 }[settings.quality] || 1) * settings.resolutionScale;
+      const baseScale = Math.min(window.devicePixelRatio || 1, 2) * ({ low: 0.55, medium: 0.75, high: 1, ultra: 1.35 }[settings.quality] || 1) * settings.resolutionScale;
       if (slowFrameCount >= 18 && baseScale * adaptiveScale > 0.5) {
         adaptiveScale = Math.max(0.5 / baseScale, adaptiveScale * 0.8);
         slowFrameCount = 0;
@@ -366,6 +395,7 @@ function shaderRuntime(rootExpression = 'document') {
     if (buffer) gl.deleteBuffer(buffer);
     if (program) gl.deleteProgram(program);
     if (paletteTexture) gl.deleteTexture(paletteTexture);
+    if (layerMixTexture) gl.deleteTexture(layerMixTexture);
   };
   });
 })(${rootExpression});
@@ -379,11 +409,25 @@ function makeDocument(project: GradientProject, useMarkers = false) {
   const enabledLayers = visibleLayers.filter(layer => layer.shader?.enabled);
   const targets = enabledLayers.length ? enabledLayers : visibleLayers.slice(0, 1);
   const fallbackPalette = gradientProjectToShaderPalette(project);
-  const entries: { layer: GradientLayer | null; settings: InteractiveSettings; adapter: ShaderLayerAdapter }[] = targets.map(layer => {
+  const entries: {
+    layer: GradientLayer | null;
+    settings: InteractiveSettings;
+    adapter: ShaderLayerAdapter;
+    layerMix: { palette: ShaderLayerAdapter['palette']; space: ColorSpace; mode: ShaderLayerColorBlend; strength: number; speed: number };
+  }[] = targets.map(layer => {
     const adapter = gradientLayerToShader(layer, project);
     const layerInteractionColors = interactionColorsForLayer(adapter.palette);
+    const mixSource = project.layers.find(candidate => candidate.id === layer.shader?.mixLayerId && candidate.visible && candidate.id !== layer.id);
+    const mixAdapter = mixSource ? gradientLayerToShader(mixSource, project) : null;
     return {
       layer,
+      layerMix: {
+        palette: mixAdapter?.palette ?? [],
+        space: mixAdapter?.geometry.space ?? 'srgb',
+        mode: layer.shader?.mixMode ?? 'mix',
+        strength: mixAdapter ? layer.shader?.mixStrength ?? 0 : 0,
+        speed: layer.shader?.mixSpeed ?? 0,
+      },
       settings: {
       ...defaultSettings,
       ...(defaultSettings.interactionColorSource === 'layer' ? {
@@ -391,6 +435,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
         interactionColors: layerInteractionColors,
       } : {}),
       style: layer.shader?.style ?? defaultSettings.style,
+      ...(layer.shader?.controls ?? {}),
       renderBackend: defaultSettings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' : defaultSettings.renderBackend,
       },
       adapter,
@@ -401,6 +446,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       layer: null,
       settings: defaultSettings,
       adapter: { ...fallbackPalette, geometry: { kind: 'linear' as const, angle: 135, originX: 50, originY: 50, radiusX: 50, radiusY: 50 }, meshPoints: [], meshBase: '' },
+      layerMix: { palette: [], space: 'srgb', mode: 'mix', strength: 0, speed: 0 },
     });
   }
   const paletteAdapter = { ...entries[0].adapter, notes: entries.flatMap(entry => entry.adapter.notes) };
@@ -415,9 +461,12 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     const rowIndex = entry.layer ? layerOrder.findIndex(layer => layer.id === entry.layer?.id) : -1;
     const row = rowIndex >= 0 ? rowMatches[rowIndex]?.[0] : undefined;
     const paletteLut = encodePaletteLut(bakePaletteLut(entry.adapter.palette, entry.adapter.geometry.space ?? 'srgb'));
+    const layerMixLut = entry.layerMix.palette.length
+      ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
+      : '';
     const attributes = useMarkers
-      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__"`
-      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}"`;
+      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__"`
+      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}"`;
     const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;pointer-events:auto;touch-action:pan-y"></canvas>`;
     if (row) {
       html = html.replace(row, `${row.replace(/">$/, ' gs-shader-export-layer">')}${canvas}`);
@@ -483,7 +532,7 @@ export function interactiveGlslExport() {
     '// Vertex shader: aPosition (clip-space vec2), aUv (normalized vec2).',
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
     `// Pointer modes: ${POINTER_MODES.map(mode => mode.id).join(', ')}`,
-    '// uTime, uClock, uAspect, uStyle (flow / aurora / liquid / holographic / plasma / silk / nebula / ribbons / metaballs / contours), uPointerMode,',
+    '// uTime, uClock, uAspect, uStyle (flow / aurora / liquid / holographic / plasma / silk / nebula / ribbons / metaballs / contours / smoke / fire), uPointerMode,',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius,',
     '// uInteractionColor, uStopCount, uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
     '// Additional controls: uSpeed, uIntensity, uDistortion, uDistortionScale, uTurbulence,',
@@ -508,13 +557,17 @@ export function interactiveReactExport(project: GradientProject) {
   const meshPoints = entries.map(entry => entry.adapter.meshPoints);
   const meshBases = entries.map(entry => entry.adapter.meshBase);
   const paletteLuts = entries.map(entry => encodePaletteLut(bakePaletteLut(entry.adapter.palette, entry.adapter.geometry.space ?? 'srgb')));
+  const layerMixSettings = entries.map(entry => entry.layerMix);
+  const layerMixLuts = entries.map(entry => entry.layerMix.palette.length
+    ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
+    : '');
   const pointerModeType = POINTER_MODES.map(mode => `'${mode.id}'`).join(' | ');
   return `import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 
 export interface ShaderSettings {
   enabled: boolean;
-  style: 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours';
+  style: 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours' | 'smoke' | 'fire';
   quality: 'low' | 'medium' | 'high' | 'ultra';
   resolutionScale: number;
   animate: boolean;
@@ -574,6 +627,8 @@ const DEFAULT_GEOMETRIES: ShaderGeometry[] = ${escapeJson(geometries)};
 const DEFAULT_MESH_POINTS: ShaderMeshPoint[][] = ${escapeJson(meshPoints)};
 const DEFAULT_MESH_BASES: string[] = ${escapeJson(meshBases)};
 const DEFAULT_PALETTE_LUTS: string[] = ${escapeJson(paletteLuts)};
+const DEFAULT_LAYER_MIX_SETTINGS = ${escapeJson(layerMixSettings)};
+const DEFAULT_LAYER_MIX_LUTS: string[] = ${escapeJson(layerMixLuts)};
 const HTML_TEMPLATE = ${template};
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\\\u003c').replace(/>/g, '\\\\u003e').replace(/&/g, '\\\\u0026');
 const escapeAttribute = (value: unknown) => escapeJson(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -590,7 +645,9 @@ export default function InteractiveGradientBackground({ settings, palette, geome
     .replace(/__SHADER_GEOMETRY_(\\d+)__/g, (_match, index: string) => escapeAttribute(geometry ?? DEFAULT_GEOMETRIES[Number(index)]))
     .replace(/__SHADER_MESH_POINTS_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshPoints ?? DEFAULT_MESH_POINTS[Number(index)]))
     .replace(/__SHADER_MESH_BASE_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshBase ?? DEFAULT_MESH_BASES[Number(index)]))
-    .replace(/__SHADER_LUT_(\\d+)__/g, (_match, index: string) => palette ? '' : DEFAULT_PALETTE_LUTS[Number(index)]), [settings, palette, geometry, meshPoints, meshBase]);
+    .replace(/__SHADER_LUT_(\\d+)__/g, (_match, index: string) => palette ? '' : DEFAULT_PALETTE_LUTS[Number(index)])
+    .replace(/__SHADER_MIX_CONFIG_(\\d+)__/g, (_match, index: string) => escapeAttribute(DEFAULT_LAYER_MIX_SETTINGS[Number(index)]))
+    .replace(/__SHADER_MIX_LUT_(\\d+)__/g, (_match, index: string) => DEFAULT_LAYER_MIX_LUTS[Number(index)]), [settings, palette, geometry, meshPoints, meshBase]);
   return <iframe
     title="Interactive gradient background"
     className={className}

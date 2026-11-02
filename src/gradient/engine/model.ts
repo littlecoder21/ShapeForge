@@ -135,7 +135,7 @@ export interface GradientLayer {
   /** Optional freeform clipping boundary. Applies to the whole layer, including texture overlays. */
   mask: LayerMask;
   /** Optional shader overlay for this layer; all existing layer controls continue to apply. */
-  shader?: ShaderLayerConfig;
+  shader?: Partial<ShaderLayerConfig>;
   /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
   solidColor?: string;
 }
@@ -155,12 +155,13 @@ export interface OutputSettings {
   height: { value: number; unit: 'auto' | 'px' | 'vh' | '%' | 'rem' | 'em'; prop: 'height' | 'min-height' };
   includeSize: boolean;
   responsive: boolean;
+  previewOutputSize: boolean;
   comments: boolean;
 }
 export const DEFAULT_OUTPUT: OutputSettings = {
   selectorType: 'class', selector: 'gradient-canvas', attrValue: 'hero', layerPrefix: 'layer',
   downloadName: 'gradient',
-  width: { value: 100, unit: '%' }, height: { value: 320, unit: 'px', prop: 'min-height' }, includeSize: true, responsive: false, comments: true,
+  width: { value: 100, unit: '%' }, height: { value: 320, unit: 'px', prop: 'min-height' }, includeSize: true, responsive: false, previewOutputSize: false, comments: true,
 };
 export const outputOf = (p: { output?: Partial<OutputSettings> }): OutputSettings => ({ ...DEFAULT_OUTPUT, ...(p.output ?? {}), width: { ...DEFAULT_OUTPUT.width, ...(p.output?.width ?? {}) }, height: { ...DEFAULT_OUTPUT.height, ...(p.output?.height ?? {}) } });
 

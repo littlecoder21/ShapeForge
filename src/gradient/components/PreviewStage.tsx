@@ -7,7 +7,7 @@ import { newMeshPoint } from '../engine/mesh';
 import { colorAtPos } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
 import { previewDurationMs } from '../engine/animation';
-import type { GradientLayer, GradientProject } from '../engine/model';
+import { outputOf, type GradientLayer, type GradientProject } from '../engine/model';
 import { useStore, type StudioStore } from '../engine/store';
 import { CHECKER } from './ui';
 import LayeredArt from './LayeredArt';
@@ -35,6 +35,14 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const stopId = useStore(store, s => s.stopId);
   const layer = project.layers.find(l => l.id === layerId) ?? null;
   const { w, h } = project.canvas;
+  const output = outputOf(project);
+  const exactOutputPreview = output.previewOutputSize && output.includeSize && !output.responsive
+    && ['px', '%'].includes(output.width.unit) && ['px', '%'].includes(output.height.unit);
+  const [stageBounds, setStageBounds] = useState({ w: 0, h: 0 });
+  const resolveOutputSize = (value: number, unit: 'px' | '%', available: number) =>
+    unit === '%' ? Math.max(1, Math.round(available * value / 100)) : Math.max(1, Math.round(value));
+  const viewW = exactOutputPreview ? resolveOutputSize(output.width.value, output.width.unit as 'px' | '%', stageBounds.w || w) : w;
+  const viewH = exactOutputPreview ? resolveOutputSize(output.height.value, output.height.unit as 'px' | '%', stageBounds.h || h) : h;
   const shaderEnabled = normalizeInteractiveSettings(project.shader).enabled;
 
   const wrapRef = useRef<HTMLDivElement>(null), worldRef = useRef<HTMLDivElement>(null), readRef = useRef<HTMLDivElement>(null);
@@ -49,6 +57,10 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   const [finished, setFinished] = useState(false);
   const completed = useRef(false);
   const playbackDuration = useMemo(() => previewDurationMs(project), [project]);
+  const toProjectPoint = (viewport: Viewport, x: number, y: number): V2 => {
+    const point = screenToCanvas(viewport, x, y);
+    return { x: point.x * w / viewW, y: point.y * h / viewH };
+  };
 
   const overlay = useMemo(() => (layer && layer.visible && (layer.solidColor === undefined || layer.mask.enabled) ? layerOverlay(layer, project.canvas, mode, stopId) : null), [layer, project.canvas, mode, stopId]);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
@@ -73,35 +85,39 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
 
   /* ───── viewport ───── */
   const applyView = useCallback((v: Viewport) => {
-    const vp = clampViewport(v, sizeRef.current.w, sizeRef.current.h, w, h);
+    const vp = clampViewport(v, sizeRef.current.w, sizeRef.current.h, viewW, viewH);
     vpRef.current = vp;
     if (worldRef.current) worldRef.current.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`;
     wrapRef.current?.style.setProperty('--inv', String(1 / vp.zoom));
     const p = Math.round(vp.zoom * 100); setPct(prev => (prev === p ? prev : p));
-  }, [w, h]);
+  }, [viewW, viewH]);
   const animateTo = useCallback((t: Viewport) => {
     cancelAnimationFrame(anim.current);
     const f = { ...vpRef.current }, t0 = performance.now();
     const step = (now: number) => { const k = Math.min(1, (now - t0) / 160), e = 1 - (1 - k) ** 3; applyView({ x: f.x + (t.x - f.x) * e, y: f.y + (t.y - f.y) * e, zoom: f.zoom * (t.zoom / f.zoom) ** e }); if (k < 1) anim.current = requestAnimationFrame(step); };
     anim.current = requestAnimationFrame(step);
   }, [applyView]);
-  const fit = useCallback((animate = true) => { userMoved.current = false; const t = fitViewport(sizeRef.current.w, sizeRef.current.h, w, h); animate ? animateTo(t) : applyView(t); }, [animateTo, applyView, w, h]);
+  const fit = useCallback((animate = true) => { userMoved.current = false; const t = fitViewport(sizeRef.current.w, sizeRef.current.h, viewW, viewH); animate ? animateTo(t) : applyView(t); }, [animateTo, applyView, viewW, viewH]);
   const zoomBy = (dir: 1 | -1) => { userMoved.current = true; const { w: sw, h: sh } = sizeRef.current, v = vpRef.current; animateTo(zoomAt(v, sw / 2, sh / 2, nextStop(v.zoom, dir))); };
 
   useLayoutEffect(() => {
     const el = wrapRef.current!;
-    sizeRef.current = { w: el.clientWidth, h: el.clientHeight }; fitRef.current = fitZoom(el.clientWidth, el.clientHeight, w, h);
-    userMoved.current = false; applyView(fitViewport(el.clientWidth, el.clientHeight, w, h));
+    const initialSize = { w: el.clientWidth, h: el.clientHeight };
+    sizeRef.current = initialSize;
+    setStageBounds(previous => previous.w === initialSize.w && previous.h === initialSize.h ? previous : initialSize);
+    fitRef.current = fitZoom(el.clientWidth, el.clientHeight, viewW, viewH);
+    userMoved.current = false; applyView(fitViewport(el.clientWidth, el.clientHeight, viewW, viewH));
     const ro = new ResizeObserver(() => {
       const old = sizeRef.current, nw = el.clientWidth, nh = el.clientHeight;
       if (nw === old.w && nh === old.h) return;
       const v = vpRef.current, c = screenToCanvas(v, old.w / 2, old.h / 2);
-      sizeRef.current = { w: nw, h: nh }; fitRef.current = fitZoom(nw, nh, w, h);
-      if (!userMoved.current) applyView(fitViewport(nw, nh, w, h)); else applyView({ zoom: v.zoom, x: nw / 2 - c.x * v.zoom, y: nh / 2 - c.y * v.zoom });
+      sizeRef.current = { w: nw, h: nh }; fitRef.current = fitZoom(nw, nh, viewW, viewH);
+      setStageBounds(previous => previous.w === nw && previous.h === nh ? previous : { w: nw, h: nh });
+      if (!userMoved.current) applyView(fitViewport(nw, nh, viewW, viewH)); else applyView({ zoom: v.zoom, x: nw / 2 - c.x * v.zoom, y: nh / 2 - c.y * v.zoom });
     });
     ro.observe(el);
     return () => { ro.disconnect(); cancelAnimationFrame(anim.current); cancelAnimationFrame(raf.current); };
-  }, [applyView, w, h]);
+  }, [applyView, viewW, viewH]);
 
   useEffect(() => {
     const el = wrapRef.current!;
@@ -124,12 +140,12 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
     let best: Handle | null = null, bs = Infinity;
     let move: Handle | null = null, moveDistance = Infinity;
     for (const hd of o.handles) {
-      const d = Math.hypot(hd.x * vp.zoom + vp.x - s.x, hd.y * vp.zoom + vp.y - s.y);
+      const d = Math.hypot(hd.x * viewW / w * vp.zoom + vp.x - s.x, hd.y * viewH / h * vp.zoom + vp.y - s.y);
       if (hd.kind === 'move') { move = hd; moveDistance = d; }
       const score = d / (R + (hd.kind === 'stop' ? 4 : 0)) - hd.pri * 0.02;
       if (d <= R + (hd.kind === 'stop' ? 4 : 0) && score < bs) { bs = score; best = hd; }
     }
-    if (move && moveDistance <= 6 && (best?.kind === 'angle' || best?.kind === 'from') && moveDistance <= Math.hypot(best.x * vp.zoom + vp.x - s.x, best.y * vp.zoom + vp.y - s.y) + 6) return move;
+    if (move && moveDistance <= 6 && (best?.kind === 'angle' || best?.kind === 'from') && moveDistance <= Math.hypot(best.x * viewW / w * vp.zoom + vp.x - s.x, best.y * viewH / h * vp.zoom + vp.y - s.y) + 6) return move;
     return best;
   };
   const cancelDrag = () => { const g = gest.current; if (g.t === 'drag') { store.updateLayer(g.start.id, () => g.start); store.end(); } setRead(null); };
@@ -170,13 +186,13 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
       if (g.hit && L) {
         if (g.hit.locked) { if (g.hit.stopId) store.selectStop(g.hit.stopId); gest.current = { t: 'locked' }; return; }
         store.begin(); if (g.hit.stopId) store.selectStop(g.hit.stopId);
-        gest.current = { t: 'drag', id: g.id, handle: g.hit, start: L, p0: screenToCanvas(vp, g.s.x, g.s.y) };
+        gest.current = { t: 'drag', id: g.id, handle: g.hit, start: L, p0: toProjectPoint(vp, g.s.x, g.s.y) };
       } else { gest.current = { t: 'pan', id: g.id, s: g.s, vp: { ...vp } }; userMoved.current = true; }
       g = gest.current;
     }
     if (g.t === 'pan') { applyView({ ...g.vp, x: g.vp.x + cur.x - g.s.x, y: g.vp.y + cur.y - g.s.y }); return; }
     if (g.t === 'drag') {
-      const p = screenToCanvas(vp, cur.x, cur.y);
+      const p = toProjectPoint(vp, cur.x, cur.y);
       const next = dragHandle({ start: g.start, handle: g.handle, pointer: p, startPointer: g.p0, canvas: live.current.canvas, shift: false });
       store.updateLayer(g.start.id, () => next);
       const hk = g.handle.kind;
@@ -217,7 +233,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
         const now = performance.now(), prev = lastTap.current, L = live.current.layer;
         lastTap.current = { t: now, x: g.s.x, y: g.s.y };
         if (!g.hit && L && L.type === 'mesh' && prev && now - prev.t < 340 && Math.hypot(prev.x - g.s.x, prev.y - g.s.y) < 28) {
-          const c = screenToCanvas(vpRef.current, g.s.x, g.s.y), cv = live.current.canvas, lp = applyMat(invert(layerMatrix(L, cv)), c);
+          const c = toProjectPoint(vpRef.current, g.s.x, g.s.y), cv = live.current.canvas, lp = applyMat(invert(layerMatrix(L, cv)), c);
           const near = [...L.mesh.points].sort((a, b) => Math.hypot(a.x - (lp.x / cv.w) * 100, a.y - (lp.y / cv.h) * 100) - Math.hypot(b.x - (lp.x / cv.w) * 100, b.y - (lp.y / cv.h) * 100))[0];
           const np = newMeshPoint((lp.x / cv.w) * 100, (lp.y / cv.h) * 100, near?.color ?? rgbToHex(colorAtPos({ ...L, type: 'linear', stops: [{ id: 'a', color: '#7c5cff', alpha: 1, pos: 0 }, { id: 'b', color: '#22d3ee', alpha: 1, pos: 100 }] }, 50)), 1, 46);
           store.updateLayer(L.id, l => ({ ...l, mesh: { ...l.mesh, points: [...l.mesh.points, np] } })); store.selectStop(np.id); lastTap.current = null;
@@ -251,7 +267,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   };
 
   return <div className={`gs-stage${shaderInputActive ? ' gs-stage-shader' : ''}`} ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onPointerLeave={onPointerLeave} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
-    <div className="gs-world" ref={worldRef} style={{ width: w, height: h }}>
+    <div className="gs-world" ref={worldRef} style={{ width: viewW, height: viewH }}>
       <div className="gs-checker" style={{ background: CHECKER }} />
       {beforeProject ? <>
         <div className="gs-compare-half" style={{ clipPath: `inset(0 ${100 - compareSplit}% 0 0)` }}>
@@ -264,7 +280,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
       </> : <>
         <LayeredArt key={playEpoch} project={project} rootClass="gs-art" playing={playing || finished} interactiveShaders={shaderInputActive && shaderPointerInput} className={finished ? 'gs-finished' : ''} testId="gs-art" />
       </>}
-      <svg className="gs-overlay" width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+      <svg className="gs-overlay" width={viewW} height={viewH} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
         {overlay && <>
           <g transform={`matrix(${overlay.matrix.join(' ')})`}>
             {overlay.local.map((p, i) => <g key={i}><path className={`gs-line ${p.kind} ${p.dash ? 'dash' : ''}`} d={p.d} /></g>)}

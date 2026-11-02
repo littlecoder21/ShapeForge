@@ -8,4 +8,5 @@ export const UNIFORM_NAMES = [
   'uRippleCount', 'uMeshCount', 'uMeshBase', 'uMeshPoints[0]', 'uMeshColors[0]', 'uPalette[0]',
   'uPaletteAlpha[0]', 'uRipples[0]', 'uOctaves', 'uWarpDepth', 'uWrapMode', 'uToneMap', 'uVignette',
   'uSheen', 'uGrain', 'uLutEnabled', 'uPaletteLut', 'uProjectOutput',
+  'uLayerMixEnabled', 'uLayerMixMode', 'uLayerMixStrength', 'uLayerMixSpeed', 'uLayerMixLut',
 ] as const;

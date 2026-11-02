@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { Seg, Switch, ValueControl } from '../../shared/controls';
-import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type PointerMode, type ShaderQuality } from '../interactive/types';
+import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type PointerMode, type ShaderLayerColorBlend, type ShaderLayerControls, type ShaderQuality } from '../interactive/types';
 import { POINTER_MODES } from '../interactive/pointerModes';
 import { INTERACTIVE_PRESETS } from '../interactive/presets';
 import { useStore } from '../engine/store';
 import { Empty, useStudio } from './ui';
-import { DEFAULT_LAYER_MASK, KIND_LABEL, type LayerMask } from '../engine/model';
+import { BLEND_MODES, DEFAULT_LAYER_MASK, KIND_LABEL, type LayerMask } from '../engine/model';
 
 interface SavedShaderPreset { id: string; name: string; settings: InteractiveSettings }
 const CUSTOM_PRESETS_KEY = 'shapeforge.interactive-presets.v1';
@@ -14,10 +14,14 @@ const CUSTOM_PRESETS_KEY = 'shapeforge.interactive-presets.v1';
 const STYLES: { id: InteractiveSettings['style']; label: string }[] = [
   { id: 'flow', label: 'Flow' }, { id: 'aurora', label: 'Aurora' }, { id: 'liquid', label: 'Liquid' }, { id: 'holographic', label: 'Holo' },
   { id: 'plasma', label: 'Plasma' }, { id: 'silk', label: 'Silk' }, { id: 'nebula', label: 'Nebula' }, { id: 'ribbons', label: 'Ribbons' },
-  { id: 'metaballs', label: 'Metaballs' }, { id: 'contours', label: 'Contours' },
+  { id: 'metaballs', label: 'Metaballs' }, { id: 'contours', label: 'Contours' }, { id: 'smoke', label: 'Smoke / mist' }, { id: 'fire', label: 'Fire / embers' },
 ];
 const QUALITY: { id: ShaderQuality; label: string }[] = [
   { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }, { id: 'ultra', label: 'Ultra' },
+];
+const LAYER_COLOR_BLEND_MODES: { id: ShaderLayerColorBlend; label: string }[] = [
+  { id: 'mix', label: 'Mix' }, { id: 'multiply', label: 'Multiply' }, { id: 'screen', label: 'Screen' },
+  { id: 'overlay', label: 'Overlay' }, { id: 'add', label: 'Add' },
 ];
 const SHADER_PANELS = [
   { id: 'setup', label: 'Setup' },
@@ -54,7 +58,7 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
     current => ({ ...current, shader: normalizeInteractiveSettings({ ...current.shader, ...patch }) }),
     coalesce ? { coalesce: `shader-${coalesce}` } : {},
   );
-  const updateLayerShader = (patch: Partial<ReturnType<typeof normalizeShaderLayer>>) => {
+  const updateLayerShader = (patch: Partial<ReturnType<typeof normalizeShaderLayer>>, coalesce?: string) => {
     if (!layer) return;
     if (patch.enabled) {
       store.update(project => ({
@@ -63,13 +67,13 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
         layers: project.layers.map(current => current.id === layer.id
           ? { ...current, shader: normalizeShaderLayer({ ...current.shader, ...patch }) }
           : current),
-      }));
+      }), coalesce ? { coalesce: `shader-layer-${coalesce}` } : {});
       return;
     }
     store.updateLayer(layer.id, current => ({
       ...current,
       shader: normalizeShaderLayer({ ...current.shader, ...patch }),
-    }));
+    }), coalesce ? { coalesce: `shader-layer-${coalesce}` } : {});
   };
   const updateMask = (patch: Partial<LayerMask>) => {
     if (!layer) return;
@@ -107,6 +111,18 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
   if (!project.layers.length) return <Empty>Add a gradient layer before enabling shader effects.</Empty>;
   if (!layer) return <Empty>Select a layer, then enable shader rendering on that layer. Existing layer tools remain available.</Empty>;
 
+  const mixCandidates = project.layers.filter(candidate => candidate.visible && candidate.id !== layer.id);
+  const layerControls: ShaderLayerControls = layer.shader?.controls ?? {
+    speed: settings.speed,
+    intensity: settings.intensity,
+    distortion: settings.distortion,
+    distortionScale: settings.distortionScale,
+    turbulence: settings.turbulence,
+  };
+  const updateLayerControl = (key: keyof ShaderLayerControls, value: number) => updateLayerShader({
+    controls: { ...layerControls, [key]: value },
+  }, `layer-${key}`);
+
   return <div className="gs-interactive" data-testid="interactive-panel">
     <div className="gs-section-title"><b>Interactive shader engine</b><Switch label={settings.enabled ? 'On' : 'Off'} checked={settings.enabled} onChange={enabled => update({ enabled })} testId="shader-enabled" /></div>
     <p className="hint">Mouse hover interacts with the shader automatically. Enable Touch mode in the preview for touch input; switch back to Edit layer to work with stops, mesh points, and Bézier handles.</p>
@@ -121,6 +137,91 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
       </>}
       <div className="field-label">Layer shader style</div>
       <Seg value={layer.shader?.style ?? settings.style} options={STYLES} onChange={style => updateLayerShader({ style })} label="Layer shader style" testId="shader-layer-style" />
+      <Switch
+        label="Independent motion & FX controls"
+        checked={!!layer.shader?.controls}
+        onChange={enabled => updateLayerShader({
+          ...(enabled ? { enabled: true } : {}),
+          controls: enabled ? {
+            speed: settings.speed,
+            intensity: settings.intensity,
+            distortion: settings.distortion,
+            distortionScale: settings.distortionScale,
+            turbulence: settings.turbulence,
+          } : undefined,
+        })}
+        testId="shader-layer-controls"
+      />
+      {layer.shader?.controls && <>
+        <p className="hint">These controls override the shared shader settings for this layer only; Smoke and Fire use them to shape their motion and density.</p>
+        <ValueControl label="Layer motion speed" value={layerControls.speed} min={0} max={2} step={0.01} unit="×" def={DEFAULT_INTERACTIVE_SETTINGS.speed} onChange={value => updateLayerControl('speed', value)} onBegin={() => store.begin()} onCommit={() => store.end()} testId="shader-layer-speed" />
+        <ValueControl label="Layer FX intensity" value={layerControls.intensity} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.intensity} onChange={value => updateLayerControl('intensity', value)} onBegin={() => store.begin()} onCommit={() => store.end()} testId="shader-layer-intensity" />
+        <ValueControl label="Layer distortion" value={layerControls.distortion} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.distortion} onChange={value => updateLayerControl('distortion', value)} onBegin={() => store.begin()} onCommit={() => store.end()} testId="shader-layer-distortion" />
+        <ValueControl label="Layer distortion scale" value={layerControls.distortionScale} min={0.2} max={8} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.distortionScale} onChange={value => updateLayerControl('distortionScale', value)} onBegin={() => store.begin()} onCommit={() => store.end()} testId="shader-layer-distortion-scale" />
+        <ValueControl label="Layer turbulence" value={layerControls.turbulence} min={0} max={1} step={0.01} def={DEFAULT_INTERACTIVE_SETTINGS.turbulence} onChange={value => updateLayerControl('turbulence', value)} onBegin={() => store.begin()} onCommit={() => store.end()} testId="shader-layer-turbulence" />
+      </>}
+      <div className="field-label">Cross-layer interaction</div>
+      <label className="field-label" htmlFor="shader-mix-layer">Mix colors from</label>
+      <select
+        id="shader-mix-layer"
+        className="generate-select"
+        value={layer.shader?.mixLayerId ?? ''}
+        onChange={event => updateLayerShader({ enabled: true, mixLayerId: event.target.value })}
+        disabled={!mixCandidates.length}
+        data-testid="shader-mix-layer"
+      >
+        <option value="">No other layer</option>
+        {mixCandidates.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name || KIND_LABEL[candidate.type]}</option>)}
+      </select>
+      {!!layer.shader?.mixLayerId && <>
+        <label className="field-label" htmlFor="shader-mix-mode">Color blend</label>
+        <select
+          id="shader-mix-mode"
+          className="generate-select"
+          value={layer.shader.mixMode}
+          onChange={event => updateLayerShader({ mixMode: event.target.value as ShaderLayerColorBlend })}
+          data-testid="shader-mix-mode"
+        >
+          {LAYER_COLOR_BLEND_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
+        </select>
+        <ValueControl
+          label="Cross-layer color mix"
+          value={layer.shader.mixStrength ?? 0.5}
+          min={0}
+          max={1}
+          step={0.01}
+          def={0.5}
+          onChange={mixStrength => updateLayerShader({ mixStrength }, 'mix-strength')}
+          onBegin={() => store.begin()}
+          onCommit={() => store.end()}
+          testId="shader-mix-strength"
+        />
+        <ValueControl
+          label="Color flow speed"
+          value={layer.shader.mixSpeed ?? 0.35}
+          min={0}
+          max={2}
+          step={0.01}
+          unit="×"
+          def={0.35}
+          onChange={mixSpeed => updateLayerShader({ mixSpeed }, 'mix-speed')}
+          onBegin={() => store.begin()}
+          onCommit={() => store.end()}
+          testId="shader-mix-speed"
+        />
+        <p className="hint">The selected layer’s palette flows through this shader and responds to pointer motion.</p>
+      </>}
+      <label className="field-label" htmlFor="shader-pixel-blend">Rendered pixel blend</label>
+      <select
+        id="shader-pixel-blend"
+        className="generate-select"
+        value={layer.blend}
+        onChange={event => store.updateLayer(layer.id, { blend: event.target.value as typeof layer.blend })}
+        data-testid="shader-pixel-blend"
+      >
+        {BLEND_MODES.map(mode => <option key={mode} value={mode}>{mode.replace(/-/g, ' ')}</option>)}
+      </select>
+      <p className="hint">Composites this layer’s rendered pixels against the layers underneath. This also applies to the CSS fallback and exports.</p>
     </section>
 
     <div className="gs-shader-tabs" role="tablist" aria-label="Shader controls">

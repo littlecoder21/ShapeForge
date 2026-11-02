@@ -5,7 +5,7 @@ import { newLayer, newProject, stop } from '../engine/model';
 import { gradientLayerToShader, interactionColorsForLayer, supportsDirectShaderGeometry } from './adapter';
 import { interactiveHtmlExport, interactiveJavaScriptExport, interactiveReactExport } from './export';
 import { bakePaletteLut, encodePaletteLut } from './paletteLut';
-import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings } from './types';
+import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings, normalizeShaderLayer } from './types';
 import { POINTER_MODES, pointerModeId } from './pointerModes';
 import { UNIFORM_NAMES } from './uniforms';
 import { pointerSmoothingFactor } from './input/PointerManager';
@@ -63,6 +63,35 @@ test('new shader settings default and clamp while old project settings remain va
   assert.equal(multicolor.interactionColorMix, 1);
   assert.equal(multicolor.interactionColorSpeed, 0);
   assert.equal(multicolor.interactionFalloff, 'soft');
+});
+
+test('shader layer color mixing settings normalize safely for old and imported projects', () => {
+  assert.deepEqual(normalizeShaderLayer({ enabled: true, style: 'flow' }), {
+    enabled: true,
+    style: 'flow',
+    mixLayerId: '',
+    mixMode: 'mix',
+    mixStrength: 0.5,
+    mixSpeed: 0.35,
+  });
+  const clamped = normalizeShaderLayer({ mixLayerId: 'source', mixMode: 'invalid', mixStrength: 2, mixSpeed: -1 });
+  assert.equal(clamped.mixLayerId, 'source');
+  assert.equal(clamped.mixMode, 'mix');
+  assert.equal(clamped.mixStrength, 1);
+  assert.equal(clamped.mixSpeed, 0);
+  const independent = normalizeShaderLayer({
+    style: 'smoke',
+    controls: { speed: 3, intensity: -1, distortion: 0.6, distortionScale: 12, turbulence: 0.4 },
+  });
+  assert.equal(independent.style, 'smoke');
+  assert.deepEqual(independent.controls, {
+    speed: 2,
+    intensity: 0,
+    distortion: 0.6,
+    distortionScale: 8,
+    turbulence: 0.4,
+  });
+  assert.equal(normalizeShaderLayer({ style: 'fire' }).style, 'fire');
 });
 
 test('pointer catalog adds new modes and keeps the original mode ids stable', () => {
@@ -301,4 +330,43 @@ test('shader exports include the 3D pointer modes and interaction controls', () 
   assert.ok(UNIFORM_NAMES.includes('uInteractionDisplacement'));
   assert.ok(UNIFORM_NAMES.includes('uInteractionVelocityReaction'));
   assert.ok(UNIFORM_NAMES.includes('uInteractionGlitch'));
+});
+
+test('shader exports preserve cross-layer color mixing and rendered-pixel blend', () => {
+  const source = newLayer('radial', { name: 'Source colors', stops: [stop('#ff0000', 0), stop('#00ff00', 100)] });
+  const target = newLayer('linear', {
+    name: 'Animated target',
+    blend: 'screen',
+    shader: { enabled: true, style: 'flow', mixLayerId: source.id, mixMode: 'overlay', mixStrength: 0.8, mixSpeed: 0.6 },
+  });
+  const project = newProject({ layers: [source, target] });
+  const html = interactiveHtmlExport(project);
+  assert.match(html, /data-shader-mix-settings=/);
+  assert.match(html, /data-shader-mix-lut="[A-Za-z0-9+/=]+"/);
+  assert.match(html, /uLayerMixMode/);
+  assert.match(html, /blendLayerColors/);
+  assert.match(html, /mix-blend-mode: screen/);
+  const react = interactiveReactExport(project);
+  assert.match(react, /DEFAULT_LAYER_MIX_SETTINGS/);
+  assert.match(react, /DEFAULT_LAYER_MIX_LUTS/);
+  assert.doesNotMatch(react, /__SHADER_MIX_(?:CONFIG|LUT)_\d+__/);
+});
+
+test('shader exports preserve per-layer FX styles and motion overrides', () => {
+  const layer = newLayer('linear', {
+    shader: {
+      enabled: true,
+      style: 'smoke',
+      controls: { speed: 0.8, intensity: 0.7, distortion: 0.4, distortionScale: 2.2, turbulence: 0.6 },
+    },
+  });
+  const project = newProject({ layers: [layer] });
+  const html = interactiveHtmlExport(project);
+  assert.match(html, /&quot;style&quot;:&quot;smoke&quot;/);
+  assert.match(html, /&quot;speed&quot;:0\.8/);
+  assert.match(html, /&quot;turbulence&quot;:0\.6/);
+  assert.match(html, /smoke: 10, fire: 11/);
+  const react = interactiveReactExport(project);
+  assert.match(react, /style: 'flow'.*'smoke' \| 'fire'/);
+  assert.match(react, /"style":"smoke"/);
 });
