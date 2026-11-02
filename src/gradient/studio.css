@@ -29,6 +29,11 @@
 .gs-art-root > .gs-webgl-ready > .mesh-point-7 { display: none !important; }
 .gs-interactive { display: grid; gap: 12px; }
 .gs-interactive-section { display: grid; gap: 9px; padding: 10px 0; border-top: 1px solid #343a43; }
+.gs-shader-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 4px; border: 1px solid #343a43; border-radius: 8px; background: #191d22; scrollbar-width: none; }
+.gs-shader-tabs::-webkit-scrollbar { display: none; }
+.gs-shader-tab { flex: 1 0 auto; min-height: 34px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: #aab4bd; font: 600 11px var(--app-font-sans, system-ui); cursor: pointer; }
+.gs-shader-tab.active { background: #2b353d; color: #87e4c1; }
+.gs-shader-subpanel:not([hidden]) { display: grid; gap: 12px; }
 .gs-interactive-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .gs-interactive .gs-section-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: #e2e8ec; font-size: 12px; }
 .gs-interactive-custom { display: grid; gap: 6px; }
@@ -40,6 +45,9 @@
 .gs-interactive-menu > summary::after { content: '+'; margin-left: auto; color: #8a949f; }
 .gs-interactive-menu[open] > summary::after { content: '−'; }
 .gs-interaction-color { width: 100%; height: 36px; padding: 3px; border: 1px solid #3a424c; border-radius: 6px; background: #171b20; cursor: pointer; }
+.gs-interaction-palette { display: grid; gap: 8px; }
+.gs-interaction-palette-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; }
+.gs-interaction-palette-row .gs-interaction-color { grid-column: 1 / -1; }
 .gs-shader-input-btn { width: auto; min-width: 76px; padding: 0 10px; font-size: 10px; }
 .gs-art-root > .gs-layer-shader { pointer-events: none; }
 .gs-art-root > :where(.g-layer) { position: absolute; inset: 0; pointer-events: none; }

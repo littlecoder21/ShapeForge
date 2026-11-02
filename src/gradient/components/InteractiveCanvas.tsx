@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { InteractiveRenderer } from '../interactive/core/InteractiveRenderer';
-import { gradientLayerToShader } from '../interactive/adapter';
+import { gradientLayerToShader, interactionColorsForLayer, supportsDirectShaderGeometry } from '../interactive/adapter';
 import { normalizeInteractiveSettings, type InteractiveRendererStatus } from '../interactive/types';
 import type { GradientLayer, GradientProject } from '../engine/model';
 
@@ -13,8 +13,14 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
   const settings = useMemo(() => ({ ...config, style: layer.shader?.style ?? config.style }), [config, layer.shader?.style]);
   const rendererSettings = useMemo(() => ({
     ...settings,
-    renderBackend: settings.renderBackend === 'webgl' && layer.repeating ? 'overlay' as const : settings.renderBackend,
-  }), [settings, layer.repeating]);
+    interactionColor: settings.interactionColorSource === 'layer'
+      ? interactionColorsForLayer(adapted.palette)[0] ?? settings.interactionColor
+      : settings.interactionColor,
+    interactionColors: settings.interactionColorSource === 'layer'
+      ? interactionColorsForLayer(adapted.palette)
+      : settings.interactionColors,
+    renderBackend: settings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' as const : settings.renderBackend,
+  }), [settings, layer, adapted.palette]);
   const backendRef = useRef(rendererSettings.renderBackend);
   backendRef.current = rendererSettings.renderBackend;
 

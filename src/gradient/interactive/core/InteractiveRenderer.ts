@@ -3,6 +3,7 @@ import fragmentShaderSource from '../shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from '../shaders/gradient.vert.glsl?raw';
 import { PointerManager } from '../input/PointerManager';
 import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_GEOMETRY, normalizeInteractiveSettings, type InteractiveRendererStatus, type InteractiveSettings, type InteractiveUpdate, type ShaderGeometry, type ShaderMeshPoint, type ShaderStop } from '../types';
+import { pointerModeId } from '../pointerModes';
 import { bakePaletteLut } from '../paletteLut';
 import { UNIFORM_NAMES } from '../uniforms';
 
@@ -13,12 +14,10 @@ const MAX_STOPS = 8;
 const MAX_RIPPLES = 8;
 const MAX_MESH_POINTS = 8;
 const LUT_SIZE = 512;
+const MAX_RENDER_PIXELS = 1_200_000;
+const MAX_RENDER_SCALE = 1.25;
 const QUALITY_SCALE = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 } as const;
 const STYLE_ID = { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9 } as const;
-const POINTER_MODE_ID = {
-  attract: 0, repel: 1, swirl: 2, glow: 3, drag: 4, wave: 5, orbit: 6,
-  magnet: 7, ripple: 8, pulse: 9, trail: 10, spotlight: 11, hue: 12,
-} as const;
 const GEOMETRY_ID = { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 } as const;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -128,6 +127,7 @@ export class InteractiveRenderer {
       touchEnabled: this.settings.touchEnabled,
       ripplesEnabled: this.settings.ripplesEnabled,
       maximumRipples: this.settings.maximumRipples,
+      interactionDelay: this.settings.interactionDelay,
       onChange: () => this.schedule(),
     });
 
@@ -175,6 +175,7 @@ export class InteractiveRenderer {
         touchEnabled: this.settings.touchEnabled,
         ripplesEnabled: this.settings.ripplesEnabled,
         maximumRipples: this.settings.maximumRipples,
+        interactionDelay: this.settings.interactionDelay,
       });
       this.resize();
       if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
@@ -325,7 +326,12 @@ export class InteractiveRenderer {
     if (!this.gl || this.disposed) return;
     const widthCss = this.canvas.clientWidth;
     const heightCss = this.canvas.clientHeight;
-    const scale = clamp(this.baseResolutionScale() * this.adaptiveScale, 0.35, this.settings.quality === 'ultra' ? 1.75 : 2);
+    const pixelBudgetScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, widthCss * heightCss));
+    const scale = clamp(
+      Math.min(this.baseResolutionScale() * this.adaptiveScale, MAX_RENDER_SCALE, pixelBudgetScale),
+      0.35,
+      MAX_RENDER_SCALE,
+    );
     const width = Math.max(1, Math.min(4096, Math.round(widthCss * scale)));
     const height = Math.max(1, Math.min(4096, Math.round(heightCss * scale)));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -425,14 +431,17 @@ export class InteractiveRenderer {
     const delta = Math.min(0.05, rawDelta);
     this.previousFrame = now;
     this.clock += delta;
-    const animated = this.settings.animate && !this.paused && !this.reducedMotion;
+    const animated = this.settings.animate && this.settings.speed > 0 && !this.paused && !this.reducedMotion;
     if (animated) this.shaderTime += delta * this.settings.speed;
     else if (!this.settings.animate) this.shaderTime = 0;
     if (rawDelta > 0) {
       this.frameEma = this.frameEma ? this.frameEma * 0.9 + rawDelta * 0.1 : rawDelta;
-      this.slowFrameCount = this.frameEma > 0.024 ? this.slowFrameCount + 1 : 0;
-      if (this.slowFrameCount >= 45 && this.baseResolutionScale() * this.adaptiveScale > 0.5) {
-        this.adaptiveScale = Math.max(0.5 / this.baseResolutionScale(), this.adaptiveScale * 0.85);
+      this.slowFrameCount = this.frameEma > 0.02 ? this.slowFrameCount + 1 : 0;
+      if (this.slowFrameCount >= 18 && this.baseResolutionScale() * this.adaptiveScale > 0.5) {
+        this.adaptiveScale = Math.max(
+          0.5 / this.baseResolutionScale(),
+          this.adaptiveScale * 0.8,
+        );
         this.slowFrameCount = 0;
         this.resize();
         this.setStatus('ready', this.paletteNotice());
@@ -471,9 +480,25 @@ export class InteractiveRenderer {
     set1f('uGradientAngle', this.geometry.angle * Math.PI / 180);
     set2f('uGradientOrigin', this.geometry.originX / 100, 1 - this.geometry.originY / 100);
     set2f('uGradientRadius', this.geometry.radiusX / 100, this.geometry.radiusY / 100);
-    set1f('uPointerMode', POINTER_MODE_ID[this.settings.pointerMode]);
+    set1f('uPointerMode', pointerModeId(this.settings.pointerMode));
+    set1f('uShaderMix', this.settings.shaderMix);
     const interactionColor = hexToRgb(this.settings.interactionColor);
     gl.uniform3f(this.uniforms.uInteractionColor ?? null, interactionColor.r / 255, interactionColor.g / 255, interactionColor.b / 255);
+    const interactionColors = new Float32Array(5 * 3);
+    this.settings.interactionColors.slice(0, 5).forEach((color, index) => {
+      const rgb = hexToRgb(color);
+      interactionColors.set([rgb.r / 255, rgb.g / 255, rgb.b / 255], index * 3);
+    });
+    gl.uniform3fv(this.uniforms['uInteractionColors[0]'] ?? null, interactionColors);
+    set1f('uInteractionColorCount', Math.min(5, this.settings.interactionColors.length));
+    set1f('uInteractionColorMix', this.settings.interactionColorMix);
+    set1f('uInteractionColorSpeed', this.settings.interactionColorSpeed);
+    set1f('uInteractionFalloff', { soft: 0, linear: 1, sharp: 2, gaussian: 3 }[this.settings.interactionFalloff]);
+    set1f('uInteractionDistortion', this.settings.interactionDistortion);
+    set1f('uInteractionDisplacement', this.settings.interactionDisplacement);
+    set1f('uInteractionDisplacementMode', this.settings.interactionDisplacementMode === 'push' ? 0 : 1);
+    set1f('uInteractionVelocityReaction', this.settings.interactionVelocityReaction);
+    set1f('uInteractionGlitch', this.settings.interactionGlitch);
     set1f('uSpeed', this.settings.speed);
     set1f('uIntensity', this.settings.intensity);
     set1f('uDistortion', this.settings.distortion);

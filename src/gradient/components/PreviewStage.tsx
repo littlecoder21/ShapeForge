@@ -188,6 +188,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
 
   const onDown = (e: RPointerEvent) => {
     if (shaderInputRef.current) { relayShaderPointer(e); return; }
+    if (shaderInputActive && e.pointerType === 'mouse') relayShaderPointer(e);
     if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
     try { wrapRef.current!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const s = local(e); pointers.current.set(e.pointerId, { ...s, type: e.pointerType });
@@ -198,6 +199,7 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
   };
   const onMove = (e: RPointerEvent) => {
     if (shaderInputRef.current) { relayShaderPointer(e); return; }
+    if (shaderInputActive && e.pointerType === 'mouse') relayShaderPointer(e);
     const k = pointers.current.get(e.pointerId);
     if (!k) { if (e.pointerType === 'mouse' && gest.current.t === 'idle') wrapRef.current!.style.cursor = hitTest(local(e), 'mouse') ? 'grab' : ''; return; }
     const s = local(e); k.x = s.x; k.y = s.y; schedule();
@@ -232,14 +234,23 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
 
   const onUp = (event: RPointerEvent) => {
     if (shaderInputRef.current) relayShaderPointer(event);
-    else finish(event, false);
+    else {
+      if (shaderInputActive && event.pointerType === 'mouse') relayShaderPointer(event);
+      finish(event, false);
+    }
   };
   const onCancel = (event: RPointerEvent) => {
     if (shaderInputRef.current) relayShaderPointer(event);
-    else finish(event, true);
+    else {
+      if (shaderInputActive && event.pointerType === 'mouse') relayShaderPointer(event);
+      finish(event, true);
+    }
+  };
+  const onPointerLeave = (event: RPointerEvent) => {
+    if (shaderInputActive && (event.pointerType === 'mouse' || shaderInputRef.current)) relayShaderPointer(event);
   };
 
-  return <div className={`gs-stage${shaderInputActive ? ' gs-stage-shader' : ''}`} ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
+  return <div className={`gs-stage${shaderInputActive ? ' gs-stage-shader' : ''}`} ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel} onPointerLeave={onPointerLeave} onContextMenu={e => e.preventDefault()} data-testid="gs-stage">
     <div className="gs-world" ref={worldRef} style={{ width: w, height: h }}>
       <div className="gs-checker" style={{ background: CHECKER }} />
       {beforeProject ? <>
@@ -285,10 +296,10 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
         className={`gs-play-btn gs-shader-input-btn ${shaderPointerInput ? 'on' : ''}`}
         onClick={() => setShaderPointerInput(active => !active)}
         aria-pressed={shaderPointerInput}
-        aria-label={shaderPointerInput ? 'Switch to editing shader layer controls' : 'Enable shader pointer interaction'}
-        title={shaderPointerInput ? 'Pointer and touch input are active · click to edit stops and shape' : 'Click to send pointer and touch input to the shader'}
+        aria-label={shaderPointerInput ? 'Switch to editing shader layer controls' : 'Enable touch shader interaction'}
+        title={shaderPointerInput ? 'Mouse and touch interaction are active · click to edit stops and shape' : 'Mouse hover interacts automatically; click to enable touch interaction'}
         data-testid="gs-shader-input-mode"
-      >{shaderPointerInput ? 'Edit layer' : 'Interact'}</button>}
+      >{shaderPointerInput ? 'Edit layer' : 'Touch mode'}</button>}
       <button type="button" className={`gs-play-btn ${playing ? 'on' : ''}`} onClick={() => {
         if (!playing && completed.current) {
           completed.current = false;

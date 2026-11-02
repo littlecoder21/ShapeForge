@@ -1,8 +1,9 @@
+import { normalizePointerMode, type PointerMode } from './pointerModes';
+
 export type InteractiveStyle = 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours';
+const SHADER_STYLES: InteractiveStyle[] = ['flow', 'aurora', 'liquid', 'holographic', 'plasma', 'silk', 'nebula', 'ribbons', 'metaballs', 'contours'];
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
-export type PointerMode =
-  | 'attract' | 'repel' | 'swirl' | 'glow' | 'drag' | 'wave' | 'orbit'
-  | 'magnet' | 'ripple' | 'pulse' | 'trail' | 'spotlight' | 'hue';
+export type { PointerMode } from './pointerModes';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 
 export interface ShaderLayerConfig {
@@ -40,6 +41,7 @@ export interface ShaderMeshPoint {
 export interface InteractiveSettings {
   enabled: boolean;
   style: InteractiveStyle;
+  shaderMix: number;
   quality: ShaderQuality;
   resolutionScale: number;
   animate: boolean;
@@ -51,7 +53,18 @@ export interface InteractiveSettings {
   interactionEnabled: boolean;
   touchEnabled: boolean;
   pointerMode: PointerMode;
+  interactionColorSource: 'layer' | 'custom';
   interactionColor: string;
+  interactionColors: string[];
+  interactionColorMix: number;
+  interactionColorSpeed: number;
+  interactionFalloff: 'soft' | 'linear' | 'sharp' | 'gaussian';
+  interactionDistortion: number;
+  interactionDisplacement: number;
+  interactionDisplacementMode: 'push' | 'pull';
+  interactionVelocityReaction: number;
+  interactionDelay: number;
+  interactionGlitch: number;
   interactionRadius: number;
   interactionStrength: number;
   glow: number;
@@ -81,7 +94,8 @@ export type InteractiveRendererStatus = 'ready' | 'fallback' | 'context-lost' | 
 export const DEFAULT_INTERACTIVE_SETTINGS: Readonly<InteractiveSettings> = Object.freeze({
   enabled: false,
   style: 'flow',
-  quality: 'high',
+  shaderMix: 1,
+  quality: 'medium',
   resolutionScale: 1,
   animate: true,
   speed: 0.35,
@@ -92,7 +106,18 @@ export const DEFAULT_INTERACTIVE_SETTINGS: Readonly<InteractiveSettings> = Objec
   interactionEnabled: true,
   touchEnabled: true,
   pointerMode: 'swirl',
-  interactionColor: '#ffffff',
+  interactionColorSource: 'layer',
+  interactionColor: '#7c5cff',
+  interactionColors: ['#7c5cff', '#22d3ee', '#f472b6'],
+  interactionColorMix: 0.75,
+  interactionColorSpeed: 0.35,
+  interactionFalloff: 'soft',
+  interactionDistortion: 0.42,
+  interactionDisplacement: 0.35,
+  interactionDisplacementMode: 'push',
+  interactionVelocityReaction: 0.65,
+  interactionDelay: 85,
+  interactionGlitch: 0,
   interactionRadius: 0.28,
   interactionStrength: 0.42,
   glow: 0.55,
@@ -121,7 +146,7 @@ export const DEFAULT_SHADER_GEOMETRY: Readonly<ShaderGeometry> = Object.freeze({
 
 export function normalizeShaderLayer(raw: unknown): ShaderLayerConfig {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const styles: InteractiveStyle[] = ['flow', 'aurora', 'liquid', 'holographic', 'plasma', 'silk', 'nebula', 'ribbons', 'metaballs', 'contours'];
+  const styles = SHADER_STYLES;
   return {
     enabled: value.enabled === true,
     style: typeof value.style === 'string' && styles.includes(value.style as InteractiveStyle) ? value.style as InteractiveStyle : DEFAULT_SHADER_LAYER.style,
@@ -141,7 +166,8 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
   };
   return {
     enabled: value.enabled === true,
-    style: choice('style', ['flow', 'aurora', 'liquid', 'holographic', 'plasma', 'silk', 'nebula', 'ribbons', 'metaballs', 'contours'], DEFAULT_INTERACTIVE_SETTINGS.style),
+    style: choice('style', SHADER_STYLES, DEFAULT_INTERACTIVE_SETTINGS.style),
+    shaderMix: finite('shaderMix', 0, 1),
     quality: choice('quality', ['low', 'medium', 'high', 'ultra'], DEFAULT_INTERACTIVE_SETTINGS.quality),
     resolutionScale: finite('resolutionScale', 0.35, 1.5),
     animate: value.animate !== false,
@@ -152,13 +178,31 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     turbulence: finite('turbulence', 0, 1),
     interactionEnabled: value.interactionEnabled !== false,
     touchEnabled: value.touchEnabled !== false,
-    pointerMode: choice('pointerMode', [
-      'attract', 'repel', 'swirl', 'glow', 'drag', 'wave', 'orbit',
-      'magnet', 'ripple', 'pulse', 'trail', 'spotlight', 'hue',
-    ], DEFAULT_INTERACTIVE_SETTINGS.pointerMode),
+    pointerMode: normalizePointerMode(value.pointerMode),
+    interactionColorSource: choice('interactionColorSource', ['layer', 'custom'], DEFAULT_INTERACTIVE_SETTINGS.interactionColorSource),
     interactionColor: typeof value.interactionColor === 'string' && /^#[0-9a-f]{6}$/i.test(value.interactionColor)
       ? value.interactionColor
       : DEFAULT_INTERACTIVE_SETTINGS.interactionColor,
+    interactionColors: (() => {
+      const source = Array.isArray(value.interactionColors)
+        ? value.interactionColors
+        : value.interactionColor && value.interactionColor !== DEFAULT_INTERACTIVE_SETTINGS.interactionColor
+          ? [value.interactionColor]
+          : DEFAULT_INTERACTIVE_SETTINGS.interactionColors;
+      const colors = source
+        .filter((color): color is string => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color))
+        .slice(0, 5);
+      return colors.length ? colors : [...DEFAULT_INTERACTIVE_SETTINGS.interactionColors];
+    })(),
+    interactionColorMix: finite('interactionColorMix', 0, 1),
+    interactionColorSpeed: finite('interactionColorSpeed', 0, 2),
+    interactionFalloff: choice('interactionFalloff', ['soft', 'linear', 'sharp', 'gaussian'], DEFAULT_INTERACTIVE_SETTINGS.interactionFalloff),
+    interactionDistortion: finite('interactionDistortion', 0, 1),
+    interactionDisplacement: finite('interactionDisplacement', 0, 1),
+    interactionDisplacementMode: choice('interactionDisplacementMode', ['push', 'pull'], DEFAULT_INTERACTIVE_SETTINGS.interactionDisplacementMode),
+    interactionVelocityReaction: finite('interactionVelocityReaction', 0, 2),
+    interactionDelay: finite('interactionDelay', 0, 600),
+    interactionGlitch: finite('interactionGlitch', 0, 1),
     interactionRadius: finite('interactionRadius', 0.04, 0.8),
     interactionStrength: finite('interactionStrength', 0, 1),
     glow: finite('glow', 0, 1),

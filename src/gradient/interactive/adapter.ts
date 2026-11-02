@@ -1,4 +1,5 @@
 import { sortedStops, type GradientLayer, type GradientProject } from '../engine/model';
+import { bleedOf, radii } from '../engine/geom';
 import type { ShaderGeometry, ShaderMeshPoint, ShaderStop } from './types';
 
 interface PaletteGroup {
@@ -17,6 +18,16 @@ export interface ShaderLayerAdapter {
   meshPoints: ShaderMeshPoint[];
   meshBase: string;
   notes: string[];
+}
+
+export function interactionColorsForLayer(palette: ShaderStop[]): string[] {
+  const colors = [...new Set(palette.map(stop => stop.color).filter(color => /^#[0-9a-f]{6}$/i.test(color)))];
+  if (colors.length <= 5) return colors;
+  return Array.from({ length: 5 }, (_, index) => colors[Math.round(index * (colors.length - 1) / 4)]);
+}
+
+export function supportsDirectShaderGeometry(layer: GradientLayer): boolean {
+  return !layer.repeating && (layer.type === 'linear' || layer.type === 'radial' || layer.type === 'conic');
 }
 
 function layerPalette(layer: GradientLayer): ShaderStop[] {
@@ -45,6 +56,8 @@ function layerPalette(layer: GradientLayer): ShaderStop[] {
 export function gradientLayerToShader(layer: GradientLayer, project: GradientProject): ShaderLayerAdapter {
   let palette = layerPalette(layer);
   const notes: string[] = [];
+  const bleed = bleedOf(layer, project.canvas);
+  const layerScale = 1 + 2 * bleed;
   if (!palette.length && layer.mesh.base) {
     palette = [
       { color: layer.mesh.base, position: 0, alpha: 1 },
@@ -64,8 +77,8 @@ export function gradientLayerToShader(layer: GradientLayer, project: GradientPro
     ];
     notes.push('This layer has no color stops; the shader is using its fallback palette.');
   }
-  if (layer.type === 'curve') notes.push('Curve handles still define the layer shape; shader colors follow the curve layer stop ramp.');
-  if (layer.type === 'noise') notes.push('Noise layers use their shader color ramp; the original grain remains as a texture overlay.');
+  if (layer.type === 'curve') notes.push('Curve geometry remains CSS-backed; the shader adds an interactive overlay.');
+  if (layer.type === 'noise') notes.push('Noise geometry remains CSS-backed; the shader adds an interactive overlay.');
   if (layer.repeating) notes.push('Repeating gradient geometry remains CSS-backed; the WebGL shader adds effects over the CSS gradient.');
   const meshPoints = layer.type === 'mesh' ? layer.mesh.points.slice(0, 8).map(point => ({
     color: point.color,
@@ -84,10 +97,18 @@ export function gradientLayerToShader(layer: GradientLayer, project: GradientPro
     geometry: {
       kind: layer.type,
       angle: layer.angle,
-      originX: layer.cx,
-      originY: layer.cy,
-      radiusX: layer.rx,
-      radiusY: layer.ry,
+      originX: layer.type === 'radial' || layer.type === 'conic' ? (layer.cx + 100 * bleed) / layerScale : 50,
+      originY: layer.type === 'radial' || layer.type === 'conic' ? (layer.cy + 100 * bleed) / layerScale : 50,
+      radiusX: layer.type === 'radial'
+        ? layer.shape === 'circle'
+          ? (radii(layer, project.canvas).rx / (project.canvas.w * layerScale)) * 100
+          : layer.rx / layerScale
+        : layer.rx,
+      radiusY: layer.type === 'radial'
+        ? layer.shape === 'circle'
+          ? (radii(layer, project.canvas).ry / (project.canvas.h * layerScale)) * 100
+          : layer.ry / layerScale
+        : layer.ry,
       space: layer.space,
     },
     notes,

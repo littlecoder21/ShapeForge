@@ -28,7 +28,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const out = useMemo(() => buildOutputs(project), [project]);
   const interactive = useMemo(() => interactiveExports(project), [project]);
   const [cssMode, setCssMode] = useState<'full' | 'properties'>('full');
-  const [interactiveMode, setInteractiveMode] = useState<'html' | 'glsl' | 'react'>('html');
+  const [interactiveMode, setInteractiveMode] = useState<'html' | 'javascript' | 'glsl' | 'react'>('html');
   const [importText, setImportText] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const configuredName = outputOf(project).downloadName.trim();
@@ -88,6 +88,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       <div className="gs-fmt" role="tablist" aria-label="Interactive export format">
         {([
           { id: 'html', label: 'HTML + JS' },
+          { id: 'javascript', label: 'JavaScript' },
           { id: 'glsl', label: 'GLSL' },
           { id: 'react', label: 'React + TS' },
         ] as const).map(format => (
@@ -97,6 +98,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
         ))}
       </div>
       {interactiveMode === 'html' && <CodeBlock title="Standalone interactive background" text={interactive.html} lang="html" testId="code-interactive-html" copyLabel="Copy HTML" actions={downloadButton('html', interactive.html, 'Download HTML')} />}
+      {interactiveMode === 'javascript' && <CodeBlock title="Mount the exact interactive gradient into a page" text={interactive.javascript} lang="js" testId="code-interactive-javascript" copyLabel="Copy JavaScript" actions={downloadButton('js', interactive.javascript, 'Download JS')} />}
       {interactiveMode === 'glsl' && <CodeBlock title="Shader sources and uniforms" text={interactive.glsl} lang="glsl" testId="code-interactive-glsl" copyLabel="Copy GLSL" actions={downloadButton('glsl', interactive.glsl, 'Download GLSL')} />}
       {interactiveMode === 'react' && <CodeBlock title="Self-contained React + TypeScript component" text={interactive.react} lang="tsx" testId="code-interactive-react" copyLabel="Copy React component" actions={downloadButton('tsx', interactive.react, 'Download TSX')} />}
     </>}

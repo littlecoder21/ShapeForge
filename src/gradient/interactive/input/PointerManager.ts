@@ -18,10 +18,16 @@ interface PointerOptions {
   touchEnabled: boolean;
   ripplesEnabled: boolean;
   maximumRipples: number;
+  interactionDelay: number;
   onChange: () => void;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+export function pointerSmoothingFactor(deltaSeconds: number, interactionDelayMs: number) {
+  const delaySeconds = Math.max(0, interactionDelayMs) / 1000;
+  return delaySeconds === 0 ? 1 : 1 - Math.exp(-Math.max(0, deltaSeconds) / delaySeconds);
+}
 
 export class PointerManager {
   private readonly canvas: HTMLCanvasElement;
@@ -53,7 +59,7 @@ export class PointerManager {
   }
 
   advance(deltaSeconds: number, nowSeconds: number): PointerSnapshot {
-    const smoothing = 1 - Math.exp(-Math.max(0, deltaSeconds) * 12);
+    const smoothing = pointerSmoothingFactor(deltaSeconds, this.options.interactionDelay);
     const priorX = this.current.x, priorY = this.current.y;
     this.current.x += (this.target.x - this.current.x) * smoothing;
     this.current.y += (this.target.y - this.current.y) * smoothing;
