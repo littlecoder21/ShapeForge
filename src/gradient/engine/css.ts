@@ -8,6 +8,7 @@ import { curveSvgDataUri } from './curve';
 import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
 import { curveProgress } from './ramp';
 import { textureDataUri, textureOverlay } from './textures';
+import { textMaskDataUri } from './text';
 
 /* ═══════════════════════════ CSS generation ═══════════════════════════
  * Three outputs, all produced from the structured project:
@@ -30,6 +31,7 @@ const cssIdentifier = (value: string, fallback: string) => {
   const clean = value.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-') || fallback;
   return /^-?\d/.test(clean) ? `g-${clean}` : clean;
 };
+const htmlEscape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 type Unit = '%' | 'px' | 'deg';
 interface Ctx {
@@ -129,7 +131,7 @@ export function layerImages(layer: GradientLayer, project: GradientProject, o: {
   const line = (g: GradientParts) => `${g.fn}(${[g.head, ...g.stops].join(', ')})`;
   if (layer.type === 'noise') return [{ text: noiseDataUri(layer.noise), label: 'Grain', size: `${Math.round(layer.noise.tile)}px ${Math.round(layer.noise.tile)}px` }];
   if (layer.type === 'curve') return [{ text: curveSvgDataUri(layer, project.canvas), label: `${layer.name} (curve)` }];
-  if (layer.type === 'mesh') {
+  if (layer.type === 'mesh' && !layer.text) {
     const ctx = makeCtx(layer, project, o);
     const items = meshParts(layer, project, { alphaMul: ctx.alphaMul, flat: !!o.flat, s: ctx.s, vars: ctx.ptVar }).map((g, i) => ({ text: line(g), parts: g, label: `Point ${i + 1}` }));
     if (o.flat && layer.mesh.base) items.push({ text: `linear-gradient(${layer.mesh.base}, ${layer.mesh.base})`, parts: { fn: 'linear-gradient', head: layer.mesh.base, stops: [layer.mesh.base] }, label: 'Base' });
@@ -263,8 +265,9 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   if (bleed > 0) decls.push(`inset: -${r2(bleed * 100, 1)}%`);
   const items = layerImages(layer, project, { cls: key });
   const meshCtx = layer.type === 'mesh' ? makeCtx(layer, project, { cls: key }) : null;
-  if (layer.type === 'mesh' && layer.mesh.base) decls.push(`background-color: ${layer.mesh.base}`);
+  if (layer.type === 'mesh' && layer.mesh.base && !layer.text) decls.push(`background-color: ${layer.mesh.base}`);
   decls.push('contain: layout');
+  if (layer.type === 'mesh' && !layer.text) decls.push('isolation: isolate');
   if (layer.mask.enabled) {
     if (layer.mask.curved) {
       const image = layerMaskSvgDataUri(layer.mask);
@@ -278,7 +281,8 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   // a rotated texture overlay is larger than the layer, so the layer clips it (the preview root may not)
   const texture = layer.texture.enabled ? textureOverlay(layer.texture) : undefined;
   if (texture?.rotation) decls.push('overflow: hidden');
-  if (layer.solidColor !== undefined) decls.push(`background-color: ${layer.solidColor}`);
+  if (layer.solidColor !== undefined && !layer.text) decls.push(`background-color: ${layer.solidColor}`);
+  else if (layer.text) decls.push('background-image: none');
   else if (layer.type !== 'mesh' && o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
   else if (layer.type !== 'mesh') decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
   if (items[0]?.size) decls.push(`background-size: ${items[0].size}`);
@@ -293,7 +297,7 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   }
   const head = o.pretty && o.comments ? `/* ${cls.replace(/^.*-(\d+)$/, '$1')} · ${layer.name}${bleed > 0 ? ' (blurred layers extend past the edge so the blur stays full)' : ''} */\n` : '';
   let css = `${head}${o.rootSel} .${cls} {\n${decls.map(d => `  ${d};`).join('\n')}\n}`;
-  if (layer.type === 'mesh' && meshCtx) {
+  if (layer.type === 'mesh' && meshCtx && !layer.text) {
     const points = layer.mesh.points.map((point, index) => {
       const { x: animatedX, y: animatedY } = meshCtx.ptVar.get(point.id) ?? {};
       const transform = { ...IDENTITY, ...(point.transform ?? {}) };
@@ -316,17 +320,45 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
         'position: absolute', `left: ${left}`, `top: ${top}`,
         `width: ${r2((2 * point.size) / s)}%`,
         `height: ${r2((2 * point.size * project.canvas.w / project.canvas.h) / s)}%`,
-        `background-image: ${background}`, `transform: ${pointTransform}`, 'transform-origin: center',
+        `background-image: ${background}`, `transform: ${pointTransform}`, 'transform-origin: center', 'mix-blend-mode: screen',
         ...(filters.length ? [`filter: ${filters.join(' ')}`] : []),
       ];
       return `${o.rootSel} .${cls} > .${pointClass} {\n${rule.map(value => `  ${value};`).join('\n')}\n}`;
     });
     if (points.length) css += `\n\n${points.join('\n\n')}`;
   }
+  if (layer.text) {
+    const text = layer.text;
+    const mergeMode = text.mergeStyle === 'color' ? 'multiply'
+      : text.mergeStyle === 'depth' ? 'soft-light'
+        : text.mergeStyle === 'both' ? 'multiply' : '';
+    const depthFilter = text.depth > 0 && (text.mergeStyle === 'depth' || text.mergeStyle === 'both')
+      ? `drop-shadow(0 ${r2(text.depth)}px ${r2(text.depth * 1.5)}px rgba(0, 0, 0, 0.6)) drop-shadow(0 -${r2(text.depth * 0.4)}px ${r2(text.depth * 0.8)}px rgba(255, 255, 255, 0.35))`
+      : '';
+    const textDecls = [
+      'position: absolute', 'inset: 0', 'z-index: 2', 'display: flex',
+      `align-items: ${text.verticalAlign === 'middle' ? 'center' : text.verticalAlign === 'bottom' ? 'flex-end' : 'flex-start'}`,
+      `justify-content: ${text.align === 'left' ? 'flex-start' : text.align === 'right' ? 'flex-end' : 'center'}`,
+      'width: 100%', 'height: 100%', 'box-sizing: border-box', 'white-space: pre-wrap', 'overflow-wrap: anywhere',
+      `font-family: ${text.fontFamily}`, `font-size: ${r2(text.fontSize)}px`, `font-weight: ${text.fontWeight}`,
+      `letter-spacing: ${r2(text.letterSpacing)}px`, `line-height: ${r2(text.lineHeight, 3)}`, `text-align: ${text.align}`,
+      'color: transparent', '-webkit-text-fill-color: transparent', 'background-clip: text', '-webkit-background-clip: text',
+      `background-image: ${items.map(item => item.text).join(', ')}`,
+      `background-size: ${items.map(item => item.size ?? '100% 100%').join(', ')}`,
+      `background-position: ${items.map(item => item.position ?? '0 0').join(', ')}`,
+      ...(mergeMode ? [`mix-blend-mode: ${mergeMode}`] : []),
+      ...(depthFilter ? [`filter: ${depthFilter}`] : []),
+      ...(layer.solidColor !== undefined ? [`background-color: ${layer.solidColor}`] : layer.type === 'mesh' && layer.mesh.base ? [`background-color: ${layer.mesh.base}`] : []),
+    ];
+    css += `\n\n${o.rootSel} .${cls} > .g-text {\n${textDecls.map(value => `  ${value};`).join('\n')}\n}`;
+  }
   if (texture) {
     // Shared helper: the tile is axis-aligned at full strength, this rule applies the opacity once, and a rotated texture rotates
     // the whole repeating overlay (oversized so it still covers the layer) — the repeat stays seamless at any angle.
-    css += `\n\n${o.rootSel} .${cls}::after {\n  content: "";\n  position: absolute;\n  inset: ${texture.rotation ? '-100%' : '0'};\n  pointer-events: none;\n  background-image: ${texture.dataUri};\n  background-size: ${r2(texture.size)}px ${r2(texture.size)}px;\n  background-position: ${texture.offsetX}px ${texture.offsetY}px;\n  opacity: ${r2(texture.opacity, 3)};\n  mix-blend-mode: ${texture.blend};${texture.rotation ? `\n  transform: rotate(${r2(texture.rotation)}deg);` : ''}\n}`;
+    const maskScale = 100 / (1 + 2 * bleed);
+    const maskSize = texture.rotation ? `${r2(maskScale / 3)}% ${r2(maskScale / 3)}%` : `${r2(maskScale)}% ${r2(maskScale)}%`;
+    const mask = layer.text ? `\n  mask-image: ${textMaskDataUri(layer.text, project.canvas.w, project.canvas.h)};\n  mask-size: ${maskSize};\n  mask-position: center;\n  mask-repeat: no-repeat;\n  -webkit-mask-image: ${textMaskDataUri(layer.text, project.canvas.w, project.canvas.h)};\n  -webkit-mask-size: ${maskSize};\n  -webkit-mask-position: center;\n  -webkit-mask-repeat: no-repeat;` : '';
+    css += `\n\n${o.rootSel} .${cls}::after {\n  content: "";\n  position: absolute;\n  inset: ${texture.rotation ? '-100%' : '0'};\n  pointer-events: none;\n  background-image: ${texture.dataUri};\n  background-size: ${r2(texture.size)}px ${r2(texture.size)}px;\n  background-position: ${texture.offsetX}px ${texture.offsetY}px;\n  opacity: ${r2(texture.opacity, 3)};\n  mix-blend-mode: ${texture.blend};${texture.rotation ? `\n  transform: rotate(${r2(texture.rotation)}deg);` : ''}${mask}\n}`;
   }
   if (anim) css = `${anim.props ? `${anim.props}\n\n` : ''}${css}\n\n${anim.keyframes}`;
   return css;
@@ -373,7 +405,7 @@ export function layeredOutput(project: GradientProject) {
   const visible = project.layers.filter(l => l.visible);
   const defs = effectDefs(project, names);
   const anyAnim = visible.some(l => l.anim.enabled && l.anim.tracks.length);
-  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
+  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${l.text ? `<span class="g-text">${htmlEscape(l.text.content)}</span>` : l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
   const html = `<div ${root.attr} aria-hidden="true">\n${rows.join('\n')}${defs ? `\n  <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n</div>`;
   const percentHeightHost = out.includeSize && !out.responsive && out.height.unit === '%'
     ? 'html, body { height: 100%; margin: 0; }'
@@ -390,6 +422,7 @@ function flatten(layer: GradientLayer, warnings: string[], flatTexture: boolean)
   const name = `“${l.name}”`;
   if (l.mask.enabled) warnings.push(`${name}: custom layer shape needs layered output`);
   if (activeEffects(l.effects).length) warnings.push(`${name}: effects (blur/filters) need layered output`);
+  if (l.text) warnings.push(`${name}: text needs layered output`);
   if (l.texture.enabled && !flatTexture) warnings.push(`${name}: texture overlay needs layered output`);
   if (l.anim.enabled && l.anim.tracks.length) warnings.push(`${name}: animation needs layered output`);
   if (t.skewX || t.skewY) warnings.push(`${name}: skew needs layered output`);

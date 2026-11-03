@@ -19,6 +19,7 @@
 .gs-shader-status.fallback, .gs-shader-status.error, .gs-shader-status.context-lost { border-color: #8d5b44; color: #ffd2b8; }
 .gs-art-root > .gs-layer-shader::after { z-index: 2; }
 .gs-art-root > .gs-webgl-ready { background-image: none !important; background-color: transparent !important; }
+.gs-art-root > .gs-webgl-ready > .g-text { background-image: none !important; background-color: transparent !important; color: transparent !important; -webkit-text-fill-color: transparent !important; }
 .gs-art-root > .gs-webgl-ready > .mesh-point-0,
 .gs-art-root > .gs-webgl-ready > .mesh-point-1,
 .gs-art-root > .gs-webgl-ready > .mesh-point-2,

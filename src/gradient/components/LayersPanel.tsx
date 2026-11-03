@@ -77,7 +77,7 @@ export default function LayersPanel({ onSelected }: { onSelected?: () => void })
           <button type="button" className="gs-eye" onClick={() => toggle(l)} aria-label={l.visible ? `Hide ${l.name}` : `Show ${l.name}`} aria-pressed={l.visible} data-testid="layer-eye">{l.visible ? <Eye /> : <EyeOff />}</button>
           <button type="button" className="gs-layerbtn" onClick={() => select(l.id)} aria-label={`Select ${l.name}`} aria-current={l.id === layerId} data-testid="layer-select">
             <LayerThumb layer={l} />
-            <span className="gs-lname">{l.name}<small>{l.solidColor !== undefined ? '■' : typeIcon[l.type]} {l.solidColor !== undefined ? 'solid color' : `${l.repeating ? 'repeating ' : ''}${l.type}`}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
+            <span className="gs-lname">{l.name}<small>{l.text ? 'T text layer' : l.solidColor !== undefined ? 'solid color' : `${l.repeating ? 'repeating ' : ''}${l.type}`}{l.blend !== 'normal' ? ` · ${l.blend}` : ''}{l.opacity < 1 ? ` · ${Math.round(l.opacity * 100)}%` : ''}</small></span>
           </button>
           <span className="gs-lact">
             {l.id === layerId && <>

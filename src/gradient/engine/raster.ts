@@ -33,6 +33,7 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   if (layer.mask.enabled) clipLayerMask(ctx, layer.mask, project.canvas);
   if (layer.type === 'mesh') {
     if (layer.mesh.base) { ctx.fillStyle = layer.mesh.base; ctx.fillRect(-bx, -by, w + 2 * bx, h + 2 * by); }
+    ctx.globalCompositeOperation = 'screen';
     [...layer.mesh.points].reverse().forEach(p => {
       const rr = pointRadii(p, project.canvas), cx = (p.x / 100) * w, cy = (p.y / 100) * h, rx = (rr.rx / 100) * w, ry = (rr.ry / 100) * h;
       const mid = 25 + (p.core ?? layer.mesh.core) * 0.5;
@@ -186,7 +187,7 @@ async function renderFilteredSvg(project: GradientProject, scale: number): Promi
 
 export async function exportPng(project: GradientProject, scale = 1): Promise<{ blob: Blob; notes: string[] }> {
   const needsSvgFilters = project.layers.some(layer => layer.visible && (
-    layer.texture.enabled || activeEffects(layer.effects).some(effect => EFFECTS[effect.type].rasterUnsupported)
+    layer.text !== undefined || layer.texture.enabled || activeEffects(layer.effects).some(effect => EFFECTS[effect.type].rasterUnsupported)
     || (layer.type === 'mesh' && layer.mesh.points.some(point => activeEffects(point.effects ?? []).some(effect => EFFECTS[effect.type].rasterUnsupported)))
   ));
   let rendered: RenderResult;
@@ -194,6 +195,10 @@ export async function exportPng(project: GradientProject, scale = 1): Promise<{ 
     try {
       rendered = { canvas: await renderFilteredSvg(project, scale), notes: [] };
     } catch (error) {
+      if (project.layers.some(layer => layer.visible && layer.text)) {
+        const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';
+        throw new Error(`Text layer PNG rendering failed: ${reason}`);
+      }
       rendered = renderProject(project, scale);
       const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';
       rendered.notes.push(`Some effects or textures could not be rasterized (${reason}); see SVG output for the full effect`);

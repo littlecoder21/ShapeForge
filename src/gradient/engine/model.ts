@@ -55,6 +55,29 @@ export interface TextureData extends TextureParams {
   blend: BlendMode;
 }
 
+export interface TextLayerData {
+  content: string;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  letterSpacing: number;
+  lineHeight: number;
+  align: 'left' | 'center' | 'right';
+  verticalAlign: 'top' | 'middle' | 'bottom';
+  mergeStyle: TextMergeStyle;
+  depth: number;
+}
+export type TextMergeStyle = 'none' | 'color' | 'depth' | 'both';
+export const TEXT_FONT_FAMILIES = [
+  'Arial, sans-serif', 'Courier New, monospace', 'Georgia, serif', 'Impact, sans-serif',
+  'monospace', 'Permanent Marker, cursive', 'system-ui, sans-serif', 'Times New Roman, serif',
+  'Trebuchet MS, sans-serif', 'Verdana, sans-serif',
+] as const;
+export const DEFAULT_TEXT: TextLayerData = {
+  content: 'YOUR TEXT', fontFamily: 'Arial, sans-serif', fontSize: 160, fontWeight: 800,
+  letterSpacing: 0, lineHeight: 1.1, align: 'center', verticalAlign: 'middle', mergeStyle: 'none', depth: 4,
+};
+
 export type AnimProp = 'x' | 'y' | 'scale' | 'rotate' | 'opacity' | 'angle' | 'hue' | 'stopPos' | 'stopColor' | 'meshX' | 'meshY';
 /** `stopId` doubles as the mesh-point id for meshX / meshY tracks. */
 export type AnimDirection = 'normal' | 'reverse' | 'alternate' | 'alternate-reverse';
@@ -139,6 +162,8 @@ export interface GradientLayer {
   shader?: Partial<ShaderLayerConfig>;
   /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
   solidColor?: string;
+  /** Optional editable typography content; the layer's paint, effects, and compositing remain fully active. */
+  text?: TextLayerData;
 }
 
 /** How the generated code names and sizes things — all user-editable in the Output panel. */
@@ -213,6 +238,9 @@ export function newSolidLayer(color = '#ffffff'): GradientLayer {
     repeating: false,
     stops: [stop(color, 0), stop(color, 100)],
   });
+}
+export function newTextLayer(): GradientLayer {
+  return newLayer('linear', { name: 'Text', text: { ...DEFAULT_TEXT } });
 }
 export const KIND_LABEL: Record<GradientKind, string> = { linear: 'Linear', radial: 'Radial', conic: 'Conic', curve: 'Curve', mesh: 'Mesh', noise: 'Grain' };
 export const defaultName = (l: Pick<GradientLayer, 'type' | 'repeating'>) => `${l.repeating ? 'Repeating ' : ''}${KIND_LABEL[l.type]}`;
@@ -335,6 +363,27 @@ export function normalizeProject(raw: unknown): GradientProject {
     merged.texture = normalizeTexture(l.texture);
     if (!(BLEND_MODES as readonly string[]).includes(merged.texture.blend)) merged.texture.blend = DEFAULT_TEXTURE.blend;
     if (merged.solidColor !== undefined && !/^#[0-9a-f]{6}$/i.test(merged.solidColor)) merged.solidColor = '#ffffff';
+    if (l.text && typeof l.text === 'object') {
+      const text = l.text as Partial<TextLayerData>;
+      const bounded = (value: unknown, fallback: number, min: number, max: number) => {
+        const number = Number(value);
+        return Number.isFinite(number) ? clamp(number, min, max) : fallback;
+      };
+      merged.text = {
+        content: typeof text.content === 'string' ? text.content.slice(0, 10000) : DEFAULT_TEXT.content,
+        fontFamily: (TEXT_FONT_FAMILIES as readonly string[]).includes(text.fontFamily ?? '') ? text.fontFamily! : DEFAULT_TEXT.fontFamily,
+        fontSize: bounded(text.fontSize, DEFAULT_TEXT.fontSize, 8, 1200),
+        fontWeight: Math.round(bounded(text.fontWeight, DEFAULT_TEXT.fontWeight, 100, 900) / 100) * 100,
+        letterSpacing: bounded(text.letterSpacing, DEFAULT_TEXT.letterSpacing, -20, 100),
+        lineHeight: bounded(text.lineHeight, DEFAULT_TEXT.lineHeight, 0.5, 3),
+        align: (['left', 'center', 'right'] as const).includes(text.align as TextLayerData['align']) ? text.align! : DEFAULT_TEXT.align,
+        verticalAlign: (['top', 'middle', 'bottom'] as const).includes(text.verticalAlign as TextLayerData['verticalAlign']) ? text.verticalAlign! : DEFAULT_TEXT.verticalAlign,
+        mergeStyle: (['none', 'color', 'depth', 'both'] as const).includes(text.mergeStyle as TextMergeStyle) ? text.mergeStyle! : DEFAULT_TEXT.mergeStyle,
+        depth: bounded(text.depth, DEFAULT_TEXT.depth, 0, 24),
+      };
+    } else {
+      delete merged.text;
+    }
     merged.stops = merged.stops.map(s => {
       const curve = s.curve;
       const validCurve = curve && [curve.x1, curve.y1, curve.x2, curve.y2].every(Number.isFinite)

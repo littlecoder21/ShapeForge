@@ -3,6 +3,8 @@ import { InteractiveRenderer } from '../interactive/core/InteractiveRenderer';
 import { gradientLayerToShader, interactionColorsForLayer, supportsDirectShaderGeometry } from '../interactive/adapter';
 import { normalizeInteractiveSettings, type InteractiveRendererStatus } from '../interactive/types';
 import type { GradientLayer, GradientProject } from '../engine/model';
+import { textMaskDataUri } from '../engine/text';
+import { bleedOf } from '../engine/geom';
 
 export default function InteractiveCanvas({ project, layer, interactive = false }: { project: GradientProject; layer: GradientLayer; interactive?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,6 +38,7 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
   }), [settings, layer, adapted.palette]);
   const backendRef = useRef(rendererSettings.renderBackend);
   backendRef.current = rendererSettings.renderBackend;
+  const textMaskSize = `${100 / (1 + 2 * bleedOf(layer, project.canvas))}%`;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -72,7 +75,17 @@ export default function InteractiveCanvas({ project, layer, interactive = false 
       ref={canvasRef}
       className="gs-shader-canvas"
       aria-label="Interactive shader gradient preview"
-      style={{ pointerEvents: interactive ? 'auto' : 'none' }}
+      style={{
+        pointerEvents: interactive ? 'auto' : 'none',
+        ...(layer.text ? {
+          maskImage: textMaskDataUri(layer.text, project.canvas.w, project.canvas.h),
+          WebkitMaskImage: textMaskDataUri(layer.text, project.canvas.w, project.canvas.h),
+          maskSize: `${textMaskSize} ${textMaskSize}`,
+          WebkitMaskSize: `${textMaskSize} ${textMaskSize}`,
+          maskRepeat: 'no-repeat',
+          WebkitMaskRepeat: 'no-repeat',
+        } : {}),
+      }}
       data-testid={`gs-shader-canvas-${layer.id}`}
     />
     {status.value !== 'ready' && (

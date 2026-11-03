@@ -1,12 +1,13 @@
 import { newEffect } from './effects';
 import { generateMesh } from './mesh';
-import { newLayer, stop, type GradientLayer, type GradientKind } from './model';
+import { newLayer, newTextLayer, stop, type GradientLayer, type GradientKind } from './model';
 import { solidLayer } from './solidColors';
 
 /** One-tap layer starters shown in the Layers panel. Every result is an ordinary editable layer. */
 export interface LayerTemplate { id: string; label: string; make: () => GradientLayer }
 export const LAYER_TEMPLATES: LayerTemplate[] = [
   { id: 'solid', label: 'Solid', make: () => solidLayer() },
+  { id: 'text', label: 'Text', make: () => newTextLayer() },
   { id: 'linear', label: 'Linear', make: () => newLayer('linear') },
   { id: 'radial', label: 'Radial', make: () => newLayer('radial', { stops: [stop('#fbbf24', 0), stop('#f43f5e', 100)] }) },
   { id: 'conic', label: 'Conic', make: () => newLayer('conic', { stops: [stop('#22d3ee', 0), stop('#a78bfa', 50), stop('#22d3ee', 100)] }) },

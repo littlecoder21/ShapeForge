@@ -16,6 +16,7 @@ import { buildOutputs } from '../engine/output';
 import { exportPng } from '../engine/raster';
 import { outputOf } from '../engine/model';
 import { parseProjectFile } from '../engine/projectFile';
+import { createPresetArchive, extractProjectJsonFromZip } from '../engine/presetArchive';
 import { interactiveExports } from '../interactive/export';
 import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
@@ -68,13 +69,25 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       announce(error instanceof Error ? `PNG export failed: ${error.message}` : 'PNG export failed');
     }
   };
-  const doImport = (text = importText) => {
+  const downloadPreset = async () => {
+    try {
+      const result = await exportPng(project, 1);
+      const archive = await createPresetArchive(slug, project, result.blob);
+      save(`${slug}.zip`, archive);
+      announce(result.notes.length ? `Preset downloaded · ${result.notes.join(' · ')}` : `Preset downloaded · ${slug}.zip`);
+    } catch (error) {
+      announce(error instanceof Error ? `Preset download failed: ${error.message}` : 'Preset download failed');
+    }
+  };
+  const doImport = (text = importText, source: 'json' | 'zip' = 'json') => {
     try {
       const imported = parseProjectFile(text);
       store.replace(imported.project);
       setRecoveryBackup(imported.warnings.length ? text : '');
       setRecoveryWarnings(imported.warnings);
-      announce(imported.warnings.length ? `Project imported with ${imported.warnings.length} compatibility adjustment${imported.warnings.length === 1 ? '' : 's'}` : 'Project imported');
+      announce(imported.warnings.length
+        ? `${source === 'zip' ? 'Preset ZIP' : 'Project'} imported with ${imported.warnings.length} compatibility adjustment${imported.warnings.length === 1 ? '' : 's'}`
+        : source === 'zip' ? 'Preset ZIP imported' : 'Project imported');
       setImportText('');
     } catch (e) {
       announce(e instanceof Error ? e.message : 'Could not read that JSON');
@@ -82,7 +95,13 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   };
   const readProjectFile = async (file?: File) => {
     if (!file) return;
-    try { doImport(await file.text()); }
+    try {
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        doImport(await extractProjectJsonFromZip(file), 'zip');
+      } else {
+        doImport(await file.text());
+      }
+    }
     catch (error) { announce(error instanceof Error ? `Could not read file: ${error.message}` : 'Could not read project file'); }
     if (fileInput.current) fileInput.current.value = '';
   };
@@ -198,10 +217,13 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
       {interactiveMode === 'react' && <CodeBlock title="Self-contained React + TypeScript component" text={interactive.react} lang="tsx" testId="code-interactive-react" copyLabel="Copy React component" actions={downloadButton('tsx', interactive.react, 'Download TSX')} />}
     </>}
     {fmt === 'json' && <>
-      <CodeBlock title="Project JSON" text={out.json} lang="json" testId="code-json" copyLabel="Copy JSON" actions={downloadButton('json', out.json, '.json')} />
-      <p className="hint">This project file includes every editable layer, gradient, effect, animation, canvas setting, and shader option. Older project JSON files can still be imported.</p>
-      <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={event => { void readProjectFile(event.currentTarget.files?.[0]); }} data-testid="project-json-file" />
-      <button type="button" className="btn" onClick={() => fileInput.current?.click()}><Upload />Choose project JSON file</button>
+      <CodeBlock title="Project JSON" text={out.json} lang="json" testId="code-json" copyLabel="Copy JSON" actions={<>
+        {downloadButton('json', out.json, '.json')}
+        <button type="button" className="btn small" onClick={() => { void downloadPreset(); }} data-testid="download-json-preset"><Download />Preset ZIP</button>
+      </>} />
+      <p className="hint">The project JSON includes editable text content and typography as well as layers, gradients, effects, animation, canvas settings, and shader options. Download a preset ZIP to save the JSON and a PNG preview together in a same-named folder.</p>
+      <input ref={fileInput} type="file" accept=".json,.zip,application/json,application/zip" hidden onChange={event => { void readProjectFile(event.currentTarget.files?.[0]); }} data-testid="project-json-file" />
+      <button type="button" className="btn" onClick={() => fileInput.current?.click()}><Upload />Choose project JSON or preset ZIP</button>
       <label className="field-label" htmlFor="gs-import">Import project JSON</label>
       <textarea id="gs-import" className="boundary-input" rows={4} value={importText} onChange={e => setImportText(e.target.value)} placeholder="Paste a project JSON file here" spellCheck={false} />
       <button type="button" className="btn wide" onClick={() => doImport()} disabled={!importText.trim()}>Load project</button>

@@ -8,6 +8,7 @@ import { curveBands } from './curve';
 import { layerMaskPath } from './layerMask';
 import { textureOverlay as textureLayout } from './textures';
 import { IDENTITY, type GradientLayer, type GradientProject } from './model';
+import { textSvgMarkup } from './text';
 
 /* ═══════════ SVG generation ═══════════
  * linear / radial → native <linearGradient> / <radialGradient> (spreadMethod="repeat" for repeating).
@@ -88,7 +89,7 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
       const pointFilterId = `${id}-p${i}-f`;
       if (pointFilters.length) defs.push(`<filter id="${pointFilterId}" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">${pointFilters.map(effect => EFFECTS[effect.type].svg(effect.params)).join('')}</filter>`);
       const rect = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-p${i})"/>`;
-      sq.push(`<g${transforms ? ` transform="${transforms}"` : ''}${pointFilters.length ? ` filter="url(#${pointFilterId})"` : ''}>${rect}</g>`);
+      sq.push(`<g${transforms ? ` transform="${transforms}"` : ''}${pointFilters.length ? ` filter="url(#${pointFilterId})"` : ''}${!layer.text ? ' style="mix-blend-mode:screen"' : ''}>${rect}</g>`);
     });
     inner = `${layer.mesh.base ? `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${layer.mesh.base}"/>` : ''}${sq.reverse().join('')}`;
   } else if (layer.type === 'noise') {
@@ -139,9 +140,20 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
     defs.push(`<clipPath id="${id}-mask" clipPathUnits="userSpaceOnUse"><path d="${layerMaskPath(layer.mask, project.canvas)}"/></clipPath>`);
     clipAttr = ` clip-path="url(#${id}-mask)"`;
   }
-  const style = layer.blend !== 'normal' ? ` style="mix-blend-mode:${layer.blend}"` : '';
+  const styles = [
+    layer.blend !== 'normal' ? `mix-blend-mode:${layer.blend}` : '',
+    layer.type === 'mesh' && !layer.text ? 'isolation:isolate' : '',
+  ].filter(Boolean);
+  const style = styles.length ? ` style="${styles.join(';')}"` : '';
   const op = layer.opacity < 1 ? ` opacity="${r2(layer.opacity, 3)}"` : '';
   const content = inner || `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${fill}"/>`;
+  if (layer.text) {
+    defs.push(`<clipPath id="${id}-text" clipPathUnits="userSpaceOnUse">${textSvgMarkup(layer.text, w, h)}</clipPath>`);
+    if (layer.text.depth > 0 && (layer.text.mergeStyle === 'depth' || layer.text.mergeStyle === 'both')) {
+      const depth = layer.text.depth;
+      defs.push(`<filter id="${id}-text-depth" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="${r2(depth * 0.35)}" result="shadow-blur"/><feOffset in="shadow-blur" dx="0" dy="${r2(depth)}" result="shadow-offset"/><feFlood flood-color="#000000" flood-opacity="0.6" result="shadow-color"/><feComposite in="shadow-color" in2="shadow-offset" operator="in" result="shadow"/><feGaussianBlur in="SourceAlpha" stdDeviation="${r2(depth * 0.2)}" result="highlight-blur"/><feOffset in="highlight-blur" dx="0" dy="${r2(-depth * 0.4)}" result="highlight-offset"/><feFlood flood-color="#ffffff" flood-opacity="0.35" result="highlight-color"/><feComposite in="highlight-color" in2="highlight-offset" operator="in" result="highlight"/><feMerge><feMergeNode in="shadow"/><feMergeNode in="highlight"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`);
+    }
+  }
   let textureOverlay = '';
   if (layer.texture.enabled) {
     // same helper the live preview and the CSS export use: the tile is axis-aligned at full strength, the overlay applies
@@ -152,7 +164,15 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
     defs.push(`<pattern id="${id}-texture" patternUnits="userSpaceOnUse" x="${ov.offsetX}" y="${ov.offsetY}" width="${r2(size)}" height="${r2(size)}"${rotate}><image href="${ov.href}" xlink:href="${ov.href}" width="${r2(size)}" height="${r2(size)}"/></pattern>`);
     textureOverlay = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="url(#${id}-texture)" opacity="${r2(ov.opacity, 3)}" style="mix-blend-mode:${ov.blend}"/>`;
   }
-  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}${clipAttr}>${content}${textureOverlay}</g>` };
+  const textBlend = layer.text?.mergeStyle === 'color' ? 'multiply'
+    : layer.text?.mergeStyle === 'depth' ? 'soft-light'
+      : layer.text?.mergeStyle === 'both' ? 'multiply' : '';
+  const textDepth = layer.text && layer.text.depth > 0 && (layer.text.mergeStyle === 'depth' || layer.text.mergeStyle === 'both')
+    ? ` filter="url(#${id}-text-depth)"` : '';
+  const layerContent = layer.text
+    ? `<g clip-path="url(#${id}-text)"${textBlend ? ` style="mix-blend-mode:${textBlend}"` : ''}${textDepth}>${content}${textureOverlay}</g>`
+    : `${content}${textureOverlay}`;
+  return { defs: defs.join(''), body: `<g${tf}${op}${style}${filterAttr}${clipAttr}>${layerContent}</g>` };
 }
 
 export function projectSvgParts(project: GradientProject, prefix = 'g'): SvgParts {

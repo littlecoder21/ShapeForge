@@ -14,6 +14,7 @@ import PresetsPanel from './components/PresetsPanel';
 import ProjectMenu from './components/ProjectMenu';
 import TransformPanel from './components/TransformPanel';
 import TexturePanel from './components/TexturePanel';
+import TextPanel from './components/TextPanel';
 import { StudioCtx, Empty } from './components/ui';
 import { buildOutputs } from './engine/output';
 import { normalizeProject, type GradientProject } from './engine/model';
@@ -21,9 +22,9 @@ import { loadProject, saveProject } from './engine/persist';
 import { createStudioStore, useStore } from './engine/store';
 import './studio.css';
 
-type Tab = 'layers' | 'gradient' | 'transform' | 'fx' | 'texture' | 'animate' | 'shader' | 'scenes' | 'presets';
+type Tab = 'layers' | 'gradient' | 'text' | 'transform' | 'fx' | 'texture' | 'animate' | 'shader' | 'scenes' | 'presets';
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'layers', label: 'Layers' }, { id: 'gradient', label: 'Gradient' }, { id: 'transform', label: 'Transform' }, { id: 'fx', label: 'FX' }, { id: 'texture', label: 'Texture' },
+  { id: 'layers', label: 'Layers' }, { id: 'gradient', label: 'Gradient' }, { id: 'text', label: 'Text' }, { id: 'transform', label: 'Transform' }, { id: 'fx', label: 'FX' }, { id: 'texture', label: 'Texture' },
   { id: 'animate', label: 'Animate' }, { id: 'shader', label: 'Shader' }, { id: 'scenes', label: 'Scenes' }, { id: 'presets', label: 'Presets' },
 ];
 
@@ -85,6 +86,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
     if (!layerId) return <Empty>Select a layer in the Layers tab.</Empty>;
     if (t === 'layers') return <LayersPanel />;
     if (t === 'gradient') return <GradientPanel layerId={layerId} />;
+    if (t === 'text') return <TextPanel layerId={layerId} />;
     if (t === 'transform') return <TransformPanel layerId={layerId} />;
     if (t === 'fx') return <EffectsPanel layerId={layerId} />;
     if (t === 'texture') return <TexturePanel layerId={layerId} />;

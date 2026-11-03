@@ -1,12 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newProject, normalizeProject } from './model';
+import { newProject, newTextLayer, normalizeProject } from './model';
 import { parseProjectFile, serializeProjectFile } from './projectFile';
 
 test('versioned project files round-trip the editable project', () => {
-  const project = newProject({ name: 'Portable design' });
+  const text = newTextLayer();
+  text.text!.content = 'Text preserved in JSON';
+  text.text!.fontFamily = 'Georgia, serif';
+  text.text!.fontSize = 216;
+  const project = newProject({ name: 'Portable design', layers: [text] });
   const imported = parseProjectFile(serializeProjectFile(project));
   assert.deepEqual(imported.project, normalizeProject(project));
+  assert.equal(imported.project.layers[0].text?.content, 'Text preserved in JSON');
+  assert.equal(imported.project.layers[0].text?.fontSize, 216);
   assert.deepEqual(imported.warnings, []);
 });
 
