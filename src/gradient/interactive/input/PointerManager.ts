@@ -1,106 +1,96 @@
-export interface PointerSnapshot {
-  x: number;
-  y: number;
-  velocityX: number;
-  velocityY: number;
-  active: number;
-  down: number;
-}
+import { createPointerEngine, type PointerClick, type PointerEngine, type PointerFrame } from '../rigRuntime';
 
-export interface RippleSnapshot {
-  x: number;
-  y: number;
-  startedAt: number;
-  strength: number;
-}
+export { pointerSmoothingFactor } from '../rigRuntime';
+export type { PointerFrame } from '../rigRuntime';
 
-interface PointerOptions {
+export interface PointerOptions {
   touchEnabled: boolean;
   ripplesEnabled: boolean;
   maximumRipples: number;
   interactionDelay: number;
+  physics?: 'smooth' | 'spring';
+  stiffness?: number;
+  damping?: number;
+  trailLife?: number;
+  pressAttack?: number;
+  pressRelease?: number;
+  holdTime?: number;
   onChange: () => void;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
-export function pointerSmoothingFactor(deltaSeconds: number, interactionDelayMs: number) {
-  const delaySeconds = Math.max(0, interactionDelayMs) / 1000;
-  return delaySeconds === 0 ? 1 : 1 - Math.exp(-Math.max(0, deltaSeconds) / delaySeconds);
+function engineOptions(options: Omit<PointerOptions, 'onChange'>) {
+  return {
+    touchEnabled: options.touchEnabled,
+    ripplesEnabled: options.ripplesEnabled,
+    maximumRipples: options.maximumRipples,
+    delay: options.interactionDelay,
+    ...(options.physics ? { physics: options.physics } : {}),
+    ...(options.stiffness !== undefined ? { stiffness: options.stiffness } : {}),
+    ...(options.damping !== undefined ? { damping: options.damping } : {}),
+    ...(options.trailLife !== undefined ? { trailLife: options.trailLife } : {}),
+    ...(options.pressAttack !== undefined ? { pressAttack: options.pressAttack } : {}),
+    ...(options.pressRelease !== undefined ? { pressRelease: options.pressRelease } : {}),
+    ...(options.holdTime !== undefined ? { holdTime: options.holdTime } : {}),
+  };
 }
 
+/** Listens to pointer events on one canvas and feeds the shared engine (rigRuntime.js). */
 export class PointerManager {
   private readonly canvas: HTMLCanvasElement;
   private readonly onChange: () => void;
-  private options: PointerOptions;
-  private target = { x: 0.5, y: 0.5, active: 0, down: 0 };
-  private current: PointerSnapshot = { x: 0.5, y: 0.5, velocityX: 0, velocityY: 0, active: 0, down: 0 };
-  private ripples: RippleSnapshot[] = [];
-  private lastMoveAt = 0;
-  private readonly timeOrigin = performance.now() / 1000;
+  private readonly engine: PointerEngine;
   private readonly listeners: Array<[string, EventListener]> = [];
+  private rect: DOMRect | null = null;
 
   constructor(canvas: HTMLCanvasElement, options: PointerOptions) {
     this.canvas = canvas;
-    this.options = options;
     this.onChange = options.onChange;
+    this.engine = createPointerEngine(engineOptions(options));
     canvas.style.touchAction = 'none';
     this.listen('pointermove', this.handleMove);
     this.listen('pointerdown', this.handleDown);
     this.listen('pointerup', this.handleUp);
-    this.listen('pointercancel', this.handleUp);
+    this.listen('pointercancel', this.handleCancel);
     this.listen('pointerleave', this.handleLeave);
+    window.addEventListener('scroll', this.invalidate, { passive: true, capture: true });
   }
 
   updateOptions(options: Omit<PointerOptions, 'onChange'>) {
-    this.options = { ...options, onChange: this.onChange };
-    const maximum = Math.max(1, Math.min(8, Math.floor(options.maximumRipples)));
-    if (this.ripples.length > maximum) this.ripples = this.ripples.slice(-maximum);
+    this.engine.setOptions(engineOptions(options));
   }
 
-  advance(deltaSeconds: number, nowSeconds: number): PointerSnapshot {
-    const smoothing = pointerSmoothingFactor(deltaSeconds, this.options.interactionDelay);
-    const priorX = this.current.x, priorY = this.current.y;
-    this.current.x += (this.target.x - this.current.x) * smoothing;
-    this.current.y += (this.target.y - this.current.y) * smoothing;
-    this.current.active += (this.target.active - this.current.active) * smoothing;
-    this.current.down += (this.target.down - this.current.down) * smoothing;
-    const velocityBlend = 1 - Math.exp(-Math.max(0, deltaSeconds) * 8);
-    const delta = Math.max(deltaSeconds, 1 / 240);
-    const vx = clamp((this.current.x - priorX) / delta, -2, 2);
-    const vy = clamp((this.current.y - priorY) / delta, -2, 2);
-    this.current.velocityX += (vx - this.current.velocityX) * velocityBlend;
-    this.current.velocityY += (vy - this.current.velocityY) * velocityBlend;
-    if (this.target.active === 0 && this.current.active < 0.003) this.current.active = 0;
-    this.ripples = this.ripples.filter(ripple => nowSeconds - ripple.startedAt < 5);
-    return this.current;
+  /** Called by the renderer when the canvas is resized so pointer events do not force a layout read. */
+  invalidateRect() {
+    this.rect = null;
   }
 
-  getRipples() {
-    return this.ripples;
+  getEngine() {
+    return this.engine;
+  }
+
+  advance(deltaSeconds: number, nowSeconds: number): PointerFrame {
+    return this.engine.advance(deltaSeconds, nowSeconds);
+  }
+
+  getRipples(): PointerClick[] {
+    return this.engine.getClicks();
   }
 
   reset() {
-    this.target = { x: 0.5, y: 0.5, active: 0, down: 0 };
-    this.current = { x: 0.5, y: 0.5, velocityX: 0, velocityY: 0, active: 0, down: 0 };
-    this.ripples = [];
-    this.lastMoveAt = 0;
+    this.engine.reset();
   }
 
   hasActivity() {
-    return Math.abs(this.target.x - this.current.x) > 0.001
-      || Math.abs(this.target.y - this.current.y) > 0.001
-      || Math.abs(this.target.active - this.current.active) > 0.003
-      || Math.abs(this.target.down - this.current.down) > 0.003
-      || Math.abs(this.current.velocityX) > 0.003
-      || Math.abs(this.current.velocityY) > 0.003
-      || this.ripples.length > 0;
+    return this.engine.hasActivity();
   }
 
   destroy() {
+    window.removeEventListener('scroll', this.invalidate, { capture: true });
     this.listeners.forEach(([type, listener]) => this.canvas.removeEventListener(type, listener));
     this.listeners.length = 0;
-    this.ripples = [];
+    this.engine.reset();
   }
 
   private listen(type: string, handler: (event: PointerEvent) => void) {
@@ -110,57 +100,46 @@ export class PointerManager {
   }
 
   private position(event: PointerEvent) {
-    const rect = this.canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
+    // getBoundingClientRect forces layout; cache it between resizes and refresh when scrolled / moved.
+    const rect = this.rect ?? (this.rect = this.canvas.getBoundingClientRect());
+    if (!rect.width || !rect.height) { this.rect = null; return null; }
     return {
       x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
       y: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1),
     };
   }
 
-  private accepts(event: PointerEvent) {
-    return event.pointerType !== 'touch' || this.options.touchEnabled;
-  }
+  private readonly invalidate = () => { this.rect = null; };
 
   private readonly handleMove = (event: PointerEvent) => {
-    if (!this.accepts(event)) return;
     const position = this.position(event);
     if (!position) return;
-    this.target.x = position.x;
-    this.target.y = position.y;
-    this.target.active = 1;
-    const now = performance.now();
-    this.lastMoveAt = now;
+    this.engine.move(event.pointerId, position.x, position.y, event.pointerType);
     this.onChange();
   };
 
   private readonly handleDown = (event: PointerEvent) => {
-    if (!this.accepts(event)) return;
+    this.rect = null;
     const position = this.position(event);
     if (!position) return;
-    this.target.x = position.x;
-    this.target.y = position.y;
-    this.target.active = 1;
-    this.target.down = 1;
-    if (this.options.ripplesEnabled) {
-      const maximum = Math.max(1, Math.min(8, Math.floor(this.options.maximumRipples)));
-      this.ripples.push({ ...position, startedAt: performance.now() / 1000 - this.timeOrigin, strength: 1 });
-      this.ripples = this.ripples.slice(-maximum);
-    }
+    this.engine.down(event.pointerId, position.x, position.y, event.pointerType);
     this.onChange();
   };
 
   private readonly handleUp = (event: PointerEvent) => {
-    if (!this.accepts(event)) return;
-    this.target.down = 0;
+    this.engine.up(event.pointerId);
+    this.onChange();
+  };
+
+  private readonly handleCancel = (event: PointerEvent) => {
+    this.engine.up(event.pointerId);
+    this.engine.leave(event.pointerId, event.pointerType);
     this.onChange();
   };
 
   private readonly handleLeave = (event: PointerEvent) => {
-    if (!this.accepts(event)) return;
-    this.target.active = 0;
-    this.target.down = 0;
-    this.lastMoveAt = 0;
+    this.rect = null;
+    this.engine.leave(event.pointerId, event.pointerType);
     this.onChange();
   };
 }

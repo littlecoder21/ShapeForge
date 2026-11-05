@@ -1,23 +1,44 @@
 import { layeredOutput } from '../engine/css';
 import type { ColorSpace, GradientLayer, GradientProject } from '../engine/model';
 import { gradientLayerToShader, gradientProjectToShaderPalette, interactionColorsForLayer, supportsDirectShaderGeometry, type ShaderLayerAdapter } from './adapter';
-import { normalizeInteractiveSettings, type InteractiveSettings, type ShaderLayerColorBlend } from './types';
+import { normalizeInteractiveSettings, type InteractiveLayerState, type InteractiveSettings, type ShaderLayerColorBlend } from './types';
 import { POINTER_MODES } from './pointerModes';
 import { bakePaletteLut, encodePaletteLut } from './paletteLut';
 import { UNIFORM_NAMES } from './uniforms';
-import fragmentShaderSource from './shaders/gradient.frag.glsl?raw';
+import { assembleFragmentShader } from './rig/glsl';
+import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from './styles';
+import fragmentShaderTemplate from './shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from './shaders/gradient.vert.glsl?raw';
+import rigRuntimeSource from './rigRuntime.js?raw';
 
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+const escapeAttributeValue = (value: unknown) => escapeJson(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+const QUALITY_OCTAVES = { low: 3, medium: 4, high: 5, ultra: 6 } as const;
 
-function shaderRuntime(rootExpression = 'document') {
+/** The shared pointer / drive / packing runtime, as an expression that evaluates to its namespace object. */
+function rigRuntimeExpression() {
+  const names = [...rigRuntimeSource.matchAll(/^export\s+(?:function|const)\s+(\w+)/gm)].map(match => match[1]);
+  const body = rigRuntimeSource.replace(/^export\s+/gm, '');
+  return `(function () {\n${body}\nreturn { ${names.join(', ')} };\n})()`;
+}
+
+/** The fragment shader for a project: the template plus exactly the interaction rules the project uses. */
+export function projectFragmentSource(settings: Pick<InteractiveSettings, 'rig' | 'quality'>) {
+  return assembleFragmentShader(fragmentShaderTemplate, settings.rig, {
+    octaves: QUALITY_OCTAVES[settings.quality],
+    warpDepth: settings.quality === 'low' ? 1 : 2,
+  });
+}
+
+export function shaderRuntime(fragmentSource: string, rootExpression = 'document') {
   return `
 (function (root) {
+  const RigRuntime = ${rigRuntimeExpression()};
   const vertexSource = ${escapeJson(vertexShaderSource)};
-  const fragmentSource = ${escapeJson(fragmentShaderSource)};
+  const fragmentSource = ${escapeJson(fragmentSource)};
   const maxStops = 8, maxRipples = 8, maxRenderPixels = 1200000, maxRenderScale = 1.25;
   const uniformNames = ${JSON.stringify(UNIFORM_NAMES)};
-  const pointerModeIds = ${JSON.stringify(Object.fromEntries(POINTER_MODES.map((mode, index) => [mode.id, index])))};
+  const styleIndex = ${JSON.stringify(SHADER_STYLE_INDEX)};
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
   const glOptions = { alpha: true, antialias: false, depth: false, premultipliedAlpha: false, powerPreference: 'default' };
   root.querySelectorAll('[data-shader-canvas]').forEach(canvas => {
@@ -28,14 +49,26 @@ function shaderRuntime(rootExpression = 'document') {
   const meshPoints = JSON.parse(canvas.dataset.shaderMeshPoints || '[]');
   const meshBase = JSON.parse(canvas.dataset.shaderMeshBase || '""');
   const layerMix = JSON.parse(canvas.dataset.shaderMixSettings || '{}');
+  const layerState = JSON.parse(canvas.dataset.shaderLayer || '{"styleParams":[0,0,0,0],"reaction":1}');
+  const rig = settings.rig || { gain: 1, rules: [], physics: {} };
+  const physics = rig.physics || {};
+  const reaction = typeof layerState.reaction === 'number' ? layerState.reaction : 1;
+  const reacts = settings.interactionEnabled && reaction !== 0;
   let gl = canvas.getContext('webgl2', glOptions), isWebGL2 = !!gl;
   if (!gl) gl = canvas.getContext('webgl', glOptions);
   if (!gl) { canvas.dataset.shaderStatus = 'fallback'; return; }
   let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
   let frameId = 0, lastFrame = 0, clock = 0, shaderTime = 0, visible = true, lost = false;
   let frameEma = 0, slowFrameCount = 0, adaptiveScale = 1;
-  let current = { x: 0.5, y: 0.5, active: 0, down: 0 }, target = { x: 0.5, y: 0.5, active: 0, down: 0 };
-  let velocity = { x: 0, y: 0 }, ripples = [];
+  const engine = RigRuntime.createPointerEngine({
+    touchEnabled: settings.touchEnabled, ripplesEnabled: settings.ripplesEnabled, maximumRipples: settings.maximumRipples, delay: settings.interactionDelay,
+    physics: physics.mode, stiffness: physics.stiffness, damping: physics.damping, trailLife: physics.trailLife,
+    pressAttack: physics.pressAttack, pressRelease: physics.pressRelease, holdTime: physics.holdTime,
+  });
+  const rigBuffers = RigRuntime.createRigBuffers();
+  const rigFrame = {};
+  const activeRules = (rig.rules || []).filter(rule => rule.enabled).slice(0, RigRuntime.RIG_MAX_RULES);
+  const rigAmbient = activeRules.some(rule => rule.source === 'orbit' || rule.source === 'fixed' || (rule.source === 'symmetry' && rule.sp2 !== 0) || (rule.drives || []).some(drive => String(drive.source).indexOf('lfo') === 0));
   const colors = new Float32Array(maxStops * 4), alphas = new Float32Array(maxStops);
   const meshPointData = new Float32Array(maxStops * 4), meshColorData = new Float32Array(maxStops * 4);
   const rippleData = new Float32Array(maxRipples * 4);
@@ -104,6 +137,10 @@ function shaderRuntime(rootExpression = 'document') {
     meshPointData.set([point.x / 100, 1 - point.y / 100, point.size / 100, point.alpha], index * 4);
     meshColorData.set([color[0], color[1], color[2], 1], index * 4);
   });
+  const hexToUnit = hex => { const n = parseInt(/^#[0-9a-f]{6}$/i.test(hex) ? hex.slice(1) : 'ffffff', 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; };
+  const interactionRgb = hexToUnit(settings.interactionColor);
+  const interactionColorData = new Float32Array(5 * 3);
+  settings.interactionColors.slice(0, 5).forEach((color, index) => interactionColorData.set(hexToUnit(color), index * 3));
   let cachedRippleCount = -1;
   const initialize = () => {
     const vertex = compile(gl.VERTEX_SHADER, convertShader(vertexSource, true));
@@ -143,7 +180,6 @@ function shaderRuntime(rootExpression = 'document') {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     locations = {};
     uniformNames.forEach(name => { locations[name] = gl.getUniformLocation(program, name); });
-    gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
     paletteTexture = null;
     if (paletteLut && paletteLut.length === 512 * 4) {
       paletteTexture = gl.createTexture();
@@ -192,58 +228,45 @@ function shaderRuntime(rootExpression = 'document') {
     }
   };
   const draw = (delta) => {
-    const delaySeconds = settings.interactionDelay / 1000;
-    const smoothing = delaySeconds === 0 ? 1 : 1 - Math.exp(-delta / delaySeconds);
-    const oldX = current.x, oldY = current.y;
-    current.x += (target.x - current.x) * smoothing;
-    current.y += (target.y - current.y) * smoothing;
-    current.active += (target.active - current.active) * smoothing;
-    current.down += (target.down - current.down) * smoothing;
-    velocity.x = clamp((current.x - oldX) / Math.max(delta, 1 / 240), -2, 2);
-    velocity.y = clamp((current.y - oldY) / Math.max(delta, 1 / 240), -2, 2);
-    for (let i = ripples.length - 1; i >= 0; i--) if (clock - ripples[i][2] >= 5) ripples.splice(i, 1);
+    const pointer = engine.advance(delta, clock);
     gl.useProgram(program);
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.uniform2f(locations.uResolution, canvas.width, canvas.height);
-    const idlePointer = settings.idleMotion && current.active < 0.003 && !reducedMotion.matches;
-    const pointerX = idlePointer ? 0.5 + Math.sin(clock * 0.17) * 0.28 : current.x;
-    const pointerY = idlePointer ? 0.5 + Math.sin(clock * 0.23 + 1.4) * 0.24 : current.y;
+    const idlePointer = settings.idleMotion && pointer.active < 0.003 && !reducedMotion.matches;
+    const idle = idlePointer ? RigRuntime.idleMotionPoint(settings.idlePath || 'drift', clock, settings.idleSpeed || 1, settings.idleSize || 0.28) : null;
+    const pointerX = idle ? idle.x : pointer.x;
+    const pointerY = idle ? idle.y : pointer.y;
+    const pointerActive = idle ? 0.42 : pointer.active;
     gl.uniform2f(locations.uPointer, pointerX, pointerY);
-    gl.uniform2f(locations.uVelocity, velocity.x, velocity.y);
-    gl.uniform1f(locations.uPointerActive, settings.interactionEnabled || idlePointer ? (idlePointer ? 0.42 : current.active) : 0);
-    gl.uniform1f(locations.uPointerDown, settings.interactionEnabled ? current.down : 0);
+    gl.uniform2f(locations.uVelocity, pointer.vx, pointer.vy);
+    gl.uniform1f(locations.uPointerActive, reacts || idlePointer ? pointerActive : 0);
+    gl.uniform1f(locations.uPointerDown, reacts ? pointer.down : 0);
     const animated = settings.animate && !reducedMotion.matches;
     if (animated) shaderTime += delta * settings.speed;
     else if (!settings.animate) shaderTime = 0;
     gl.uniform1f(locations.uTime, settings.animate ? shaderTime : 0);
     gl.uniform1f(locations.uClock, clock);
     gl.uniform1f(locations.uAspect, canvas.width / Math.max(1, canvas.height));
-    gl.uniform1f(locations.uStyle, { flow: 0, aurora: 1, liquid: 2, holographic: 3, plasma: 4, silk: 5, nebula: 6, ribbons: 7, metaballs: 8, contours: 9, smoke: 10, fire: 11 }[settings.style] || 0);
+    gl.uniform1f(locations.uStyle, styleIndex[settings.style] || 0);
+    const sp = layerState.styleParams || [0, 0, 0, 0];
+    gl.uniform4f(locations.uStyleP, sp[0] || 0, sp[1] || 0, sp[2] || 0, sp[3] || 0);
     gl.uniform1f(locations.uGradientKind, { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 }[geometry.kind] || 0);
     gl.uniform1f(locations.uGradientAngle, geometry.angle * Math.PI / 180);
     gl.uniform2f(locations.uGradientOrigin, geometry.originX / 100, 1 - geometry.originY / 100);
     gl.uniform2f(locations.uGradientRadius, geometry.radiusX / 100, geometry.radiusY / 100);
     gl.uniform1f(locations.uShaderMix, clamp(settings.shaderMix == null ? 1 : settings.shaderMix, 0, 1));
-    gl.uniform1f(locations.uPointerMode, pointerModeIds[settings.pointerMode] ?? 2);
-    const interactionHex = /^#[0-9a-f]{6}$/i.test(settings.interactionColor) ? settings.interactionColor.slice(1) : 'ffffff';
-    const interactionRgb = parseInt(interactionHex, 16);
-    gl.uniform3f(locations.uInteractionColor, ((interactionRgb >> 16) & 255) / 255, ((interactionRgb >> 8) & 255) / 255, (interactionRgb & 255) / 255);
-    const interactionColors = new Float32Array(5 * 3);
-    settings.interactionColors.slice(0, 5).forEach((color, index) => {
-      const number = parseInt(color.slice(1), 16);
-      interactionColors.set([((number >> 16) & 255) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255], index * 3);
-    });
-    gl.uniform3fv(locations['uInteractionColors[0]'], interactionColors);
+    gl.uniform3f(locations.uInteractionColor, interactionRgb[0], interactionRgb[1], interactionRgb[2]);
+    gl.uniform3fv(locations['uInteractionColors[0]'], interactionColorData);
     gl.uniform1f(locations.uInteractionColorCount, Math.min(5, settings.interactionColors.length));
     gl.uniform1f(locations.uInteractionColorMix, settings.interactionColorMix);
     gl.uniform1f(locations.uInteractionColorSpeed, settings.interactionColorSpeed);
     gl.uniform1f(locations.uInteractionFalloff, { soft: 0, linear: 1, sharp: 2, gaussian: 3 }[settings.interactionFalloff]);
     gl.uniform1f(locations.uInteractionDistortion, settings.interactionDistortion);
     gl.uniform1f(locations.uInteractionDisplacement, settings.interactionDisplacement);
-    gl.uniform1f(locations.uInteractionDisplacementMode, settings.interactionDisplacementMode === 'push' ? 0 : 1);
+    gl.uniform1f(locations.uInteractionDisplacementMode, (settings.interactionDisplacementMode === 'push') === (reaction >= 0) ? 0 : 1);
     gl.uniform1f(locations.uInteractionVelocityReaction, settings.interactionVelocityReaction);
     gl.uniform1f(locations.uInteractionGlitch, settings.interactionGlitch);
     gl.uniform1f(locations.uSpeed, settings.speed);
@@ -251,13 +274,21 @@ function shaderRuntime(rootExpression = 'document') {
     gl.uniform1f(locations.uDistortion, settings.distortion);
     gl.uniform1f(locations.uDistortionScale, settings.distortionScale);
     gl.uniform1f(locations.uTurbulence, settings.turbulence);
+    gl.uniform1f(locations.uTimeOffset, settings.timeOffset || 0);
+    gl.uniform1f(locations.uFlowAngle, (settings.flowAngle || 0) * Math.PI / 180);
+    gl.uniform1f(locations.uFlowDrift, settings.flowDrift || 0);
+    gl.uniform1f(locations.uBreath, settings.breath || 0);
+    gl.uniform1f(locations.uBreathRate, settings.breathRate == null ? 0.25 : settings.breathRate);
+    gl.uniform1f(locations.uRotation, settings.rotation || 0);
+    gl.uniform1f(locations.uZoom, settings.zoom == null ? 1 : settings.zoom);
+    gl.uniform1f(locations.uMeshDrift, settings.meshDrift || 0);
+    gl.uniform1f(locations.uMeshSpread, settings.meshSpread || 0);
+    gl.uniform1f(locations.uMeshBlend, settings.meshBlend == null ? 0.82 : settings.meshBlend);
     gl.uniform1f(locations.uInteractionRadius, settings.interactionRadius);
-    gl.uniform1f(locations.uInteractionStrength, settings.interactionStrength);
+    gl.uniform1f(locations.uInteractionStrength, settings.interactionStrength * Math.min(1, Math.abs(reaction)));
     gl.uniform1f(locations.uGlow, settings.glow);
     gl.uniform1f(locations.uRippleStrength, settings.rippleStrength);
     gl.uniform1f(locations.uRippleSpeed, settings.rippleSpeed);
-    gl.uniform1f(locations.uOctaves, ({ low: 3, medium: 4, high: 5, ultra: 6 })[settings.quality] || 5);
-    gl.uniform1f(locations.uWarpDepth, settings.quality === 'low' ? 1 : 2);
     gl.uniform1f(locations.uWrapMode, settings.paletteWrap === 'repeat' ? 2 : 0);
     gl.uniform1f(locations.uToneMap, settings.toneMapping || 0);
     gl.uniform1f(locations.uVignette, settings.vignette || 0);
@@ -278,34 +309,47 @@ function shaderRuntime(rootExpression = 'document') {
     gl.uniform1f(locations.uStopCount, maxStops);
     gl.uniform4fv(locations['uPalette[0]'], colors);
     gl.uniform1fv(locations['uPaletteAlpha[0]'], alphas);
-    const baseNumber = meshBase ? parseInt(meshBase.replace('#', ''), 16) : 0;
+    const baseRgb = meshBase ? hexToUnit(meshBase) : [0, 0, 0];
     gl.uniform1f(locations.uMeshCount, Math.min(meshPoints.length, maxStops));
-    gl.uniform4f(locations.uMeshBase, ((baseNumber >> 16) & 255) / 255, ((baseNumber >> 8) & 255) / 255, (baseNumber & 255) / 255, meshBase ? 1 : 0);
+    gl.uniform4f(locations.uMeshBase, baseRgb[0], baseRgb[1], baseRgb[2], meshBase ? 1 : 0);
     gl.uniform4fv(locations['uMeshPoints[0]'], meshPointData);
     gl.uniform4fv(locations['uMeshColors[0]'], meshColorData);
-    const start = settings.ripplesEnabled ? Math.max(0, ripples.length - maxRipples) : ripples.length;
-    const activeCount = ripples.length - start;
+    const clicks = settings.ripplesEnabled ? engine.getClicks() : [];
+    const start = Math.max(0, clicks.length - maxRipples);
+    const activeCount = clicks.length - start;
     let rippleChanged = activeCount !== cachedRippleCount;
     if (!rippleChanged) {
       for (let i = 0; i < activeCount; i++) {
-        const ripple = ripples[start + i], offset = i * 4;
-        if (rippleData[offset] !== ripple[0] || rippleData[offset + 1] !== ripple[1] || rippleData[offset + 2] !== ripple[2]) { rippleChanged = true; break; }
+        const click = clicks[start + i], offset = i * 4;
+        if (rippleData[offset] !== click.x || rippleData[offset + 1] !== click.y || rippleData[offset + 2] !== click.t || rippleData[offset + 3] !== click.s) { rippleChanged = true; break; }
       }
     }
     if (rippleChanged) {
       rippleData.fill(0);
       for (let i = 0; i < activeCount; i++) {
-        const ripple = ripples[start + i], offset = i * 4;
-        rippleData[offset] = ripple[0];
-        rippleData[offset + 1] = ripple[1];
-        rippleData[offset + 2] = ripple[2];
-        rippleData[offset + 3] = 1;
+        const click = clicks[start + i], offset = i * 4;
+        rippleData[offset] = click.x; rippleData[offset + 1] = click.y; rippleData[offset + 2] = click.t; rippleData[offset + 3] = click.s;
       }
       cachedRippleCount = activeCount;
     }
     gl.uniform1f(locations.uRippleCount, activeCount);
     gl.uniform4fv(locations['uRipples[0]'], rippleData);
+    if (activeRules.length) {
+      Object.assign(rigFrame, pointer);
+      rigFrame.clock = clock;
+      rigFrame.trailLife = physics.trailLife || 0.9;
+      if (idle) { rigFrame.x = idle.x; rigFrame.y = idle.y; rigFrame.active = pointerActive; }
+      RigRuntime.evaluateRig(rig, rigFrame, rigBuffers, { radiusScale: settings.interactionRadius, reaction: reaction, enabled: reacts || idlePointer });
+      RigRuntime.packTrail(engine, rigFrame, rigBuffers, reacts);
+      gl.uniform4fv(locations['uRuleB[0]'], rigBuffers.b);
+      gl.uniform4fv(locations['uRuleC[0]'], rigBuffers.c);
+      gl.uniform4fv(locations['uRuleD[0]'], rigBuffers.d);
+      gl.uniform4fv(locations['uRuleE[0]'], rigBuffers.e);
+      gl.uniform4fv(locations['uTrail[0]'], rigBuffers.trail);
+      gl.uniform3f(locations.uTouch2, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    return pointer;
   };
   const schedule = () => {
     if (!frameId && visible && !lost) frameId = requestAnimationFrame(render);
@@ -329,33 +373,20 @@ function shaderRuntime(rootExpression = 'document') {
         resize();
       }
     }
-    draw(delta);
-    const moving = Math.abs(target.x - current.x) > 0.001 || Math.abs(target.y - current.y) > 0.001 ||
-      Math.abs(target.active - current.active) > 0.003 || Math.abs(target.down - current.down) > 0.003;
-    if ((settings.animate && !reducedMotion.matches) || (settings.idleMotion && !reducedMotion.matches) || moving || ripples.length) schedule();
+    const pointer = draw(delta);
+    const calm = reducedMotion.matches;
+    if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003)) schedule();
   };
-  const updatePointer = event => {
-    if (event.pointerType === 'touch' && !settings.touchEnabled) return;
+  const position = event => {
     const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    target.x = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-    target.y = clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1);
-    target.active = 1;
-    schedule();
+    if (!rect.width || !rect.height) return null;
+    return { x: clamp((event.clientX - rect.left) / rect.width, 0, 1), y: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1) };
   };
-  const onMove = event => { if (settings.interactionEnabled) updatePointer(event); };
-  const onDown = event => {
-    if (!settings.interactionEnabled || (event.pointerType === 'touch' && !settings.touchEnabled)) return;
-    updatePointer(event);
-    target.down = 1;
-    if (settings.ripplesEnabled) {
-      ripples.push([target.x, target.y, clock, 1]);
-      ripples = ripples.slice(-clamp(settings.maximumRipples, 1, maxRipples));
-    }
-    schedule();
-  };
-  const onUp = () => { target.down = 0; schedule(); };
-  const onLeave = () => { target.active = 0; target.down = 0; schedule(); };
+  const onMove = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.move(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
+  const onDown = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.down(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
+  const onUp = event => { engine.up(event.pointerId); schedule(); };
+  const onCancel = event => { engine.up(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
+  const onLeave = event => { engine.leave(event.pointerId, event.pointerType); schedule(); };
   const onLost = event => { event.preventDefault(); lost = true; cancelAnimationFrame(frameId); frameId = 0; canvas.parentElement && canvas.parentElement.classList.remove('gs-webgl-ready'); canvas.dataset.shaderStatus = 'context-lost'; };
   const onRestored = () => {
     try { gl = canvas.getContext(isWebGL2 ? 'webgl2' : 'webgl', glOptions); lost = false; initialize(); resize(); schedule(); }
@@ -365,7 +396,7 @@ function shaderRuntime(rootExpression = 'document') {
   canvas.addEventListener('pointermove', onMove, { passive: true });
   canvas.addEventListener('pointerdown', onDown, { passive: true });
   canvas.addEventListener('pointerup', onUp, { passive: true });
-  canvas.addEventListener('pointercancel', onUp, { passive: true });
+  canvas.addEventListener('pointercancel', onCancel, { passive: true });
   canvas.addEventListener('pointerleave', onLeave, { passive: true });
   canvas.addEventListener('webglcontextlost', onLost);
   canvas.addEventListener('webglcontextrestored', onRestored);
@@ -388,7 +419,7 @@ function shaderRuntime(rootExpression = 'document') {
     canvas.removeEventListener('pointermove', onMove);
     canvas.removeEventListener('pointerdown', onDown);
     canvas.removeEventListener('pointerup', onUp);
-    canvas.removeEventListener('pointercancel', onUp);
+    canvas.removeEventListener('pointercancel', onCancel);
     canvas.removeEventListener('pointerleave', onLeave);
     canvas.removeEventListener('webglcontextlost', onLost);
     canvas.removeEventListener('webglcontextrestored', onRestored);
@@ -413,14 +444,20 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     layer: GradientLayer | null;
     settings: InteractiveSettings;
     adapter: ShaderLayerAdapter;
+    layerState: InteractiveLayerState;
     layerMix: { palette: ShaderLayerAdapter['palette']; space: ColorSpace; mode: ShaderLayerColorBlend; strength: number; speed: number };
   }[] = targets.map(layer => {
     const adapter = gradientLayerToShader(layer, project);
     const layerInteractionColors = interactionColorsForLayer(adapter.palette);
     const mixSource = project.layers.find(candidate => candidate.id === layer.shader?.mixLayerId && candidate.visible && candidate.id !== layer.id);
     const mixAdapter = mixSource ? gradientLayerToShader(mixSource, project) : null;
+    const style = layer.shader?.style ?? defaultSettings.style;
     return {
       layer,
+      layerState: {
+        styleParams: resolveStyleParams(style, layer.shader?.styleParams),
+        reaction: layer.shader?.interact === false ? 0 : layer.shader?.reaction ?? 1,
+      },
       layerMix: {
         palette: mixAdapter?.palette ?? [],
         space: mixAdapter?.geometry.space ?? 'srgb',
@@ -434,7 +471,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
         interactionColor: layerInteractionColors[0] ?? defaultSettings.interactionColor,
         interactionColors: layerInteractionColors,
       } : {}),
-      style: layer.shader?.style ?? defaultSettings.style,
+      style,
       ...(layer.shader?.controls ?? {}),
       renderBackend: defaultSettings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' : defaultSettings.renderBackend,
       },
@@ -446,6 +483,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       layer: null,
       settings: defaultSettings,
       adapter: { ...fallbackPalette, geometry: { kind: 'linear' as const, angle: 135, originX: 50, originY: 50, radiusX: 50, radiusY: 50 }, meshPoints: [], meshBase: '' },
+      layerState: { styleParams: resolveStyleParams(defaultSettings.style), reaction: 1 },
       layerMix: { palette: [], space: 'srgb', mode: 'mix', strength: 0, speed: 0 },
     });
   }
@@ -465,8 +503,8 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
       : '';
     const attributes = useMarkers
-      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__"`
-      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}"`;
+      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__"`
+      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}"`;
     const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;pointer-events:auto;touch-action:pan-y"></canvas>`;
     if (row) {
       html = html.replace(row, `${row.replace(/">$/, ' gs-shader-export-layer">')}${canvas}`);
@@ -480,16 +518,17 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     'html,body{margin:0;min-height:100%;}body{min-height:100vh;}canvas[data-shader-canvas]{display:block;} .gs-shader-export-layer::after{z-index:2;} .gs-shader-export-layer.gs-webgl-ready{background-image:none!important;background-color:transparent!important;} .gs-shader-export-layer.gs-webgl-ready>.mesh-point-0,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-1,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-2,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-3,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-4,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-5,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-6,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-7{display:none!important;}',
   ].join('\n');
   const markup = html;
+  const fragmentSource = projectFragmentSource(defaultSettings);
   const body = [
     '<!doctype html>',
     '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
     '<title>Interactive gradient background</title>',
     `<style>${stylesheet}</style>`,
     `</head><body>${html}`,
-    `<script>${shaderRuntime()}</script>`,
+    `<script>${shaderRuntime(fragmentSource)}</script>`,
     '</body></html>',
   ].join('\n');
-  return { body, markup, stylesheet, palette: paletteAdapter, entries };
+  return { body, markup, stylesheet, palette: paletteAdapter, entries, fragmentSource, defaultSettings };
 }
 
 export function interactiveHtmlExport(project: GradientProject) {
@@ -499,10 +538,10 @@ export function interactiveHtmlExport(project: GradientProject) {
 }
 
 export function interactiveJavaScriptExport(project: GradientProject) {
-  const { markup, stylesheet } = makeDocument(project);
+  const { markup, stylesheet, fragmentSource } = makeDocument(project);
   return `const SHAPEFORGE_GRADIENT_MARKUP = ${JSON.stringify(markup)};
 const SHAPEFORGE_GRADIENT_STYLES = ${JSON.stringify(stylesheet)};
-const SHAPEFORGE_SHADER_RUNTIME = ${JSON.stringify(shaderRuntime('document.currentScript.parentElement'))};
+const SHAPEFORGE_SHADER_RUNTIME = ${JSON.stringify(shaderRuntime(fragmentSource, 'document.currentScript.parentElement'))};
 
 function mountShapeForgeGradient(target = document.body) {
   const host = typeof target === 'string' ? document.querySelector(target) : target;
@@ -526,48 +565,56 @@ window.mountShapeForgeGradient = mountShapeForgeGradient;
 mountShapeForgeGradient();`;
 }
 
-export function interactiveGlslExport() {
+export function interactiveGlslExport(project?: GradientProject) {
+  const settings = normalizeInteractiveSettings(project?.shader);
   return [
     '// ShapeForge interactive gradient shader sources',
     '// Vertex shader: aPosition (clip-space vec2), aUv (normalized vec2).',
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
-    `// Pointer modes: ${POINTER_MODES.map(mode => mode.id).join(', ')}`,
-    '// uTime, uClock, uAspect, uStyle (flow / aurora / liquid / holographic / plasma / silk / nebula / ribbons / metaballs / contours / smoke / fire), uPointerMode,',
-    '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius,',
-    '// uInteractionColor, uStopCount, uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
-    '// Additional controls: uSpeed, uIntensity, uDistortion, uDistortionScale, uTurbulence,',
-    '// uInteractionColors[5], uInteractionColorCount, uInteractionColorMix, uInteractionColorSpeed, uInteractionFalloff, uInteractionDistortion, uInteractionDisplacement, uInteractionDisplacementMode, uInteractionVelocityReaction, uInteractionGlitch,',
-    '// uInteractionRadius, uInteractionStrength, uGlow, uRippleStrength, uRippleSpeed, uRippleCount.',
+    `// Styles (uStyle): ${SHADER_STYLE_IDS.map(id => `${SHADER_STYLE_INDEX[id]} ${id}`).join(', ')}. uStyleP carries the four style parameters.`,
+    '// The interaction (pointer / touch reaction) is generated from the interaction builder: only the rules in use are compiled.',
+    '// uRuleB / uRuleC / uRuleD / uRuleE hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
+    '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
+    '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
+    '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
     '// Finishing: uToneMap, uVignette, uSheen, uGrain; palette texture: uPaletteLut.',
+    `// Legacy pointer style ids (now presets in the builder): ${POINTER_MODES.map(mode => mode.id).join(', ')}`,
     '',
     '// --- vertex.glsl ---',
     vertexShaderSource,
     '',
     '// --- fragment.glsl ---',
-    fragmentShaderSource,
+    projectFragmentSource(settings),
   ].join('\n');
 }
 
 export function interactiveReactExport(project: GradientProject) {
   const { body, entries } = makeDocument(project, true);
-  const template = escapeJson(body);
+  const layerMixSettings = entries.map(entry => entry.layerMix);
+  const layerMixLuts = entries.map(entry => entry.layerMix.palette.length
+    ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
+    : '');
+  const template = escapeJson(body
+    .replace(/__SHADER_MIX_CONFIG_(\d+)__/g, (_match, index: string) => escapeAttributeValue(layerMixSettings[Number(index)] ?? {}))
+    .replace(/__SHADER_MIX_LUT_(\d+)__/g, (_match, index: string) => layerMixLuts[Number(index)] ?? ''));
   const settings = entries.map(entry => entry.settings);
   const palettes = entries.map(entry => entry.adapter.palette);
   const geometries = entries.map(entry => entry.adapter.geometry);
   const meshPoints = entries.map(entry => entry.adapter.meshPoints);
   const meshBases = entries.map(entry => entry.adapter.meshBase);
   const paletteLuts = entries.map(entry => encodePaletteLut(bakePaletteLut(entry.adapter.palette, entry.adapter.geometry.space ?? 'srgb')));
-  const layerMixSettings = entries.map(entry => entry.layerMix);
-  const layerMixLuts = entries.map(entry => entry.layerMix.palette.length
-    ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
-    : '');
+  const layerStates = entries.map(entry => entry.layerState);
   const pointerModeType = POINTER_MODES.map(mode => `'${mode.id}'`).join(' | ');
+  const styleType = SHADER_STYLE_IDS.map(id => `'${id}'`).join(' | ');
   return `import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 
+/* The interaction rules (settings.rig) are compiled into the shader when the export is made.
+ * You can change their numbers at runtime (amounts, radii, parameters, drives); adding or removing rules,
+ * or changing an effect / shape / falloff / source, needs a new export. */
 export interface ShaderSettings {
   enabled: boolean;
-  style: 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours' | 'smoke' | 'fire';
+  style: ${styleType};
   quality: 'low' | 'medium' | 'high' | 'ultra';
   resolutionScale: number;
   animate: boolean;
@@ -577,9 +624,18 @@ export interface ShaderSettings {
   distortion: number;
   distortionScale: number;
   turbulence: number;
+  timeOffset?: number;
+  flowAngle?: number;
+  flowDrift?: number;
+  breath?: number;
+  breathRate?: number;
+  rotation?: number;
+  zoom?: number;
   interactionEnabled: boolean;
   touchEnabled: boolean;
+  /** legacy id, kept for old projects; the active behaviour is described by \`rig\` */
   pointerMode: ${pointerModeType};
+  rig?: unknown;
   interactionColorSource?: 'layer' | 'custom';
   interactionColor: string;
   interactionColors?: string[];
@@ -604,6 +660,9 @@ export interface ShaderSettings {
   sheen?: number;
   filmGrain?: number;
   idleMotion?: boolean;
+  idlePath?: 'drift' | 'circle' | 'figure8' | 'scan' | 'wander';
+  idleSpeed?: number;
+  idleSize?: number;
   paletteWrap?: 'mirror' | 'repeat';
   renderBackend?: 'css' | 'webgl' | 'overlay';
 }
@@ -627,8 +686,7 @@ const DEFAULT_GEOMETRIES: ShaderGeometry[] = ${escapeJson(geometries)};
 const DEFAULT_MESH_POINTS: ShaderMeshPoint[][] = ${escapeJson(meshPoints)};
 const DEFAULT_MESH_BASES: string[] = ${escapeJson(meshBases)};
 const DEFAULT_PALETTE_LUTS: string[] = ${escapeJson(paletteLuts)};
-const DEFAULT_LAYER_MIX_SETTINGS = ${escapeJson(layerMixSettings)};
-const DEFAULT_LAYER_MIX_LUTS: string[] = ${escapeJson(layerMixLuts)};
+const DEFAULT_LAYER_STATES = ${escapeJson(layerStates)};
 const HTML_TEMPLATE = ${template};
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\\\u003c').replace(/>/g, '\\\\u003e').replace(/&/g, '\\\\u0026');
 const escapeAttribute = (value: unknown) => escapeJson(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -646,8 +704,7 @@ export default function InteractiveGradientBackground({ settings, palette, geome
     .replace(/__SHADER_MESH_POINTS_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshPoints ?? DEFAULT_MESH_POINTS[Number(index)]))
     .replace(/__SHADER_MESH_BASE_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshBase ?? DEFAULT_MESH_BASES[Number(index)]))
     .replace(/__SHADER_LUT_(\\d+)__/g, (_match, index: string) => palette ? '' : DEFAULT_PALETTE_LUTS[Number(index)])
-    .replace(/__SHADER_MIX_CONFIG_(\\d+)__/g, (_match, index: string) => escapeAttribute(DEFAULT_LAYER_MIX_SETTINGS[Number(index)]))
-    .replace(/__SHADER_MIX_LUT_(\\d+)__/g, (_match, index: string) => DEFAULT_LAYER_MIX_LUTS[Number(index)]), [settings, palette, geometry, meshPoints, meshBase]);
+    .replace(/__SHADER_LAYER_(\\d+)__/g, (_match, index: string) => escapeAttribute(DEFAULT_LAYER_STATES[Number(index)])), [settings, palette, geometry, meshPoints, meshBase]);
   return <iframe
     title="Interactive gradient background"
     className={className}
@@ -666,9 +723,9 @@ export function interactiveExports(project: GradientProject) {
     html: `${note ? `${note}\n` : ''}${built.body}`,
     markup: `${note ? `${note}\n` : ''}${built.markup}`,
     stylesheet: built.stylesheet,
-    runtime: shaderRuntime(),
+    runtime: shaderRuntime(built.fragmentSource),
     javascript: interactiveJavaScriptExport(project),
-    glsl: interactiveGlslExport(),
+    glsl: interactiveGlslExport(project),
     react: interactiveReactExport(project),
   };
 }

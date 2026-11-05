@@ -9,6 +9,7 @@ import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings, normalizeSh
 import { POINTER_MODES, pointerModeId } from './pointerModes';
 import { UNIFORM_NAMES } from './uniforms';
 import { pointerSmoothingFactor } from './input/PointerManager';
+import { RIG_PRESET_MAP } from './rig/presets';
 
 const channel = (lut: Uint8Array, index: number, offset = 0) => lut[index * 4 + offset];
 
@@ -69,6 +70,8 @@ test('shader layer color mixing settings normalize safely for old and imported p
   assert.deepEqual(normalizeShaderLayer({ enabled: true, style: 'flow' }), {
     enabled: true,
     style: 'flow',
+    interact: true,
+    reaction: 1,
     mixLayerId: '',
     mixMode: 'mix',
     mixStrength: 0.5,
@@ -84,19 +87,30 @@ test('shader layer color mixing settings normalize safely for old and imported p
     controls: { speed: 3, intensity: -1, distortion: 0.6, distortionScale: 12, turbulence: 0.4 },
   });
   assert.equal(independent.style, 'smoke');
+  // controls saved before the advanced-motion update fill the new keys with neutral values
   assert.deepEqual(independent.controls, {
     speed: 2,
     intensity: 0,
     distortion: 0.6,
     distortionScale: 8,
     turbulence: 0.4,
+    timeOffset: 0,
+    flowAngle: 0,
+    flowDrift: 0,
+    breath: 0,
+    breathRate: 0.25,
+    rotation: 0,
+    zoom: 1,
+    meshDrift: 0,
+    meshSpread: 0,
+    meshBlend: 0.82,
   });
   assert.equal(normalizeShaderLayer({ style: 'fire' }).style, 'fire');
+  assert.equal(normalizeShaderLayer({ style: 'marble' }).style, 'marble');
 });
 
-test('pointer catalog adds new modes and keeps the original mode ids stable', () => {
+test('the legacy pointer catalog keeps its ids and every one of them maps to an interaction preset', () => {
   assert.equal(POINTER_MODES.length, 75);
-  assert.equal(POINTER_MODES.filter(mode => mode.group !== 'Essentials' && mode.group !== '3D materials' && mode.group !== 'Chaos & electricity').length, 50);
   assert.deepEqual(POINTER_MODES.slice(0, 13).map(mode => mode.id), [
     'attract', 'repel', 'swirl', 'glow', 'drag', 'wave', 'orbit', 'magnet', 'ripple', 'pulse', 'trail', 'spotlight', 'hue',
   ]);
@@ -107,28 +121,10 @@ test('pointer catalog adds new modes and keeps the original mode ids stable', ()
   assert.equal(pointerModeId('displacement-texture'), 72);
   assert.equal(pointerModeId('tesla-coil'), 73);
   assert.equal(pointerModeId('lightning-bolt'), 74);
-});
-
-test('3D pointer effects occupy their own group and retain exact numeric ids', () => {
+  for (const mode of POINTER_MODES) assert.ok(RIG_PRESET_MAP[mode.id], `no preset for ${mode.id}`);
   const materials = POINTER_MODES.filter(mode => mode.group === '3D materials');
   assert.equal(materials.length, 10);
-  assert.deepEqual(materials.map(mode => mode.id), [
-    'liquid-silk', 'liquid-image', 'holographic-glass', 'liquid-metal', 'fluid-waves-3d',
-    'chromatic-refraction', 'melting-image', 'magnetic-goo', 'oil-slick', 'displacement-texture',
-  ]);
   assert.deepEqual(materials.map(mode => pointerModeId(mode.id)), Array.from({ length: 10 }, (_, index) => 63 + index));
-});
-
-test('only six pointer interactions keep round silhouettes; wave and electric modes are chaotic', () => {
-  const roundModes = ['glow', 'ripple', 'pulse', 'spotlight', 'flare-burst', 'halo'];
-  assert.deepEqual(roundModes.map(pointerModeId), [3, 8, 9, 11, 45, 51]);
-  const source = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
-  assert.match(source, /bool roundInteraction =/);
-  assert.match(source, /float spikes = abs\(sin\(pointerAngle/);
-  assert.match(source, /sin\(pointerShapeDistance \* 34\.0 - uClock \* 9\.0 \+ sin\(pointerAngle/);
-  assert.match(source, /uPointerMode >= 73\.0 && uPointerMode < 75\.0/);
-  assert.match(source, /float coil = sin\(pointerAngle \* 7\.0/);
-  assert.match(source, /float bolt = sin\(pointerAngle \* 5\.0/);
 });
 
 test('palette LUT honours hard stops, midpoint hints, curves, spaces, and arbitrary stop counts', () => {
@@ -208,9 +204,7 @@ test('multi-layer shader exports keep each gradient palette and mesh colors with
   assert.match(canvases[1][1], /#ff0000/);
   assert.match(canvases[1][1], /#0000ff/);
   assert.match(canvases[0][1], /interactionColors/);
-  assert.match(canvases[0][1], /#00ff00/);
   assert.match(canvases[1][1], /interactionColors/);
-  assert.match(canvases[1][1], /#ff0000/);
 });
 
 test('shader geometry matches CSS conic direction and radial circle dimensions', () => {
@@ -230,7 +224,7 @@ test('shader geometry matches CSS conic direction and radial circle dimensions',
   assert.equal(supportsDirectShaderGeometry(newLayer('noise')), false);
 });
 
-test('HTML export embeds the same LUT and shared uniform list used by the app', () => {
+test('HTML export embeds the same LUT, the shared uniform list and the shared interaction runtime', () => {
   const layer = newLayer('linear', { space: 'oklab', shader: { enabled: true, style: 'silk' } });
   const project = newProject({ layers: [layer] });
   const html = interactiveHtmlExport(project);
@@ -243,7 +237,12 @@ test('HTML export embeds the same LUT and shared uniform list used by the app', 
   assert.ok(html.includes("locations['uInteractionColors[0]']"));
   assert.ok(html.includes('locations.uInteractionDistortion'));
   assert.ok(html.includes('uInteractionColorCount'));
+  assert.ok(html.includes('locations.uMeshDrift'));
+  assert.ok(html.includes('locations.uMeshSpread'));
+  assert.ok(html.includes('locations.uMeshBlend'));
   assert.ok(html.includes('.layer-1'));
+  assert.ok(html.includes('createPointerEngine'), 'exported pages run the same pointer engine as the editor');
+  assert.ok(html.includes('vec2 rigWarp'), 'the generated interaction shader is embedded');
   assert.ok(interactiveReactExport(project).includes('shaderMix?: number;'));
   assert.ok(interactiveReactExport(project).includes("'echo-trail'"));
   const assets = interactiveExports(project);
@@ -263,82 +262,12 @@ test('HTML export embeds the same LUT and shared uniform list used by the app', 
   assert.doesNotThrow(() => new Function(javascript));
 });
 
-test('fragment shader preserves the ES 1.00 source contract', () => {
+test('fragment shader template preserves the ES 1.00 source contract', () => {
   const source = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
   assert.match(source, /varying vec2 vUv;/);
   assert.match(source, /gl_FragColor/);
   assert.match(source, /precision highp float;/);
   assert.doesNotMatch(source, /#version|fwidth|%/);
-});
-
-test('pointer highlights remain visible when the CSS ramp mix is zero', () => {
-  const source = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
-  const cssShaderMix = source.indexOf('color.rgb = mix(cssColor.rgb, color.rgb, shaderMix);');
-  const pointerHighlight = source.indexOf('color.rgb = mix(color.rgb, highlight, clamp(modeLight, 0.0, 0.85));');
-  const pointerAlpha = source.indexOf('alpha = 1.0 - (1.0 - alpha) * (1.0 - interactionAlpha);');
-  assert.ok(cssShaderMix >= 0);
-  assert.ok(pointerHighlight > cssShaderMix);
-  assert.ok(pointerAlpha > cssShaderMix);
-});
-
-test('pointer modes use distinct deformations and mode-specific visual effects', () => {
-  const source = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
-  assert.match(source, /if \(uPointerMode < 0\.5\) p -= directionUv/);
-  assert.match(source, /else if \(uPointerMode < 1\.5\) p \+= directionUv/);
-  assert.match(source, /else if \(uPointerMode < 2\.5\) p \+= perpendicularUv/);
-  assert.match(source, /float waveBands =/);
-  assert.match(source, /float pointerRipple =/);
-  assert.match(source, /float pulseRing =/);
-  assert.match(source, /float trailMask =/);
-  assert.match(source, /float spotlight =/);
-  assert.match(source, /float extraGroup = floor\(extraMode \/ 10\.0\)/);
-  assert.match(source, /sampleInteractionPalette/);
-  assert.match(source, /uInteractionFalloff/);
-  assert.match(source, /uniform float uInteractionDistortion;/);
-  assert.match(source, /uniform float uInteractionDisplacement;/);
-  assert.match(source, /uniform float uInteractionVelocityReaction;/);
-  assert.match(source, /uniform float uInteractionGlitch;/);
-  assert.match(source, /pointerShapeDistance = max\(0\.0, pointerDistance/);
-  assert.match(source, /float glitchAmount = uInteractionGlitch \* pointerFalloff/);
-  assert.match(source, /p\.x \+= \(glitchRandom - 0\.5\)/);
-  assert.match(source, /float velocityResponse = clamp\(pointerSpeed \* 1\.5, 0\.0, 1\.0\) \* uInteractionVelocityReaction;/);
-  assert.match(source, /p \+= directionUv \* displacement \* displacementDirection;/);
-  assert.match(source, /float glow = pointerGlow \* uPointerActive \* uGlow \* uInteractionStrength \* \(1\.0 \+ velocityResponse\);/);
-  assert.match(source, /float interactionWarp = pointerFalloff \* uPointerActive \* uInteractionDistortion \* velocityGain;/);
-  assert.match(source, /vec2 cssGradientDelta = \(p - gradientOrigin\)/);
-  assert.match(source, /vec3 shiftedPaletteColor = samplePalette/);
-  assert.match(source, /uPointerMode >= 63\.0 && uPointerMode < 73\.0/);
-  for (let effect = 0; effect < 10; effect++) {
-    assert.ok(source.includes(`advancedEffect < ${effect + 0.5}`) || effect === 9, `missing 3D interaction branch ${effect}`);
-  }
-  assert.match(source, /advancedChromatic > 0\.0/);
-  assert.match(source, /advancedSpecular \* 0\.82/);
-  assert.match(source, /advancedPaletteShift = height \* influence \* 0\.08;/);
-  assert.doesNotMatch(source, /mix\(color\.rgb, highlight, clamp\(glow/);
-});
-
-test('shader exports include the 3D pointer modes and interaction controls', () => {
-  const project = newProject({ layers: [newLayer('linear', { shader: { enabled: true, style: 'flow' } })] });
-  const html = interactiveHtmlExport(project);
-  const modeIdsMatch = html.match(/const pointerModeIds = (\{[^;]+\});/);
-  assert.ok(modeIdsMatch);
-  const modeIds = JSON.parse(modeIdsMatch[1]) as Record<string, number>;
-  assert.equal(modeIds['echo-trail'], 62);
-  assert.equal(modeIds['liquid-silk'], 63);
-  assert.equal(modeIds['displacement-texture'], 72);
-  assert.equal(modeIds['tesla-coil'], 73);
-  assert.equal(modeIds['lightning-bolt'], 74);
-  assert.match(html, /locations\.uInteractionDisplacement/);
-  assert.match(html, /locations\.uInteractionVelocityReaction/);
-  assert.match(html, /locations\.uInteractionGlitch/);
-  assert.match(html, /settings\.interactionDelay \/ 1000/);
-  assert.match(interactiveReactExport(project), /pointerMode: .*'displacement-texture'/);
-  assert.match(interactiveReactExport(project), /interactionVelocityReaction\?: number;/);
-  assert.match(interactiveReactExport(project), /interactionDelay\?: number;/);
-  assert.match(interactiveReactExport(project), /interactionGlitch\?: number;/);
-  assert.ok(UNIFORM_NAMES.includes('uInteractionDisplacement'));
-  assert.ok(UNIFORM_NAMES.includes('uInteractionVelocityReaction'));
-  assert.ok(UNIFORM_NAMES.includes('uInteractionGlitch'));
 });
 
 test('shader exports preserve cross-layer color mixing and rendered-pixel blend', () => {
@@ -356,12 +285,10 @@ test('shader exports preserve cross-layer color mixing and rendered-pixel blend'
   assert.match(html, /blendLayerColors/);
   assert.match(html, /mix-blend-mode: screen/);
   const react = interactiveReactExport(project);
-  assert.match(react, /DEFAULT_LAYER_MIX_SETTINGS/);
-  assert.match(react, /DEFAULT_LAYER_MIX_LUTS/);
   assert.doesNotMatch(react, /__SHADER_MIX_(?:CONFIG|LUT)_\d+__/);
 });
 
-test('shader exports preserve per-layer FX styles and motion overrides', () => {
+test('shader exports preserve per-layer styles, style parameters, reaction and motion overrides', () => {
   const layer = newLayer('linear', {
     shader: {
       enabled: true,
@@ -369,13 +296,16 @@ test('shader exports preserve per-layer FX styles and motion overrides', () => {
       controls: { speed: 0.8, intensity: 0.7, distortion: 0.4, distortionScale: 2.2, turbulence: 0.6 },
     },
   });
-  const project = newProject({ layers: [layer] });
+  const crystal = newLayer('linear', { shader: { enabled: true, style: 'crystal', styleParams: [9, 0.3, 0.7, 0.2], reaction: -0.5 } });
+  const project = newProject({ layers: [layer, crystal] });
   const html = interactiveHtmlExport(project);
   assert.match(html, /&quot;style&quot;:&quot;smoke&quot;/);
   assert.match(html, /&quot;speed&quot;:0\.8/);
   assert.match(html, /&quot;turbulence&quot;:0\.6/);
-  assert.match(html, /smoke: 10, fire: 11/);
+  assert.match(html, /"smoke":10,"fire":11/);
+  assert.match(html, /data-shader-layer="[^"]*&quot;styleParams&quot;:\[9,0\.3,0\.7,0\.2\][^"]*&quot;reaction&quot;:-0\.5/);
   const react = interactiveReactExport(project);
   assert.match(react, /style: 'flow'.*'smoke' \| 'fire'/);
   assert.match(react, /"style":"smoke"/);
+  assert.match(react, /DEFAULT_LAYER_STATES/);
 });

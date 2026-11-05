@@ -2,6 +2,8 @@ precision highp float;
 
 varying vec2 vUv;
 
+/*@RIG_DEFINES*/
+
 uniform vec2 uResolution;
 uniform vec2 uPointer;
 uniform vec2 uVelocity;
@@ -11,11 +13,11 @@ uniform float uTime;
 uniform float uClock;
 uniform float uAspect;
 uniform float uStyle;
+uniform vec4 uStyleP;
 uniform float uGradientKind;
 uniform float uGradientAngle;
 uniform vec2 uGradientOrigin;
 uniform vec2 uGradientRadius;
-uniform float uPointerMode;
 uniform float uShaderMix;
 uniform vec3 uInteractionColor;
 uniform vec3 uInteractionColors[5];
@@ -34,6 +36,13 @@ uniform float uIntensity;
 uniform float uDistortion;
 uniform float uDistortionScale;
 uniform float uTurbulence;
+uniform float uTimeOffset;
+uniform float uFlowAngle;
+uniform float uFlowDrift;
+uniform float uBreath;
+uniform float uBreathRate;
+uniform float uRotation;
+uniform float uZoom;
 uniform float uInteractionRadius;
 uniform float uInteractionStrength;
 uniform float uGlow;
@@ -41,8 +50,9 @@ uniform float uRippleStrength;
 uniform float uRippleSpeed;
 uniform float uRippleCount;
 uniform float uMeshCount;
-uniform float uOctaves;
-uniform float uWarpDepth;
+uniform float uMeshDrift;
+uniform float uMeshSpread;
+uniform float uMeshBlend;
 uniform float uWrapMode;
 uniform float uToneMap;
 uniform float uVignette;
@@ -62,6 +72,12 @@ uniform vec4 uRipples[8];
 uniform vec4 uMeshPoints[8];
 uniform vec4 uMeshColors[8];
 uniform vec4 uMeshBase;
+uniform vec4 uRuleB[8];
+uniform vec4 uRuleC[8];
+uniform vec4 uRuleD[8];
+uniform vec4 uRuleE[8];
+uniform vec4 uTrail[12];
+uniform vec3 uTouch2;
 
 vec2 hash22(vec2 p) {
   p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
@@ -83,8 +99,7 @@ float field(vec2 p) {
   float value = 0.0;
   float amplitude = 0.5;
   mat2 rotateScale = mat2(0.8, 0.6, -0.6, 0.8) * 2.03;
-  for (int octave = 0; octave < 6; octave++) {
-    if (float(octave) >= uOctaves) break;
+  for (int octave = 0; octave < RG_OCTAVES; octave++) {
     value += noise2(p) * amplitude;
     p = rotateScale * p + vec2(7.1);
     amplitude *= 0.5;
@@ -97,11 +112,14 @@ vec2 warpFlow(vec2 p, float t) {
     field(p * 1.2 + vec2(0.0, t * 0.05)),
     field(p * 1.2 + vec2(5.2, 1.3) - t * 0.04)
   );
-  if (uWarpDepth < 1.5) return q;
+#if RG_WARP_DEPTH > 1
   return vec2(
     field(p * 1.5 + 3.0 * q + vec2(1.7, 9.2) + t * 0.13),
     field(p * 1.5 + 3.0 * q + vec2(8.3, 2.8) - t * 0.11)
   );
+#else
+  return q;
+#endif
 }
 
 float wrapT(float t) {
@@ -165,10 +183,16 @@ vec4 sampleMesh(vec2 p) {
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uMeshCount) break;
     vec4 point = uMeshPoints[i];
-    vec2 drift = vec2(sin(uTime * 0.45 + float(i)) * 0.025, cos(uTime * 0.38 + float(i) * 1.7) * 0.02) * uDistortion;
-    vec2 delta = (p - point.xy - drift) * vec2(uAspect, 1.0);
+    float fi = float(i);
+    vec2 drift = vec2(sin(uTime * 0.45 + fi) * 0.025, cos(uTime * 0.38 + fi * 1.7) * 0.02) * uDistortion;
+    vec2 orbit = vec2(
+      sin(uTime * 0.16 * (0.7 + fract(fi * 0.618)) + fi * 2.4) * 0.62 / max(uAspect, 0.001),
+      cos(uTime * 0.14 * (0.6 + fract(fi * 0.417)) + fi * 1.9) * 0.38
+    ) * uMeshDrift;
+    vec2 delta = (p - point.xy - drift - orbit) * vec2(uAspect, 1.0);
     float radius = max(0.01, point.z * uAspect * (1.0 + 0.08 * sin(uTime + float(i)) * uDistortion));
-    float weight = exp(-4.5 * dot(delta, delta) / (radius * radius)) * point.w;
+    float sharpness = mix(4.5, 1.0, clamp(uMeshSpread, 0.0, 1.0));
+    float weight = exp(-sharpness * dot(delta, delta) / (radius * radius)) * point.w;
     weightedColor += uMeshColors[i].rgb * weight;
     totalWeight += weight;
     uncovered *= 1.0 - clamp(weight, 0.0, 1.0);
@@ -177,26 +201,31 @@ vec4 sampleMesh(vec2 p) {
   return vec4(weightedColor / totalWeight, clamp(1.0 - uncovered, uMeshBase.a, 1.0));
 }
 
+/* accumulators written by the generated interaction rules */
+float rgPal = 0.0;
+float rgChroma = 0.0;
+float rgAlpha = 0.0;
+float rgTime = 0.0;
+float rgSpec = 0.0;
+
+/*@RIG_FUNCTIONS*/
+
+/* motion: static rotation + slow spin, drift along the rotated axis, zoom */
+vec2 flowDomain(vec2 v, float t) {
+  float a = uFlowAngle + uRotation * t;
+  float s = sin(a);
+  float c = cos(a);
+  v = vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+  v.x += uFlowDrift * t * 0.12;
+  return v / max(uZoom, 0.05);
+}
+
 void main() {
   vec2 p = vUv;
-  float t = uTime;
+  float t = uTime + uTimeOffset;
   vec2 pointerDelta = (p - uPointer) * vec2(uAspect, 1.0);
   float pointerDistance = length(pointerDelta);
-  float pointerShapeDistance = pointerDistance;
-  float pointerAngle = atan(pointerDelta.y, pointerDelta.x);
-  bool roundInteraction = uPointerMode > 2.5 && uPointerMode < 3.5
-    || uPointerMode > 7.5 && uPointerMode < 9.5
-    || uPointerMode > 10.5 && uPointerMode < 11.5
-    || uPointerMode > 44.5 && uPointerMode < 45.5
-    || uPointerMode > 50.5 && uPointerMode < 51.5;
-  if (!roundInteraction) {
-    float edgeNoise = field(pointerDelta * 6.2 + vec2(uClock * 0.21, -uClock * 0.16));
-    float lobes = sin(pointerAngle * (3.0 + mod(uPointerMode, 5.0)) + edgeNoise * 5.0 + uClock * 0.3);
-    float spikes = abs(sin(pointerAngle * (7.0 + mod(uPointerMode, 4.0)) + edgeNoise * 3.0));
-    pointerShapeDistance = max(0.0, pointerDistance
-      + uInteractionRadius * ((edgeNoise - 0.5) * 0.4 + lobes * 0.24 + (spikes - 0.5) * 0.2));
-  }
-  float pointerRatio = clamp(pointerShapeDistance / max(0.001, uInteractionRadius), 0.0, 1.0);
+  float pointerRatio = clamp(pointerDistance / max(0.001, uInteractionRadius), 0.0, 1.0);
   float pointerFalloff = 1.0 - smoothstep(0.0, 1.0, pointerRatio);
   if (uInteractionFalloff > 0.5 && uInteractionFalloff < 1.5) pointerFalloff = 1.0 - pointerRatio;
   else if (uInteractionFalloff > 1.5 && uInteractionFalloff < 2.5) pointerFalloff = pow(pointerFalloff, 2.4);
@@ -205,8 +234,6 @@ void main() {
   vec2 direction = normalize(pointerDelta + vec2(0.0001));
   vec2 directionUv = direction / vec2(uAspect, 1.0);
   vec2 perpendicularUv = vec2(-direction.y, direction.x) / vec2(uAspect, 1.0);
-  vec2 velocityDirection = normalize(uVelocity + vec2(0.0001));
-  vec2 velocitySide = vec2(-velocityDirection.y, velocityDirection.x);
   float pointerSpeed = length(uVelocity);
   float velocityResponse = clamp(pointerSpeed * 1.5, 0.0, 1.0) * uInteractionVelocityReaction;
   float velocityGain = 1.0 + velocityResponse * 1.8;
@@ -216,182 +243,11 @@ void main() {
   float glitchTick = floor(uClock * 20.0);
   float glitchRandom = fract(sin(glitchRow * 12.9898 + glitchTick * 78.233) * 43758.5453);
   float glitchGate = step(0.76, glitchRandom);
-  float trailSide = dot(pointerDelta, velocitySide);
-  float trailBehind = max(-dot(pointerDelta, velocityDirection), 0.0);
-  float trailMask = exp(-pow(trailSide / max(0.012, uInteractionRadius * 0.42), 2.0))
-    * exp(-trailBehind / max(0.02, uInteractionRadius * 1.8))
-    * smoothstep(0.03, 0.22, pointerSpeed) * uPointerActive;
-  float advancedEffect = uPointerMode - 63.0;
-  float advancedLight = 0.0;
-  float advancedSpecular = 0.0;
-  float advancedChromatic = 0.0;
-  float advancedPaletteShift = 0.0;
-  float electricLight = 0.0;
-  float electricArc = 0.0;
-  float extraMode = uPointerMode - 13.0;
-  float extraGroup = floor(extraMode / 10.0);
-  float extraVariant = mod(extraMode, 10.0);
-  if (uPointerMode < 0.5) p -= directionUv * influence * 0.14;
-  else if (uPointerMode < 1.5) p += directionUv * influence * 0.14;
-  else if (uPointerMode < 2.5) p += perpendicularUv * influence * 0.18;
-  else if (uPointerMode < 3.5) { }
-  else if (uPointerMode < 4.5) p += (uPointer - p) * influence * 0.24;
-  else if (uPointerMode < 5.5) p += directionUv * sin(pointerShapeDistance * 34.0 - uClock * 9.0 + sin(pointerAngle * 5.0) * 1.7) * influence * 0.035;
-  else if (uPointerMode < 6.5) p += perpendicularUv * influence * 0.2 - directionUv * influence * 0.045;
-  else if (uPointerMode < 7.5) {
-    p -= directionUv * influence * 0.22;
-    p += directionUv * sin(pointerDistance * 24.0 - uClock * 3.0) * influence * 0.025;
-  } else if (uPointerMode < 8.5) p += directionUv * sin(pointerDistance * 46.0 - uClock * 10.0) * influence * 0.04;
-  else if (uPointerMode < 9.5) p += directionUv * sin(pointerDistance * 18.0 - uClock * 6.0) * influence * 0.018;
-  else if (uPointerMode < 10.5) p += velocityDirection / vec2(uAspect, 1.0) * trailMask * uInteractionStrength * 0.08;
-  else if (uPointerMode >= 13.0 && uPointerMode < 63.0) {
-    float phase = extraVariant * 0.6283185;
-    float wave = sin(pointerDistance * (18.0 + extraVariant * 3.2) - uClock * (2.0 + extraVariant * 0.35) + phase);
-    if (extraGroup < 0.5) {
-      float colorWarp = wave;
-      if (extraVariant > 2.5 && extraVariant < 5.5) colorWarp = sin(atan(direction.y, direction.x) * (2.0 + extraVariant) + uClock * 2.0);
-      else if (extraVariant >= 5.5) colorWarp = sin(pointerDistance * (12.0 + extraVariant * 2.0) + atan(direction.y, direction.x) * 3.0 - uClock * 4.0);
-      p += (directionUv * colorWarp + perpendicularUv * cos(phase + uClock)) * influence * (0.025 + extraVariant * 0.0015);
-    } else if (extraGroup < 1.5) {
-      float force = influence * (0.07 + extraVariant * 0.012);
-      if (extraVariant < 0.5) p -= directionUv * force;
-      else if (extraVariant < 1.5) p += directionUv * force;
-      else if (extraVariant < 2.5) p += perpendicularUv * force;
-      else if (extraVariant < 3.5) p -= perpendicularUv * force;
-      else if (extraVariant < 4.5) p += (directionUv + perpendicularUv * wave) * force;
-      else if (extraVariant < 5.5) p += (perpendicularUv + directionUv * wave) * force;
-      else if (extraVariant < 6.5) p += vec2(direction.x, 0.0) * force;
-      else if (extraVariant < 7.5) p += vec2(0.0, direction.y) * force;
-      else if (extraVariant < 8.5) p -= directionUv * force * (1.0 + wave * 0.5);
-      else p += directionUv * force * (1.0 - influence);
-    } else if (extraGroup < 2.5) {
-      float angle = atan(direction.y, direction.x);
-      float frequency = 22.0 + extraVariant * 4.0;
-      float rings = sin(pointerDistance * frequency - uClock * (4.0 + extraVariant * 0.5) + angle * (1.0 + mod(extraVariant, 4.0)));
-      if (extraVariant < 1.5) rings = sin(pointerDistance * frequency - uClock * 4.0);
-      else if (extraVariant < 2.5) rings = sin(pointerDistance * frequency + angle * 3.0);
-      else if (extraVariant < 3.5) rings = sin(pointerDistance * frequency + sin(angle * 4.0) * 0.6 - uClock * 3.0);
-      else if (extraVariant < 4.5) rings = sin(pointerDistance * frequency - uClock * 2.0) * cos(angle * 5.0);
-      else if (extraVariant < 5.5) rings = sin(pointerDistance * frequency - uClock * (3.0 + 2.0 * sin(uClock)));
-      else if (extraVariant < 6.5) rings = sin(pointerDistance * frequency + angle * 2.0) + sin(pointerDistance * frequency * 0.5 - uClock * 5.0);
-      else if (extraVariant < 7.5) rings = sin(pointerDistance * frequency * 0.7 - uClock * 4.0) * sin(pointerDistance * frequency * 1.4);
-      else if (extraVariant < 8.5) rings = sin(pointerDistance * frequency + angle * 6.0 - uClock * 2.0);
-      p += directionUv * rings * influence * (0.018 + extraVariant * 0.002);
-    } else if (extraGroup > 3.5) {
-      float trailShape = trailMask;
-      if (extraVariant < 1.5) trailShape *= smoothstep(0.08, 0.7, pointerSpeed);
-      else if (extraVariant < 2.5) trailShape *= 0.5 + 0.5 * sin(trailBehind * 32.0 - uClock * 8.0);
-      else if (extraVariant < 3.5) trailShape *= exp(-trailBehind / max(0.02, uInteractionRadius * 0.7));
-      else if (extraVariant < 4.5) trailShape *= 0.65 + 0.35 * sin(trailSide * 38.0 + uClock * 5.0);
-      else if (extraVariant < 5.5) trailShape *= 0.5 + 0.5 * cos(trailBehind * 18.0 + uClock * 3.0);
-      else if (extraVariant < 6.5) trailShape *= exp(-abs(trailSide) / max(0.01, uInteractionRadius * 0.12));
-      else if (extraVariant < 7.5) trailShape *= 0.5 + 0.5 * sin(trailSide * 24.0 + trailBehind * 16.0);
-      else if (extraVariant < 8.5) trailShape *= smoothstep(0.0, 0.8, pointerSpeed) * (1.0 - smoothstep(0.5, 1.5, trailBehind));
-      float smear = trailShape * (0.03 + extraVariant * 0.006);
-      p += velocityDirection / vec2(uAspect, 1.0) * smear;
-      p += perpendicularUv * sin(trailBehind * (9.0 + extraVariant * 2.0) + uClock * 3.0) * smear * 0.35;
-    }
-  } else if (uPointerMode >= 63.0 && uPointerMode < 73.0) {
-    influence *= 1.0 + velocityResponse;
-    float angle = atan(direction.y, direction.x);
-    float phase = uClock * (2.1 + advancedEffect * 0.17) + advancedEffect * 0.71;
-    float ringWave = sin(pointerShapeDistance * (24.0 + advancedEffect * 2.8) - phase);
-    if (advancedEffect < 0.5) {
-      float fold = sin(pointerShapeDistance * 19.0 + angle * 2.2 - phase * 1.4);
-      p += perpendicularUv * fold * influence * 0.075 + directionUv * ringWave * influence * 0.025;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(fold)), 8.0) * influence;
-      advancedLight = (0.25 + 0.35 * abs(fold)) * influence;
-      advancedPaletteShift = fold * influence * 0.09;
-    } else if (advancedEffect < 1.5) {
-      vec2 liquidInput = pointerDelta * 5.2 + vec2(phase, -phase * 0.7);
-      vec2 liquidWarp = vec2(field(liquidInput), field(liquidInput + vec2(4.7, 8.2)));
-      p += liquidWarp * influence * 0.09;
-      advancedPaletteShift = (liquidWarp.x - liquidWarp.y) * influence * 0.16;
-      advancedLight = abs(ringWave) * influence * 0.55;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(ringWave)), 10.0) * influence;
-    } else if (advancedEffect < 2.5) {
-      float lens = exp(-pointerShapeDistance * pointerShapeDistance / max(0.0001, uInteractionRadius * uInteractionRadius * 0.45));
-      float rim = exp(-pow((pointerShapeDistance - uInteractionRadius * 0.72) / max(0.008, uInteractionRadius * 0.09), 2.0));
-      p -= directionUv * lens * influence * 0.07;
-      p += directionUv * ringWave * influence * 0.025;
-      advancedLight = rim * influence;
-      advancedSpecular = pow(rim, 2.0) * influence * 0.85;
-      advancedPaletteShift = rim * influence * 0.16;
-    } else if (advancedEffect < 3.5) {
-      float chromeFold = sin(pointerDistance * 31.0 - phase * 1.7 + sin(angle * 3.0) * 1.3);
-      p += directionUv * chromeFold * influence * 0.065;
-      p += perpendicularUv * sin(chromeFold * 2.2) * influence * 0.035;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(chromeFold)), 16.0) * influence;
-      advancedLight = pow(max(0.0, chromeFold), 3.0) * influence * 0.7;
-      advancedPaletteShift = chromeFold * influence * 0.12;
-    } else if (advancedEffect < 4.5) {
-      float waveHeight = sin(pointerShapeDistance * 18.0 - phase * 1.2) * 0.65 + sin(angle * 3.0 + phase) * 0.35;
-      p += directionUv * waveHeight * influence * 0.07;
-      p += perpendicularUv * sin(pointerDistance * 11.0 - phase) * influence * 0.045;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(waveHeight)), 9.0) * influence;
-      advancedLight = (0.3 + 0.35 * waveHeight) * influence;
-      advancedPaletteShift = waveHeight * influence * 0.11;
-    } else if (advancedEffect < 5.5) {
-      float refraction = ringWave * influence * 0.085;
-      p += directionUv * refraction;
-      p += perpendicularUv * sin(angle * 4.0 + phase) * influence * 0.025;
-      advancedChromatic = influence * (0.35 + 0.45 * abs(ringWave));
-      advancedLight = abs(ringWave) * influence * 0.4;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(ringWave)), 12.0) * influence;
-    } else if (advancedEffect < 6.5) {
-      float dripLane = fract((p.x * 7.0 + field(p * 4.0) * 0.8) * 0.5);
-      float dripLength = smoothstep(0.05, 0.92, dripLane);
-      float drip = sin((p.x * 7.0 + field(p * 4.0)) * 6.2831853 + phase) * 0.025;
-      p.x += drip * influence;
-      p.y -= dripLength * influence * 0.075;
-      advancedSpecular = exp(-abs(drip) * 80.0) * influence * dripLength;
-      advancedLight = dripLength * influence * 0.55;
-      advancedPaletteShift = dripLength * influence * 0.14;
-    } else if (advancedEffect < 7.5) {
-      float gooField = uInteractionRadius * 0.72 - pointerShapeDistance + sin(angle * 3.0 + phase) * uInteractionRadius * 0.1;
-      float gooMask = smoothstep(-0.035, 0.045, gooField);
-      float gooRim = exp(-abs(gooField) * 55.0);
-      p -= directionUv * gooMask * influence * 0.075;
-      p += perpendicularUv * sin(angle * 2.0 + phase) * gooMask * influence * 0.045;
-      advancedLight = gooMask * influence * 0.5;
-      advancedSpecular = gooRim * influence;
-      advancedPaletteShift = gooMask * 0.13;
-    } else if (advancedEffect < 8.5) {
-      float film = sin(pointerShapeDistance * 17.0 - phase + sin(angle * 2.0) * 1.5);
-      float interference = sin(film * 3.1 + pointerShapeDistance * 29.0 + phase * 0.4);
-      p += directionUv * film * influence * 0.05;
-      advancedPaletteShift = (film * 0.12 + interference * 0.08) * influence;
-      advancedLight = (0.25 + 0.35 * abs(interference)) * influence;
-      advancedSpecular = pow(max(0.0, 1.0 - abs(film)), 11.0) * influence;
-    } else {
-      float height = sin(p.x * 105.0 + phase) * cos(p.y * 86.0 - phase * 0.8);
-      float ridge = 1.0 - smoothstep(0.0, 0.22, abs(height));
-      p += vec2(cos(p.x * 105.0 + phase), sin(p.y * 86.0 - phase * 0.8))
-        * height * influence * 0.018;
-      advancedLight = ridge * influence * 0.52;
-      advancedSpecular = ridge * influence * 0.72;
-      advancedPaletteShift = height * influence * 0.08;
-    }
-  } else if (uPointerMode >= 73.0 && uPointerMode < 75.0) {
-    float electricNoise = field(pointerDelta * 18.0 + vec2(uClock * 0.7, -uClock * 0.43));
-    if (uPointerMode < 73.5) {
-      float coil = sin(pointerAngle * 7.0 + pointerShapeDistance * 46.0 - uClock * 8.0 + electricNoise * 4.0);
-      float branches = sin(pointerAngle * 17.0 - pointerShapeDistance * 31.0 + electricNoise * 6.0);
-      electricArc = exp(-abs(coil) * 22.0) * (0.45 + 0.55 * exp(-abs(branches) * 13.0))
-        * exp(-pointerShapeDistance / max(0.01, uInteractionRadius * 1.05));
-      p += (directionUv * coil + perpendicularUv * branches) * influence * 0.085;
-      electricLight = electricArc * influence * (0.65 + 0.35 * sin(uClock * 19.0 + electricNoise * 9.0));
-    } else {
-      float bolt = sin(pointerAngle * 5.0 + pointerShapeDistance * 22.0 + electricNoise * 8.0 + uClock * 2.0);
-      float fork = sin(pointerAngle * 11.0 - pointerShapeDistance * 38.0 + electricNoise * 12.0 - uClock * 3.0);
-      electricArc = exp(-abs(bolt) * 28.0) + 0.72 * exp(-abs(fork) * 34.0);
-      electricArc *= smoothstep(0.015, 0.09, pointerShapeDistance)
-        * (1.0 - smoothstep(uInteractionRadius * 0.9, uInteractionRadius * 1.8, pointerShapeDistance));
-      p += (perpendicularUv * bolt + directionUv * fork) * influence * 0.11;
-      electricLight = electricArc * influence * step(0.48, fract(sin(floor(uClock * 24.0) + electricNoise * 91.0) * 43758.5453));
-    }
-    advancedPaletteShift = electricNoise * electricArc * 0.22;
-  }
+
+  /* interaction rig: warp the sampling position, then write palette / time accumulators */
+  p = rigWarp(p);
+  rigPre(vUv);
+  t += rgTime;
 
   float displacement = clamp(influence * uInteractionDisplacement * velocityGain * 0.18, 0.0, 0.42);
   float displacementDirection = uInteractionDisplacementMode < 0.5 ? -1.0 : 1.0;
@@ -416,12 +272,13 @@ void main() {
   }
   rippleGlow *= uRippleStrength;
 
-  vec2 centered = (p - 0.5) * vec2(uAspect, 1.0);
+  vec2 centered = flowDomain((p - 0.5) * vec2(uAspect, 1.0), t);
   vec2 r = warpFlow(centered, t);
   float n = field(centered * uDistortionScale + (2.0 * uTurbulence) * r + vec2(t * 0.13, -t * 0.09));
-  vec2 warped = (p - 0.5) * vec2(uAspect, 1.0);
+  vec2 warped = centered;
   float turbulence = field(warped * uDistortionScale * 2.1 + (2.0 * uTurbulence) * r + vec2(t * 0.17, t * 0.11));
-  warped += vec2(turbulence, n) * uDistortion * (0.25 + uTurbulence);
+  float breathMul = 1.0 + uBreath * sin(uClock * uBreathRate * 6.2831853);
+  warped += vec2(turbulence, n) * uDistortion * breathMul * (0.25 + uTurbulence);
   vec2 surfaceGradient = vec2(0.0);
   if (uSheen > 0.0 || uStyle > 2.5 && uStyle < 3.5) {
     float surface = field(warped);
@@ -431,6 +288,7 @@ void main() {
   float alpha = 1.0;
   float bands = 1.0;
   float rimLight = 0.0;
+  vec4 sp = uStyleP;
   vec2 gradientOrigin = uGradientOrigin;
   if (uGradientKind < 0.5 || uGradientKind > 2.5 && uGradientKind < 4.5) gradientOrigin = vec2(0.5);
   vec2 gradientDelta = (p - gradientOrigin) * vec2(uAspect, 1.0);
@@ -523,7 +381,7 @@ void main() {
     bands = smokeShape * smokeDensity;
     colorPosition = wrapT(basePosition * 0.22 + smokeCloud * 0.48 + smokeDetail * 0.22 + 0.08);
     alpha *= bands * (0.42 + uIntensity * 0.58);
-  } else {
+  } else if (uStyle < 11.5) {
     float fireDrift = field(vec2(warped.x * 2.5 + t * 0.13, warped.y * 1.8 - t * 0.34));
     vec2 fireUv = warped * (2.0 + uDistortionScale * 0.3);
     fireUv.x += (fireDrift - 0.5) * (0.2 + uDistortion * 0.65);
@@ -538,16 +396,193 @@ void main() {
     colorPosition = clamp(0.02 + (1.0 - warped.y) * 0.68 + flameNoise * 0.18 + flameDetail * 0.12, 0.0, 1.0);
     alpha *= bands * (0.5 + uIntensity * 0.5);
     rimLight = smoothstep(0.54, 0.9, flame) * flameEnvelope * 0.45;
+  } else if (uStyle < 12.5) {
+    /* marble: sp = vein scale, sharpness, turbulence, contrast */
+    float mbScale = max(sp.x, 0.5);
+    float mbWarp = field(warped * 1.3 + r * 1.5) * sp.z * 3.0;
+    float mbVein = abs(sin((warped.x * mbScale * 0.7 + warped.y * mbScale * 0.45 + mbWarp + n * sp.z) * 3.14159265));
+    float mbLine = pow(max(1.0 - mbVein, 0.0), mix(2.0, 14.0, sp.y)) * (0.4 + sp.w);
+    colorPosition = wrapT(basePosition * 0.4 + 0.3 + field(warped * 0.9 + vec2(t * 0.01, 0.0)) * 0.35 + mbLine * 0.6);
+    rimLight = mbLine * 0.5;
+  } else if (uStyle < 13.5) {
+    /* waves: sp = wave count, amplitude, choppiness, foam */
+    float wvBase = warped.y * max(sp.x, 1.0) * 1.2;
+    float wvA = sin(wvBase + sin(warped.x * 2.2 + t * 0.35) * sp.y * 2.4 + n * 1.5 + t * 0.55);
+    float wvB = sin(wvBase * 1.7 - warped.x * 1.4 - t * 0.4) * 0.45;
+    float wvHeight = (wvA + wvB * sp.z) * 0.5;
+    colorPosition = wrapT(basePosition * 0.45 + wvHeight * 0.5 + 0.4);
+    rimLight = smoothstep(0.55, 0.95, wvHeight) * sp.w;
+  } else if (uStyle < 14.5) {
+    /* topography: sp = line density, line width, relief, line emphasis */
+    float tpHeight = basePosition * 0.55 + field(warped * 1.1 + r * 0.8 + vec2(t * 0.02, 0.0)) * sp.z * 1.1 + 0.35;
+    float tpScaled = tpHeight * max(sp.x, 2.0);
+    float tpDist = min(fract(tpScaled), 1.0 - fract(tpScaled));
+    float tpLine = 1.0 - smoothstep(sp.y * 0.25, sp.y * 0.25 + 0.04, tpDist);
+    colorPosition = wrapT(tpHeight * 0.9 + 0.05);
+    alpha *= mix(1.0, 0.25 + 0.75 * tpLine, sp.w);
+    rimLight = tpLine * 0.25;
+  } else if (uStyle < 15.5) {
+    /* crystal cells: sp = cell count, edge glow, jitter, motion */
+    vec2 vcP = warped * max(sp.x, 1.0) + r * 0.35;
+    vec2 vcCell = floor(vcP);
+    vec2 vcF = fract(vcP);
+    float vcMin1 = 8.0;
+    float vcMin2 = 8.0;
+    float vcId = 0.0;
+    for (int vj = -1; vj <= 1; vj++) {
+      for (int vi = -1; vi <= 1; vi++) {
+        vec2 vcOff = vec2(float(vi), float(vj));
+        vec2 vcRand = 0.5 + 0.5 * hash22(vcCell + vcOff);
+        vec2 vcPt = vcOff + 0.5 + (vcRand - 0.5) * sp.z + 0.35 * sp.w * sin(t * 1.2 + 6.2831853 * vcRand);
+        float vcD = length(vcPt - vcF);
+        if (vcD < vcMin1) {
+          vcMin2 = vcMin1;
+          vcMin1 = vcD;
+          vcId = dot(vcCell + vcOff, vec2(7.13, 3.77));
+        } else if (vcD < vcMin2) {
+          vcMin2 = vcD;
+        }
+      }
+    }
+    float vcEdge = smoothstep(0.0, 0.12, vcMin2 - vcMin1);
+    float vcHash = fract(sin(vcId * 12.9898) * 43758.5453);
+    colorPosition = wrapT(basePosition * 0.35 + vcHash * 0.65);
+    rimLight = (1.0 - vcEdge) * sp.y * 0.9;
+  } else if (uStyle < 16.5) {
+    /* blueprint grid: sp = cells, line width, warp, glow */
+    vec2 grP = warped * max(sp.x, 2.0) + vec2(field(warped * 1.4 + r), field(warped * 1.4 + vec2(3.1, 7.7) + r)) * sp.z * 2.0;
+    vec2 grF = abs(fract(grP) - 0.5);
+    float grW = max(sp.y, 0.01) * 0.5;
+    float grLine = smoothstep(0.5 - grW - 0.03, 0.5 - grW, max(grF.x, grF.y));
+    float grHash = fract(sin(dot(floor(grP), vec2(12.9898, 78.233))) * 43758.5453);
+    colorPosition = wrapT(basePosition * 0.6 + grHash * 0.25 + n * 0.2 + 0.2);
+    alpha *= 0.35 + 0.65 * grLine;
+    rimLight = grLine * sp.w * 0.6;
+  } else if (uStyle < 17.5) {
+    /* interference: sp = sources, frequency, speed, contrast */
+    float ifSum = 0.0;
+    float ifCount = clamp(floor(sp.x + 0.5), 2.0, 5.0);
+    for (int ii = 0; ii < 5; ii++) {
+      if (float(ii) >= ifCount) break;
+      float ifI = float(ii);
+      vec2 ifC = vec2(sin(t * 0.21 * sp.z + ifI * 2.1) * 0.55, cos(t * 0.17 * sp.z + ifI * 1.7) * 0.4);
+      ifSum += sin(length(warped - ifC) * sp.y - t * sp.z * 1.5 + ifI);
+    }
+    ifSum /= ifCount;
+    colorPosition = wrapT(basePosition * 0.3 + ifSum * (0.25 + sp.w * 0.5) + 0.5);
+    rimLight = pow(abs(ifSum), 6.0) * 0.25 * sp.w;
+  } else if (uStyle < 18.5) {
+    /* lava lamp: sp = blob count, size, rise speed, gooeyness */
+    float lvField = 0.0;
+    float lvCount = clamp(floor(sp.x + 0.5), 2.0, 8.0);
+    for (int li = 0; li < 8; li++) {
+      if (float(li) >= lvCount) break;
+      float lvI = float(li);
+      float lvX = sin(lvI * 2.399 + t * 0.12) * 0.42 * uAspect;
+      float lvY = (fract(lvI * 0.381966 + t * sp.z * 0.06) - 0.5) * 1.8;
+      float lvSize = sp.y * (0.7 + 0.5 * fract(lvI * 0.618));
+      vec2 lvD = warped - vec2(lvX, lvY);
+      lvField += lvSize * lvSize / (dot(lvD, lvD) + 0.002);
+    }
+    float lvSoft = 0.05 + sp.w * 0.6;
+    float lvBlob = smoothstep(1.0 - lvSoft, 1.0 + lvSoft, lvField);
+    colorPosition = wrapT(basePosition * 0.4 + lvBlob * 0.3 + min(lvField, 3.0) * 0.08 + 0.1);
+    rimLight = exp(-abs(lvField - 1.0) * 5.0) * 0.6;
+  } else if (uStyle < 19.5) {
+    /* light rays: sp = ray count, sharpness, ray strength, origin height */
+    vec2 ryD = warped - vec2(0.0, sp.w);
+    float ryAng = atan(ryD.x, ryD.y);
+    float ryCnt = max(floor(sp.x + 0.5), 1.0);
+    float ryWave = sin(ryAng * ryCnt + t * 0.25 + n * 1.5) * 0.5 + 0.5;
+    float ryRay = pow(ryWave, mix(1.0, 10.0, sp.y));
+    float ryDist = length(ryD);
+    float ryFade = exp(-ryDist * 1.4);
+    colorPosition = wrapT(basePosition * 0.45 + ryRay * 0.25 + ryDist * 0.3);
+    alpha *= clamp(mix(1.0, 0.15 + 0.85 * ryRay * (0.35 + ryFade), sp.z), 0.0, 1.0);
+    rimLight = ryRay * ryFade * 0.35;
+  } else if (uStyle < 20.5) {
+    /* facets: sp = facet count, shade, colour shift, motion */
+    vec2 fcP = warped * max(sp.x, 2.0) + r * 0.25 * sp.w;
+    vec2 fcG = vec2(fcP.x + fcP.y * 0.5, fcP.y);
+    vec2 fcCell = floor(fcG);
+    vec2 fcF = fract(fcG);
+    float fcTri = step(fcF.y, fcF.x);
+    float fcId = fract(sin(dot(fcCell + vec2(fcTri * 17.0), vec2(12.9898, 78.233))) * 43758.5453);
+    colorPosition = wrapT(basePosition * 0.45 + 0.1 + fcId * sp.z * 0.55 + (fcTri - 0.5) * sp.y * 0.12 + sin(t * 0.3 + fcId * 6.2831853) * 0.04 * sp.w);
+    float fcEdge = 1.0 - smoothstep(0.0, 0.03, min(min(fcF.x, fcF.y), abs(fcF.x - fcF.y)));
+    rimLight = fcEdge * sp.y * 0.5;
+  } else if (uStyle < 21.5) {
+    /* ink bleed: sp = bloom, edge darkening, paper grain, flow */
+    vec2 ikQ = vec2(field(warped * 1.1 + vec2(t * 0.05 * sp.w, 0.0)), field(warped * 1.1 + vec2(4.2, 1.9) - vec2(0.0, t * 0.04 * sp.w)));
+    float ikInk = field(warped * 1.8 + ikQ * 2.2 * (0.3 + sp.x) + r * 1.5);
+    float ikPool = smoothstep(-0.18, 0.28, ikInk);
+    float ikEdge = smoothstep(-0.02, 0.06, ikInk) * (1.0 - smoothstep(0.08, 0.2, ikInk));
+    float ikPaper = field(warped * 90.0);
+    colorPosition = wrapT(basePosition * 0.3 + 0.1 + ikPool * 0.55 - ikEdge * sp.y * 0.18 + ikPaper * sp.z * 0.08);
+  } else if (uStyle < 22.5) {
+    /* fluted glass: sp = ribs, refraction, frost, angle */
+    float flA = sp.w * 0.0174533;
+    vec2 flDir = vec2(cos(flA), sin(flA));
+    float flRib = fract(dot(warped, flDir) * max(sp.x, 2.0)) - 0.5;
+    float flLens = flRib * sp.y;
+    colorPosition = wrapT((basePosition + flLens * 0.9) * 0.8 + 0.1 + n * 0.12 + field(warped * 3.0 + flDir * flLens) * sp.z * 0.2);
+    rimLight = smoothstep(0.42, 0.5, abs(flRib)) * 0.3;
+  } else if (uStyle < 23.5) {
+    /* mist: sp = layers, softness, drift, density */
+    float msFog = 0.0;
+    float msCount = clamp(floor(sp.x + 0.5), 1.0, 6.0);
+    for (int mi = 0; mi < 6; mi++) {
+      if (float(mi) >= msCount) break;
+      float msI = float(mi);
+      float msDir = 1.0 - 2.0 * mod(msI, 2.0);
+      msFog += field(vec2(warped.x * 0.8 + t * sp.z * 0.1 * (1.0 + msI * 0.4) * msDir, warped.y * (1.6 + msI * 0.7) + msI * 3.3));
+    }
+    float msV = msFog / msCount * 2.0 + 0.5;
+    float msAlpha = smoothstep(0.1 + (1.0 - sp.w) * 0.35, 0.6 + sp.y * 0.5, msV);
+    colorPosition = wrapT(basePosition * 0.4 + msV * 0.35 + 0.2);
+    alpha *= msAlpha;
+  } else if (uStyle < 24.5) {
+    /* retro sunset: sp = horizon, slit density, sun size, glow */
+    float ssR = max(sp.z, 0.05);
+    vec2 ssC = vec2(0.0, sp.x);
+    float ssD = length(warped - ssC);
+    float ssSun = 1.0 - smoothstep(ssR - 0.012, ssR + 0.012, ssD);
+    float ssLow = clamp((ssC.y - warped.y) / ssR, 0.0, 1.0);
+    float ssSlit = 1.0 - step(0.5, fract(warped.y * sp.y * 4.0)) * smoothstep(0.0, 0.8, ssLow);
+    float ssDisc = 0.78 + 0.2 * clamp(1.0 - ssD / ssR, 0.0, 1.0);
+    colorPosition = mix(basePosition * 0.6, ssDisc, ssSun * ssSlit);
+    colorPosition = wrapT(colorPosition * (0.55 + 0.45 * smoothstep(ssC.y - 0.03, ssC.y + 0.03, warped.y)));
+    rimLight = exp(-max(ssD - ssR, 0.0) * 7.0) * sp.w * 0.7;
+  } else if (uStyle < 25.5) {
+    /* pixel mosaic: sp = tiles, gap, shuffle speed, contrast */
+    float pxN = max(sp.x, 4.0);
+    vec2 pxCell = floor(warped * pxN);
+    vec2 pxF = fract(warped * pxN);
+    float pxV = field(pxCell * 0.17 + vec2(t * sp.z * 0.2, -t * sp.z * 0.13));
+    float pxHash = fract(sin(dot(pxCell, vec2(12.9898, 78.233))) * 43758.5453);
+    colorPosition = wrapT(basePosition * 0.35 + pxV * 0.9 * (0.4 + sp.w) + pxHash * 0.12 * sp.w + 0.4);
+    float pxEdge = smoothstep(0.5 - sp.y - 0.02, 0.5 - sp.y + 0.01, max(abs(pxF.x - 0.5), abs(pxF.y - 0.5)));
+    alpha *= 1.0 - pxEdge * step(0.001, sp.y);
+  } else {
+    /* galaxy spiral: sp = arms, twist, core size, spin */
+    float gxR = length(warped) + 0.0001;
+    float gxA = atan(warped.y, warped.x);
+    float gxArms = max(floor(sp.x + 0.5), 1.0);
+    float gxSpiral = sin(gxA * gxArms + gxR * sp.y * 2.0 - t * sp.w * 1.2 + n * 1.4) * 0.5 + 0.5;
+    float gxCore = exp(-gxR / max(sp.z * 0.4, 0.02));
+    colorPosition = wrapT(basePosition * 0.3 + gxSpiral * 0.3 + (1.0 - gxR) * 0.25 + 0.25);
+    alpha *= clamp(0.45 + 0.55 * gxSpiral * exp(-gxR * 0.9) + gxCore, 0.0, 1.0);
+    rimLight = gxCore * 0.9;
   }
 
   float colorDistortion = interactionWarp * (interactionWave * 0.12 + cos(pointerDistance * 13.0 + uClock) * 0.06);
-  colorPosition = wrapT(colorPosition + colorDistortion + displacement * displacementDirection * 0.8 + advancedPaletteShift);
+  colorPosition = wrapT(colorPosition + colorDistortion + displacement * displacementDirection * 0.8 + rgPal);
   cssPosition = clamp(cssPosition + colorDistortion, 0.0, 1.0);
   vec4 color = samplePalette(colorPosition);
   color.rgb += samplePalette(wrapT(colorPosition + 0.06)).rgb * rimLight * 0.22;
   if (uMeshCount > 0.5) {
     vec4 meshColor = sampleMesh(warped / vec2(uAspect, 1.0) + 0.5);
-    color.rgb = mix(color.rgb, meshColor.rgb, 0.82);
+    color.rgb = mix(color.rgb, meshColor.rgb, clamp(uMeshBlend, 0.0, 1.0));
     color.a = meshColor.a;
   }
   if (uLayerMixEnabled > 0.5) {
@@ -556,80 +591,20 @@ void main() {
     float mixAmount = clamp(uLayerMixStrength * (0.72 + 0.18 * sin(uClock * uLayerMixSpeed + n * 3.0) + influence * 0.45), 0.0, 1.0) * otherLayer.a;
     color.rgb = mix(color.rgb, blendLayerColors(color.rgb, otherLayer.rgb, uLayerMixMode), mixAmount);
   }
-  if (advancedChromatic > 0.0) {
+  if (rgChroma != 0.0) {
+    float chroma = clamp(abs(rgChroma), 0.0, 1.0) * sign(rgChroma);
     vec3 refracted = vec3(
-      samplePalette(wrapT(colorPosition + advancedChromatic * 0.09)).r,
+      samplePalette(wrapT(colorPosition + chroma * 0.09)).r,
       samplePalette(colorPosition).g,
-      samplePalette(wrapT(colorPosition - advancedChromatic * 0.09)).b
+      samplePalette(wrapT(colorPosition - chroma * 0.09)).b
     );
-    color.rgb = mix(color.rgb, refracted, advancedChromatic);
+    color.rgb = mix(color.rgb, refracted, abs(chroma));
   }
   float pointerGlow = exp(-pointerDistance * pointerDistance / max(0.0001, uInteractionRadius * uInteractionRadius * 0.32));
   float glow = pointerGlow * uPointerActive * uGlow * uInteractionStrength * (1.0 + velocityResponse);
-  float waveBands = pow(max(0.0, sin(pointerShapeDistance * 46.0 - uClock * 8.0)), 10.0)
-    * pointerFalloff * uPointerActive * uInteractionStrength;
-  float pulseRadius = uInteractionRadius * (0.18 + 0.82 * (0.5 + 0.5 * sin(uClock * 6.0)));
-  float pulseRing = exp(-pow((pointerDistance - pulseRadius) / max(0.008, uInteractionRadius * 0.12), 2.0)) * uPointerActive * uInteractionStrength;
-  float rippleRadius = fract(uClock * uRippleSpeed) * uInteractionRadius * 1.5;
-  float pointerRipple = exp(-pow((pointerDistance - rippleRadius) / max(0.008, uInteractionRadius * 0.1), 2.0))
-    * uPointerActive * uInteractionStrength * (1.0 - fract(uClock * uRippleSpeed) * 0.55);
-  float spotlight = (1.0 - smoothstep(uInteractionRadius * 0.12, uInteractionRadius, pointerDistance))
-    * uPointerActive * uInteractionStrength;
   float interactionColorPosition = fract(pointerDistance / max(0.001, uInteractionRadius) + uClock * uInteractionColorSpeed);
   vec3 paletteHighlight = sampleInteractionPalette(interactionColorPosition);
   vec3 highlight = mix(uInteractionColor, paletteHighlight, uInteractionColorMix);
-  float modeLight = 0.0;
-  if (uPointerMode > 2.5 && uPointerMode < 3.5) modeLight = glow;
-  else if (uPointerMode > 4.5 && uPointerMode < 5.5) modeLight = waveBands;
-  else if (uPointerMode > 7.5 && uPointerMode < 8.5) modeLight = pointerRipple;
-  else if (uPointerMode > 8.5 && uPointerMode < 9.5) modeLight = pulseRing;
-  else if (uPointerMode > 9.5 && uPointerMode < 10.5) modeLight = trailMask * uInteractionStrength;
-  else if (uPointerMode > 10.5 && uPointerMode < 11.5) modeLight = spotlight;
-  if (uPointerMode >= 13.0 && uPointerMode < 63.0) {
-    float phase = extraVariant * 0.6283185;
-    float rings = 0.5 + 0.5 * sin(pointerDistance * (20.0 + extraVariant * 4.0) - uClock * (3.0 + extraVariant * 0.4) + phase);
-    if (extraGroup < 0.5) modeLight = pointerFalloff * (0.35 + 0.35 * rings) * uPointerActive * uInteractionStrength;
-    else if (extraGroup < 1.5) modeLight = pointerFalloff * (0.3 + 0.3 * abs(sin(atan(direction.y, direction.x) * (2.0 + mod(extraVariant, 6.0)) + phase))) * uPointerActive * uInteractionStrength;
-    else if (extraGroup < 2.5) modeLight = pow(rings, 2.0 + mod(extraVariant, 4.0)) * pointerFalloff * uPointerActive * uInteractionStrength;
-    else if (extraGroup < 3.5) {
-      float angle = atan(direction.y, direction.x);
-      float beam = abs(sin(angle * (1.0 + mod(extraVariant, 5.0)) + phase + uClock * 0.25));
-      float flare = exp(-pointerDistance * pointerDistance / max(0.0001, uInteractionRadius * uInteractionRadius * 0.1));
-      if (extraVariant < 1.5) modeLight = pointerFalloff;
-      else if (extraVariant < 2.5) modeLight = (1.0 - smoothstep(0.04, 0.16, abs(direction.y))) * pointerFalloff;
-      else if (extraVariant < 3.5) modeLight = (1.0 - smoothstep(0.04, 0.16, abs(direction.x * direction.y))) * pointerFalloff;
-      else if (extraVariant < 4.5) modeLight = flare * (0.4 + 0.6 * rings);
-      else if (extraVariant < 5.5) modeLight = pointerFalloff * (1.0 - smoothstep(0.08, 0.25, beam));
-      else if (extraVariant < 6.5) modeLight = rings * rings * pointerFalloff;
-      else if (extraVariant < 7.5) modeLight = pointerFalloff * (1.0 - smoothstep(0.0, 0.25, abs(sin(angle * 8.0 + phase))));
-      else if (extraVariant < 8.5) modeLight = pointerFalloff * (0.25 + 0.75 * beam);
-      else modeLight = max(pointerFalloff * (1.0 - rings), flare);
-      modeLight *= uPointerActive * uInteractionStrength;
-    } else {
-      float trailShape = trailMask;
-      if (extraVariant < 1.5) trailShape *= smoothstep(0.05, 0.6, pointerSpeed);
-      else if (extraVariant < 2.5) trailShape *= 0.5 + 0.5 * sin(trailBehind * 30.0 - uClock * 6.0);
-      else if (extraVariant < 3.5) trailShape *= exp(-trailBehind / max(0.02, uInteractionRadius * 0.7));
-      else if (extraVariant < 4.5) trailShape *= 0.65 + 0.35 * sin(trailSide * 32.0);
-      else if (extraVariant < 5.5) trailShape *= 0.5 + 0.5 * cos(trailBehind * 16.0 + uClock * 3.0);
-      else if (extraVariant < 6.5) trailShape *= exp(-abs(trailSide) / max(0.01, uInteractionRadius * 0.12));
-      else if (extraVariant < 7.5) trailShape *= 0.5 + 0.5 * sin(trailSide * 20.0 + trailBehind * 14.0);
-      else if (extraVariant < 8.5) trailShape *= smoothstep(0.0, 0.8, pointerSpeed);
-      modeLight = max(trailShape, pointerFalloff * (0.18 + 0.22 * rings)) * uPointerActive * uInteractionStrength;
-    }
-  }
-  if (uPointerMode >= 63.0 && uPointerMode < 73.0) {
-    vec3 materialColor = sampleInteractionPalette(fract(pointerRatio * 0.65 + uClock * uInteractionColorSpeed + advancedEffect * 0.13));
-    color.rgb = mix(color.rgb, materialColor, clamp(advancedLight * 0.78, 0.0, 0.72));
-    color.rgb += vec3(1.0) * advancedSpecular * 0.82;
-    modeLight = clamp(advancedLight * 0.6 + advancedSpecular * 0.45, 0.0, 0.82);
-  }
-  if (uPointerMode >= 73.0 && uPointerMode < 75.0) {
-    vec3 electricColor = sampleInteractionPalette(fract(pointerShapeDistance * 4.0 + uClock * uInteractionColorSpeed));
-    color.rgb = mix(color.rgb, electricColor, clamp(electricLight * 0.8, 0.0, 0.85));
-    color.rgb += vec3(0.72, 0.88, 1.0) * electricLight * 0.75;
-    modeLight = clamp(electricLight * 0.85 + electricArc * 0.18, 0.0, 0.88);
-  }
   if (uSheen > 0.0) {
     vec3 pseudoNormal = normalize(vec3(-surfaceGradient * 18.0, 1.0));
     float specular = pow(max(0.0, dot(pseudoNormal, normalize(vec3(-0.35, 0.55, 1.0)))), 12.0);
@@ -650,13 +625,11 @@ void main() {
     vec3 splitColor = vec3(glitchRed.r, color.g, glitchBlue.b);
     color.rgb = mix(color.rgb, splitColor, clamp(glitchAmount * (0.4 + glitchGate * 0.6), 0.0, 0.8));
   }
-  if (uPointerMode > 11.5 && uPointerMode < 63.0) {
-    vec3 shiftedPaletteColor = samplePalette(wrapT(cssPosition + influence * 0.42)).rgb;
-    color.rgb = mix(color.rgb, shiftedPaletteColor, influence);
-  }
-  color.rgb = mix(color.rgb, highlight, clamp(modeLight, 0.0, 0.85));
+  /* interaction rig colour / light stage: after the CSS-ramp mix so reactions stay visible when shader mix is zero */
+  color.rgb = rigPost(color.rgb, vUv, colorPosition);
+  color.rgb += vec3(1.0) * rgSpec * 0.75;
   color.rgb = mix(color.rgb, highlight, clamp(rippleGlow, 0.0, 0.85));
-  float interactionAlpha = clamp(modeLight + rippleGlow * 0.5, 0.0, 0.85);
+  float interactionAlpha = clamp(rgAlpha + rgSpec * 0.6 + rippleGlow * 0.5, 0.0, 0.85);
   alpha = 1.0 - (1.0 - alpha) * (1.0 - interactionAlpha);
   color.rgb = finish(color.rgb, vUv, gl_FragCoord.xy);
   gl_FragColor = vec4(color.rgb, alpha);
