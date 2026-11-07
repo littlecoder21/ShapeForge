@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Gauge, MousePointerClick, Palette, SlidersHorizontal, Sparkles, Wind, ArrowLeft } from 'lucide-react';
+import { Gauge, MousePointerClick, Orbit, Palette, SlidersHorizontal, Sparkles, Wind, ArrowLeft } from 'lucide-react';
 import { Switch } from '../../shared/controls';
 import { describeRig } from '../interactive/rig/model';
 import { SHADER_STYLE_MAP } from '../interactive/styles';
@@ -11,6 +11,7 @@ import LayerStrip from './shader/LayerStrip';
 import StylePanel from './shader/StylePanel';
 import SetupPanel from './shader/SetupPanel';
 import MotionPanel from './shader/MotionPanel';
+import ProceduralPanel from './shader/ProceduralPanel';
 import InteractPanel from './shader/InteractPanel';
 import FinishPanel from './shader/FinishPanel';
 import '../shader-panel.css';
@@ -19,6 +20,7 @@ const SUB_PANELS = [
   { id: 'style', label: 'Style', icon: Palette, Body: StylePanel },
   { id: 'setup', label: 'Setup', icon: SlidersHorizontal, Body: SetupPanel },
   { id: 'motion', label: 'Motion', icon: Wind, Body: MotionPanel },
+  { id: 'procedural', label: 'Procedural', icon: Orbit, Body: ProceduralPanel },
   { id: 'interaction', label: 'Interact', icon: MousePointerClick, Body: InteractPanel },
   { id: 'finish', label: 'Finish & quality', icon: Sparkles, Body: FinishPanel },
 ] as const;
@@ -50,13 +52,23 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
     current => ({ ...current, shader: normalizeInteractiveSettings({ ...current.shader, rig: change(normalizeInteractiveSettings(current.shader).rig) }) }),
     coalesce ? { coalesce: `shader-rig-${coalesce}` } : {},
   ), [store]);
-  const patchLayers = useCallback((patch: Partial<ShaderLayerConfig>, ids: string[] = targetIds, coalesce?: string) => {
+  const patchLayers = useCallback((patch: Partial<ShaderLayerConfig> | ((layer: typeof project.layers[number]) => Partial<ShaderLayerConfig>), ids: string[] = targetIds, coalesce?: string) => {
     const wanted = new Set(ids);
-    store.update(current => ({
-      ...current,
-      shader: patch.enabled === true ? normalizeInteractiveSettings({ ...current.shader, enabled: true }) : current.shader,
-      layers: current.layers.map(layer => wanted.has(layer.id) ? { ...layer, shader: normalizeShaderLayer({ ...layer.shader, ...patch }) } : layer),
-    }), coalesce ? { coalesce: `shader-layer-${coalesce}` } : {});
+    store.update(current => {
+      let enableProjectShader = false;
+      const layers = current.layers.map(layer => {
+        if (!wanted.has(layer.id)) return layer;
+        const layerPatch = typeof patch === 'function' ? patch(layer) : patch;
+        if (layerPatch.enabled === true) enableProjectShader = true;
+        if (Object.keys(layerPatch).length === 0) return layer;
+        return { ...layer, shader: normalizeShaderLayer({ ...layer.shader, ...layerPatch }) };
+      });
+      return {
+        ...current,
+        shader: enableProjectShader ? normalizeInteractiveSettings({ ...current.shader, enabled: true }) : current.shader,
+        layers,
+      };
+    }, coalesce ? { coalesce: `shader-layer-${coalesce}` } : {});
   }, [store, targetIds]);
   const focusLayer = useCallback((id: string) => store.select(id), [store]);
 
@@ -66,10 +78,12 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
 
   if (!project.layers.length) return <Empty>Add a gradient layer before enabling shader effects.</Empty>;
   const enabledCount = project.layers.filter(layer => layer.shader?.enabled).length;
+  const procedural = primary?.shader?.procedural;
   const summary: Record<SubPanelId, string> = {
     style: primary ? SHADER_STYLE_MAP[primary.shader?.style ?? settings.style].label : '—',
     setup: `${enabledCount} of ${project.layers.length} layers`,
     motion: `${settings.animate ? 'Animated' : 'Still'} · ${settings.speed.toFixed(2)}×`,
+    procedural: procedural?.enabled ? `${procedural.mode === 'full' ? 'Full' : 'Hybrid'} · up to ${procedural.points.max} points` : 'Off',
     interaction: describeRig(settings.rig),
     finish: `${settings.quality[0].toUpperCase()}${settings.quality.slice(1)} quality`,
   };

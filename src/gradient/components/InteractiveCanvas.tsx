@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { InteractiveRenderer } from '../interactive/core/InteractiveRenderer';
+import { InteractiveRenderer } from '../../interactive/core/InteractiveRenderer';
 import { gradientLayerToShader, interactionColorsForLayer, supportsDirectShaderGeometry } from '../interactive/adapter';
 import { normalizeInteractiveSettings, type InteractiveLayerState, type InteractiveRendererStatus } from '../interactive/types';
 import { resolveStyleParams } from '../interactive/styles';
@@ -40,6 +40,8 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
   }), [config, layer.shader?.controls, layer.shader?.style]);
   const rendererSettings = useMemo(() => ({
     ...settings,
+    // Keep total preview fragment work roughly level as shader layers are stacked.
+    resolutionScale: settings.resolutionScale / Math.sqrt(Math.max(1, project.layers.filter(item => item.visible && item.shader?.enabled).length)),
     interactionColor: settings.interactionColorSource === 'layer'
       ? interactionColorsForLayer(adapted.palette)[0] ?? settings.interactionColor
       : settings.interactionColor,
@@ -47,12 +49,14 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
       ? interactionColorsForLayer(adapted.palette)
       : settings.interactionColors,
     renderBackend: settings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' as const : settings.renderBackend,
-  }), [settings, layer, adapted.palette]);
+  }), [settings, layer, adapted.palette, project.layers]);
   const styleParamsKey = (layer.shader?.styleParams ?? []).join(',');
   const layerState = useMemo<InteractiveLayerState>(() => ({
     styleParams: resolveStyleParams(settings.style, layer.shader?.styleParams),
     reaction: layer.shader?.interact === false ? 0 : layer.shader?.reaction ?? 1,
   }), [settings.style, styleParamsKey, layer.shader?.interact, layer.shader?.reaction]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** the procedural engine config of this layer (null = the manual gradient only) */
+  const procedural = layer.shader?.procedural ?? null;
   const backendRef = useRef(rendererSettings.renderBackend);
   backendRef.current = rendererSettings.renderBackend;
   const textMaskSize = `${100 / (1 + 2 * bleedOf(layer, project.canvas))}%`;
@@ -72,6 +76,7 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
       meshPoints: adapted.meshPoints,
       meshBase: adapted.meshBase,
       layerMix,
+      procedural,
       onStatusChange: (value, message = '') => {
         canvas.parentElement?.classList.toggle('gs-webgl-ready', backendRef.current === 'webgl' && value === 'ready');
         setStatus(previous => previous.value === value && previous.message === message ? previous : { value, message });
@@ -87,10 +92,10 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    rendererRef.current?.update({ palette: adapted.palette, settings: rendererSettings, layer: layerState, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase, layerMix });
+    rendererRef.current?.update({ palette: adapted.palette, settings: rendererSettings, layer: layerState, geometry: adapted.geometry, meshPoints: adapted.meshPoints, meshBase: adapted.meshBase, layerMix, procedural });
     const canvas = canvasRef.current;
     canvas?.parentElement?.classList.toggle('gs-webgl-ready', rendererSettings.renderBackend === 'webgl' && rendererRef.current?.getStatus().status === 'ready');
-  }, [adapted, rendererSettings, layerMix, layerState]);
+  }, [adapted, rendererSettings, layerMix, layerState, procedural]);
 
   return <>
     <canvas

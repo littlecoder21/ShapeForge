@@ -1,19 +1,22 @@
-import { normalizePointerMode, type PointerMode } from './pointerModes';
-import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type InteractiveStyle } from './styles';
-import { instantiateRig, normalizeRig, type InteractionRig } from './rig/model';
-import { defaultRig, rigFromLegacyMode } from './rig/presets';
+import { normalizePointerMode, type PointerMode } from '../gradient/interactive/pointerModes';
+import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type InteractiveStyle } from '../gradient/interactive/styles';
+import { instantiateRig, normalizeRig, type InteractionRig } from '../gradient/interactive/rig/model';
+import { defaultRig, rigFromLegacyMode } from '../gradient/interactive/rig/presets';
+import { normalizeProcedural, type ProceduralConfig } from '../procedural/types';
 
-export type { InteractiveStyle } from './styles';
+export type { InteractiveStyle } from '../gradient/interactive/styles';
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
-export type { PointerMode } from './pointerModes';
-export type { InteractionRig } from './rig/model';
+export type { PointerMode } from '../gradient/interactive/pointerModes';
+export type { InteractionRig } from '../gradient/interactive/rig/model';
+export type { ProceduralConfig } from '../procedural/types';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 export type ShaderLayerColorBlend = 'mix' | 'multiply' | 'screen' | 'overlay' | 'add';
 export type IdlePath = 'drift' | 'circle' | 'figure8' | 'scan' | 'wander';
 export const IDLE_PATHS: IdlePath[] = ['drift', 'circle', 'figure8', 'scan', 'wander'];
 export type ShaderLayerControls = Pick<InteractiveSettings,
   'speed' | 'intensity' | 'distortion' | 'distortionScale' | 'turbulence'
-  | 'timeOffset' | 'flowAngle' | 'flowDrift' | 'breath' | 'breathRate' | 'rotation' | 'zoom'>;
+  | 'timeOffset' | 'flowAngle' | 'flowDrift' | 'breath' | 'breathRate' | 'rotation' | 'zoom'
+  | 'meshDrift' | 'meshSpread' | 'meshBlend'>;
 
 export interface ShaderLayerConfig {
   enabled: boolean;
@@ -29,6 +32,8 @@ export interface ShaderLayerConfig {
   mixMode: ShaderLayerColorBlend;
   mixStrength: number;
   mixSpeed: number;
+  /** the procedural gradient engine (see procedural/). Absent = the layer keeps its manual gradient. */
+  procedural?: ProceduralConfig;
 }
 
 export interface ShaderGeometry {
@@ -78,6 +83,12 @@ export interface InteractiveSettings {
   breathRate: number;
   rotation: number;
   zoom: number;
+  /** extra animated travel for mesh-gradient points, in canvas-height units */
+  meshDrift: number;
+  /** broadens mesh influence without changing individual point sizes */
+  meshSpread: number;
+  /** 0 = style field only, 1 = mesh colors only */
+  meshBlend: number;
   interactionEnabled: boolean;
   touchEnabled: boolean;
   /** legacy id of the old pointer style. Only used to migrate old projects into `rig`. */
@@ -130,6 +141,8 @@ export interface InteractiveUpdate {
   geometry?: ShaderGeometry;
   meshPoints?: ShaderMeshPoint[];
   meshBase?: string;
+  /** the layer's procedural engine; null / disabled = the manual gradient only */
+  procedural?: ProceduralConfig | null;
 }
 
 export type InteractiveRendererStatus = 'ready' | 'compiling' | 'fallback' | 'context-lost' | 'error';
@@ -153,6 +166,9 @@ export const DEFAULT_INTERACTIVE_SETTINGS: Readonly<InteractiveSettings> = Objec
   breathRate: 0.25,
   rotation: 0,
   zoom: 1,
+  meshDrift: 0,
+  meshSpread: 0,
+  meshBlend: 0.82,
   interactionEnabled: true,
   touchEnabled: true,
   pointerMode: 'swirl',
@@ -221,6 +237,9 @@ export const MOTION_RANGES = {
   breathRate: { min: 0.02, max: 2 },
   rotation: { min: -0.6, max: 0.6 },
   zoom: { min: 0.4, max: 3 },
+  meshDrift: { min: 0, max: 1 },
+  meshSpread: { min: 0, max: 1 },
+  meshBlend: { min: 0, max: 1 },
 } as const;
 export const LAYER_CONTROL_KEYS = Object.keys(MOTION_RANGES) as (keyof ShaderLayerControls)[];
 
@@ -249,6 +268,7 @@ export function normalizeShaderLayer(raw: unknown): ShaderLayerConfig {
       : DEFAULT_SHADER_LAYER.mixMode,
     mixStrength: Number.isFinite(Number(value.mixStrength)) ? Math.min(1, Math.max(0, Number(value.mixStrength))) : DEFAULT_SHADER_LAYER.mixStrength,
     mixSpeed: Number.isFinite(Number(value.mixSpeed)) ? Math.min(2, Math.max(0, Number(value.mixSpeed))) : DEFAULT_SHADER_LAYER.mixSpeed,
+    ...(value.procedural && typeof value.procedural === 'object' ? { procedural: normalizeProcedural(value.procedural) } : {}),
   };
 }
 
@@ -286,6 +306,9 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     breathRate: motion('breathRate'),
     rotation: motion('rotation'),
     zoom: motion('zoom'),
+    meshDrift: motion('meshDrift'),
+    meshSpread: motion('meshSpread'),
+    meshBlend: motion('meshBlend'),
     interactionEnabled: value.interactionEnabled !== false,
     touchEnabled: value.touchEnabled !== false,
     pointerMode,

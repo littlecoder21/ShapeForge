@@ -345,6 +345,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
       gl.uniform4fv(locations['uRuleC[0]'], rigBuffers.c);
       gl.uniform4fv(locations['uRuleD[0]'], rigBuffers.d);
       gl.uniform4fv(locations['uRuleE[0]'], rigBuffers.e);
+      gl.uniform4fv(locations['uRuleF[0]'], rigBuffers.f);
       gl.uniform4fv(locations['uTrail[0]'], rigBuffers.trail);
       gl.uniform3f(locations.uTouch2, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
@@ -573,7 +574,7 @@ export function interactiveGlslExport(project?: GradientProject) {
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
     `// Styles (uStyle): ${SHADER_STYLE_IDS.map(id => `${SHADER_STYLE_INDEX[id]} ${id}`).join(', ')}. uStyleP carries the four style parameters.`,
     '// The interaction (pointer / touch reaction) is generated from the interaction builder: only the rules in use are compiled.',
-    '// uRuleB / uRuleC / uRuleD / uRuleE hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
+    '// uRuleB / uRuleC / uRuleD / uRuleE / uRuleF hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
     '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',

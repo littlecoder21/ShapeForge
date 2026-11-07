@@ -1,40 +1,61 @@
-import { layeredOutput } from '../engine/css';
-import type { ColorSpace, GradientLayer, GradientProject } from '../engine/model';
-import { gradientLayerToShader, gradientProjectToShaderPalette, interactionColorsForLayer, supportsDirectShaderGeometry, type ShaderLayerAdapter } from './adapter';
+import { layeredOutput } from '../gradient/engine/css';
+import type { ColorSpace, GradientLayer, GradientProject } from '../gradient/engine/model';
+import { gradientLayerToShader, gradientProjectToShaderPalette, interactionColorsForLayer, supportsDirectShaderGeometry, type ShaderLayerAdapter } from '../gradient/interactive/adapter';
 import { normalizeInteractiveSettings, type InteractiveLayerState, type InteractiveSettings, type ShaderLayerColorBlend } from './types';
-import { POINTER_MODES } from './pointerModes';
-import { bakePaletteLut, encodePaletteLut } from './paletteLut';
+import { POINTER_MODES } from '../gradient/interactive/pointerModes';
+import { bakePaletteLut, encodePaletteLut } from '../gradient/interactive/paletteLut';
 import { UNIFORM_NAMES } from './uniforms';
-import { assembleFragmentShader } from './rig/glsl';
-import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from './styles';
-import fragmentShaderTemplate from './shaders/gradient.frag.glsl?raw';
-import vertexShaderSource from './shaders/gradient.vert.glsl?raw';
-import rigRuntimeSource from './rigRuntime.js?raw';
+import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from '../gradient/interactive/styles';
+import { assembleProceduralShader } from '../procedural/glsl';
+import { isProceduralActive, type ProceduralConfig } from '../procedural/types';
+import fragmentShaderTemplate from '../gradient/interactive/shaders/gradient.frag.glsl?raw';
+import vertexShaderSource from '../gradient/interactive/shaders/gradient.vert.glsl?raw';
+import rigRuntimeSource from '../gradient/interactive/rigRuntime.js?raw';
+import proceduralRuntimeSource from '../procedural/proceduralRuntime.js?raw';
 
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+const escapeAttributeValue = (value: unknown) => escapeJson(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 const QUALITY_OCTAVES = { low: 3, medium: 4, high: 5, ultra: 6 } as const;
 
-/** The shared pointer / drive / packing runtime, as an expression that evaluates to its namespace object. */
-function rigRuntimeExpression() {
-  const names = [...rigRuntimeSource.matchAll(/^export\s+(?:function|const)\s+(\w+)/gm)].map(match => match[1]);
-  const body = rigRuntimeSource.replace(/^export\s+/gm, '');
+/** Turns a plain-JS runtime file (`export function …`) into an expression that evaluates to its namespace object. */
+function runtimeExpression(source: string) {
+  const names = [...source.matchAll(/^export\s+(?:function|const)\s+(\w+)/gm)].map(match => match[1]);
+  const body = source.replace(/^export\s+/gm, '');
   return `(function () {\n${body}\nreturn { ${names.join(', ')} };\n})()`;
 }
 
-/** The fragment shader for a project: the template plus exactly the interaction rules the project uses. */
-export function projectFragmentSource(settings: Pick<InteractiveSettings, 'rig' | 'quality'>) {
-  return assembleFragmentShader(fragmentShaderTemplate, settings.rig, {
-    octaves: QUALITY_OCTAVES[settings.quality],
-    warpDepth: settings.quality === 'low' ? 1 : 2,
-  });
+/** The shared pointer / drive / packing runtime, as an expression that evaluates to its namespace object. */
+function rigRuntimeExpression() {
+  return runtimeExpression(rigRuntimeSource);
 }
 
-export function shaderRuntime(fragmentSource: string, rootExpression = 'document') {
+/** The procedural engine's runtime (point generation, motion, forces, packing): the same file the editor preview runs. */
+function proceduralRuntimeExpression() {
+  return runtimeExpression(proceduralRuntimeSource);
+}
+
+/** The fragment shader for a project: the template plus exactly the interaction rules (and, when a layer uses it, the
+ *  procedural distortion types) the project uses. */
+export function projectFragmentSource(
+  settings: Pick<InteractiveSettings, 'rig' | 'quality'>,
+  procedural: Pick<ProceduralConfig, 'enabled' | 'distortion'> | null = null,
+) {
+  return assembleProceduralShader(fragmentShaderTemplate, settings.rig, {
+    octaves: QUALITY_OCTAVES[settings.quality],
+    warpDepth: settings.quality === 'low' ? 1 : 2,
+  }, procedural);
+}
+
+/** `fragmentSources` holds every distinct shader the page needs (usually one); a canvas picks its own with
+ *  `data-shader-fragment`. A plain string is accepted for the single-shader case. */
+export function shaderRuntime(fragmentSources: string | string[], rootExpression = 'document') {
+  const sources = Array.isArray(fragmentSources) ? fragmentSources : [fragmentSources];
   return `
 (function (root) {
   const RigRuntime = ${rigRuntimeExpression()};
+  const ProcRuntime = ${proceduralRuntimeExpression()};
   const vertexSource = ${escapeJson(vertexShaderSource)};
-  const fragmentSource = ${escapeJson(fragmentSource)};
+  const fragmentSources = ${escapeJson(sources)};
   const maxStops = 8, maxRipples = 8, maxRenderPixels = 1200000, maxRenderScale = 1.25;
   const uniformNames = ${JSON.stringify(UNIFORM_NAMES)};
   const styleIndex = ${JSON.stringify(SHADER_STYLE_INDEX)};
@@ -42,6 +63,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
   const glOptions = { alpha: true, antialias: false, depth: false, premultipliedAlpha: false, powerPreference: 'default' };
   root.querySelectorAll('[data-shader-canvas]').forEach(canvas => {
   const settings = JSON.parse(canvas.dataset.shaderSettings);
+  const fragmentSource = fragmentSources[parseInt(canvas.dataset.shaderFragment || '0', 10)] || fragmentSources[0];
   const palette = JSON.parse(canvas.dataset.shaderPalette);
   if (!palette.length) palette.push({ color: '#7c5cff', position: 0 }, { color: '#22d3ee', position: 1 });
   const geometry = JSON.parse(canvas.dataset.shaderGeometry);
@@ -66,6 +88,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
   });
   const rigBuffers = RigRuntime.createRigBuffers();
   const rigFrame = {};
+  const procFrame = {};
   const activeRules = (rig.rules || []).filter(rule => rule.enabled).slice(0, RigRuntime.RIG_MAX_RULES);
   const rigAmbient = activeRules.some(rule => rule.source === 'orbit' || rule.source === 'fixed' || (rule.source === 'symmetry' && rule.sp2 !== 0) || (rule.drives || []).some(drive => String(drive.source).indexOf('lfo') === 0));
   const colors = new Float32Array(maxStops * 4), alphas = new Float32Array(maxStops);
@@ -85,6 +108,10 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     layerMixLut = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) layerMixLut[i] = binary.charCodeAt(i);
   }
+  // procedural engine: the same runtime the editor uses, fed the same config and the layer's palette LUT
+  const proceduralState = settings.procedural && settings.procedural.enabled
+    ? ProcRuntime.createProceduralState(settings.procedural, { lut: paletteLut && paletteLut.length === 512 * 4 ? paletteLut : null, octaveCap: { low: 3, medium: 4, high: 5, ultra: 6 }[settings.quality] || 4 })
+    : null;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const convertShader = (source, vertex) => {
     if (!isWebGL2) return source;
@@ -280,6 +307,9 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     gl.uniform1f(locations.uBreathRate, settings.breathRate == null ? 0.25 : settings.breathRate);
     gl.uniform1f(locations.uRotation, settings.rotation || 0);
     gl.uniform1f(locations.uZoom, settings.zoom == null ? 1 : settings.zoom);
+    gl.uniform1f(locations.uMeshDrift, settings.meshDrift || 0);
+    gl.uniform1f(locations.uMeshSpread, settings.meshSpread || 0);
+    gl.uniform1f(locations.uMeshBlend, settings.meshBlend == null ? 0.82 : settings.meshBlend);
     gl.uniform1f(locations.uInteractionRadius, settings.interactionRadius);
     gl.uniform1f(locations.uInteractionStrength, settings.interactionStrength * Math.min(1, Math.abs(reaction)));
     gl.uniform1f(locations.uGlow, settings.glow);
@@ -330,6 +360,13 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     }
     gl.uniform1f(locations.uRippleCount, activeCount);
     gl.uniform4fv(locations['uRipples[0]'], rippleData);
+    if (proceduralState) {
+      Object.assign(procFrame, pointer);
+      if (idle) { procFrame.x = idle.x; procFrame.y = idle.y; procFrame.active = pointerActive; }
+      if (!(reacts || idlePointer)) { procFrame.active = 0; procFrame.down = 0; procFrame.t2active = 0; }
+      proceduralState.step(delta, procFrame, canvas.width / Math.max(1, canvas.height), animated ? 1 : 0);
+      ProcRuntime.uploadProceduralUniforms(gl, locations, proceduralState.buffers);
+    }
     if (activeRules.length) {
       Object.assign(rigFrame, pointer);
       rigFrame.clock = clock;
@@ -341,6 +378,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
       gl.uniform4fv(locations['uRuleC[0]'], rigBuffers.c);
       gl.uniform4fv(locations['uRuleD[0]'], rigBuffers.d);
       gl.uniform4fv(locations['uRuleE[0]'], rigBuffers.e);
+      gl.uniform4fv(locations['uRuleF[0]'], rigBuffers.f);
       gl.uniform4fv(locations['uTrail[0]'], rigBuffers.trail);
       gl.uniform3f(locations.uTouch2, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
@@ -371,7 +409,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     }
     const pointer = draw(delta);
     const calm = reducedMotion.matches;
-    if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003)) schedule();
+    if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003) || (proceduralState && (proceduralState.isSettling() || (settings.animate && !calm && proceduralState.isAnimated())))) schedule();
   };
   const position = event => {
     const rect = canvas.getBoundingClientRect();
@@ -429,6 +467,17 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
 `;
 }
 
+/** The layer's procedural engine when it is switched on, else null. */
+function proceduralOf(layer: GradientLayer | null): ProceduralConfig | null {
+  const config = layer?.shader?.procedural;
+  return config && isProceduralActive(config) ? config : null;
+}
+
+/** Settings as the runtime reads them: the layer's shader settings plus its procedural config (when it has one). */
+function exportedSettings(entry: { settings: InteractiveSettings; procedural: ProceduralConfig | null }) {
+  return entry.procedural ? { ...entry.settings, procedural: entry.procedural } : entry.settings;
+}
+
 function makeDocument(project: GradientProject, useMarkers = false) {
   const layers = layeredOutput(project);
   const defaultSettings = normalizeInteractiveSettings(project.shader);
@@ -442,6 +491,9 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     adapter: ShaderLayerAdapter;
     layerState: InteractiveLayerState;
     layerMix: { palette: ShaderLayerAdapter['palette']; space: ColorSpace; mode: ShaderLayerColorBlend; strength: number; speed: number };
+    procedural: ProceduralConfig | null;
+    /** which entry of the page's shader source list this canvas compiles */
+    fragmentIndex: number;
   }[] = targets.map(layer => {
     const adapter = gradientLayerToShader(layer, project);
     const layerInteractionColors = interactionColorsForLayer(adapter.palette);
@@ -450,6 +502,8 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     const style = layer.shader?.style ?? defaultSettings.style;
     return {
       layer,
+      procedural: proceduralOf(layer),
+      fragmentIndex: 0,
       layerState: {
         styleParams: resolveStyleParams(style, layer.shader?.styleParams),
         reaction: layer.shader?.interact === false ? 0 : layer.shader?.reaction ?? 1,
@@ -481,9 +535,21 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       adapter: { ...fallbackPalette, geometry: { kind: 'linear' as const, angle: 135, originX: 50, originY: 50, radiusX: 50, radiusY: 50 }, meshPoints: [], meshBase: '' },
       layerState: { styleParams: resolveStyleParams(defaultSettings.style), reaction: 1 },
       layerMix: { palette: [], space: 'srgb', mode: 'mix', strength: 0, speed: 0 },
+      procedural: null,
+      fragmentIndex: 0,
     });
   }
-  const paletteAdapter = { ...entries[0].adapter, notes: entries.flatMap(entry => entry.adapter.notes) };
+  // Procedural distortion types are compiled per stage, so layers can need different shaders. Identical sources are shared.
+  const fragmentSources: string[] = [];
+  entries.forEach(entry => {
+    const source = projectFragmentSource(defaultSettings, entry.procedural);
+    const found = fragmentSources.indexOf(source);
+    entry.fragmentIndex = found >= 0 ? found : fragmentSources.push(source) - 1;
+  });
+  const proceduralNotes = entries.some(entry => entry.procedural)
+    ? ['This page includes layers that use the procedural gradient engine. Where WebGL is unavailable, those layers show their manual gradient instead.']
+    : [];
+  const paletteAdapter = { ...entries[0].adapter, notes: [...entries.flatMap(entry => entry.adapter.notes), ...proceduralNotes] };
   const rowMatches = [...layers.html.matchAll(/^  <i class="[^"]*">/gm)];
   const layerOrder = [...visibleLayers].reverse();
   const escapeAttribute = (value: unknown) => escapeJson(value)
@@ -499,8 +565,8 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
       : '';
     const attributes = useMarkers
-      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__"`
-      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}"`;
+      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-fragment="${entry.fragmentIndex}" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__"`
+      : `data-shader-settings="${escapeAttribute(exportedSettings(entry))}" data-shader-fragment="${entry.fragmentIndex}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}"`;
     const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;pointer-events:auto;touch-action:pan-y"></canvas>`;
     if (row) {
       html = html.replace(row, `${row.replace(/">$/, ' gs-shader-export-layer">')}${canvas}`);
@@ -514,17 +580,16 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     'html,body{margin:0;min-height:100%;}body{min-height:100vh;}canvas[data-shader-canvas]{display:block;} .gs-shader-export-layer::after{z-index:2;} .gs-shader-export-layer.gs-webgl-ready{background-image:none!important;background-color:transparent!important;} .gs-shader-export-layer.gs-webgl-ready>.mesh-point-0,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-1,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-2,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-3,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-4,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-5,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-6,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-7{display:none!important;}',
   ].join('\n');
   const markup = html;
-  const fragmentSource = projectFragmentSource(defaultSettings);
   const body = [
     '<!doctype html>',
     '<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
     '<title>Interactive gradient background</title>',
     `<style>${stylesheet}</style>`,
     `</head><body>${html}`,
-    `<script>${shaderRuntime(fragmentSource)}</script>`,
+    `<script>${shaderRuntime(fragmentSources)}</script>`,
     '</body></html>',
   ].join('\n');
-  return { body, markup, stylesheet, palette: paletteAdapter, entries, fragmentSource, defaultSettings };
+  return { body, markup, stylesheet, palette: paletteAdapter, entries, fragmentSource: fragmentSources[0], fragmentSources, defaultSettings };
 }
 
 export function interactiveHtmlExport(project: GradientProject) {
@@ -534,10 +599,10 @@ export function interactiveHtmlExport(project: GradientProject) {
 }
 
 export function interactiveJavaScriptExport(project: GradientProject) {
-  const { markup, stylesheet, fragmentSource } = makeDocument(project);
+  const { markup, stylesheet, fragmentSources } = makeDocument(project);
   return `const SHAPEFORGE_GRADIENT_MARKUP = ${JSON.stringify(markup)};
 const SHAPEFORGE_GRADIENT_STYLES = ${JSON.stringify(stylesheet)};
-const SHAPEFORGE_SHADER_RUNTIME = ${JSON.stringify(shaderRuntime(fragmentSource, 'document.currentScript.parentElement'))};
+const SHAPEFORGE_SHADER_RUNTIME = ${JSON.stringify(shaderRuntime(fragmentSources, 'document.currentScript.parentElement'))};
 
 function mountShapeForgeGradient(target = document.body) {
   const host = typeof target === 'string' ? document.querySelector(target) : target;
@@ -563,41 +628,57 @@ mountShapeForgeGradient();`;
 
 export function interactiveGlslExport(project?: GradientProject) {
   const settings = normalizeInteractiveSettings(project?.shader);
+  // one extra fragment shader per distinct set of procedural distortion types the project's layers use
+  const variants: { label: string; source: string }[] = [];
+  const baseSource = projectFragmentSource(settings);
+  (project?.layers ?? []).filter(layer => layer.visible && layer.shader?.enabled).forEach(layer => {
+    const procedural = proceduralOf(layer);
+    if (!procedural) return;
+    const source = projectFragmentSource(settings, procedural);
+    if (source !== baseSource && !variants.some(variant => variant.source === source)) {
+      variants.push({ label: procedural.distortion.map(stage => stage.type).join(', '), source });
+    }
+  });
   return [
     '// ShapeForge interactive gradient shader sources',
     '// Vertex shader: aPosition (clip-space vec2), aUv (normalized vec2).',
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
     `// Styles (uStyle): ${SHADER_STYLE_IDS.map(id => `${SHADER_STYLE_INDEX[id]} ${id}`).join(', ')}. uStyleP carries the four style parameters.`,
     '// The interaction (pointer / touch reaction) is generated from the interaction builder: only the rules in use are compiled.',
-    '// uRuleB / uRuleC / uRuleD / uRuleE hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
-    '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom.',
+    '// uRuleB / uRuleC / uRuleD / uRuleE / uRuleF hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
+    '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
     '// Finishing: uToneMap, uVignette, uSheen, uGrain; palette texture: uPaletteLut.',
+    '// Procedural engine (only in the procedural variants below): uProcPoints[12], uProcColors[12], uProcA..uProcD, uProcGrade, uProcBase,',
+    '// uProcWarpA/B/C[3]. The CPU side that fills them (seeded points, motion, forces) is procedural/proceduralRuntime.js.',
     `// Legacy pointer style ids (now presets in the builder): ${POINTER_MODES.map(mode => mode.id).join(', ')}`,
     '',
     '// --- vertex.glsl ---',
     vertexShaderSource,
     '',
     '// --- fragment.glsl ---',
-    projectFragmentSource(settings),
+    baseSource,
+    ...variants.flatMap((variant, index) => ['', `// --- fragment.procedural-${index + 1}.glsl (distortion stages: ${variant.label}) ---`, variant.source]),
   ].join('\n');
 }
 
 export function interactiveReactExport(project: GradientProject) {
   const { body, entries } = makeDocument(project, true);
-  const template = escapeJson(body);
-  const settings = entries.map(entry => entry.settings);
+  const layerMixSettings = entries.map(entry => entry.layerMix);
+  const layerMixLuts = entries.map(entry => entry.layerMix.palette.length
+    ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
+    : '');
+  const template = escapeJson(body
+    .replace(/__SHADER_MIX_CONFIG_(\d+)__/g, (_match, index: string) => escapeAttributeValue(layerMixSettings[Number(index)] ?? {}))
+    .replace(/__SHADER_MIX_LUT_(\d+)__/g, (_match, index: string) => layerMixLuts[Number(index)] ?? ''));
+  const settings = entries.map(entry => exportedSettings(entry));
   const palettes = entries.map(entry => entry.adapter.palette);
   const geometries = entries.map(entry => entry.adapter.geometry);
   const meshPoints = entries.map(entry => entry.adapter.meshPoints);
   const meshBases = entries.map(entry => entry.adapter.meshBase);
   const paletteLuts = entries.map(entry => encodePaletteLut(bakePaletteLut(entry.adapter.palette, entry.adapter.geometry.space ?? 'srgb')));
-  const layerMixSettings = entries.map(entry => entry.layerMix);
   const layerStates = entries.map(entry => entry.layerState);
-  const layerMixLuts = entries.map(entry => entry.layerMix.palette.length
-    ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
-    : '');
   const pointerModeType = POINTER_MODES.map(mode => `'${mode.id}'`).join(' | ');
   const styleType = SHADER_STYLE_IDS.map(id => `'${id}'`).join(' | ');
   return `import { useMemo } from 'react';
@@ -605,7 +686,8 @@ import type { CSSProperties } from 'react';
 
 /* The interaction rules (settings.rig) are compiled into the shader when the export is made.
  * You can change their numbers at runtime (amounts, radii, parameters, drives); adding or removing rules,
- * or changing an effect / shape / falloff / source, needs a new export. */
+ * or changing an effect / shape / falloff / source, needs a new export. The same goes for the procedural
+ * engine (settings.procedural): its numbers can change at runtime, the distortion stage types cannot. */
 export interface ShaderSettings {
   enabled: boolean;
   style: ${styleType};
@@ -630,6 +712,8 @@ export interface ShaderSettings {
   /** legacy id, kept for old projects; the active behaviour is described by \`rig\` */
   pointerMode: ${pointerModeType};
   rig?: unknown;
+  /** the layer's procedural gradient engine config, when it uses one */
+  procedural?: unknown;
   interactionColorSource?: 'layer' | 'custom';
   interactionColor: string;
   interactionColors?: string[];
@@ -680,8 +764,6 @@ const DEFAULT_GEOMETRIES: ShaderGeometry[] = ${escapeJson(geometries)};
 const DEFAULT_MESH_POINTS: ShaderMeshPoint[][] = ${escapeJson(meshPoints)};
 const DEFAULT_MESH_BASES: string[] = ${escapeJson(meshBases)};
 const DEFAULT_PALETTE_LUTS: string[] = ${escapeJson(paletteLuts)};
-const DEFAULT_LAYER_MIX_SETTINGS = ${escapeJson(layerMixSettings)};
-const DEFAULT_LAYER_MIX_LUTS: string[] = ${escapeJson(layerMixLuts)};
 const DEFAULT_LAYER_STATES = ${escapeJson(layerStates)};
 const HTML_TEMPLATE = ${template};
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\\\u003c').replace(/>/g, '\\\\u003e').replace(/&/g, '\\\\u0026');
@@ -700,8 +782,6 @@ export default function InteractiveGradientBackground({ settings, palette, geome
     .replace(/__SHADER_MESH_POINTS_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshPoints ?? DEFAULT_MESH_POINTS[Number(index)]))
     .replace(/__SHADER_MESH_BASE_(\\d+)__/g, (_match, index: string) => escapeAttribute(meshBase ?? DEFAULT_MESH_BASES[Number(index)]))
     .replace(/__SHADER_LUT_(\\d+)__/g, (_match, index: string) => palette ? '' : DEFAULT_PALETTE_LUTS[Number(index)])
-    .replace(/__SHADER_MIX_CONFIG_(\\d+)__/g, (_match, index: string) => escapeAttribute(DEFAULT_LAYER_MIX_SETTINGS[Number(index)]))
-    .replace(/__SHADER_MIX_LUT_(\\d+)__/g, (_match, index: string) => DEFAULT_LAYER_MIX_LUTS[Number(index)])
     .replace(/__SHADER_LAYER_(\\d+)__/g, (_match, index: string) => escapeAttribute(DEFAULT_LAYER_STATES[Number(index)])), [settings, palette, geometry, meshPoints, meshBase]);
   return <iframe
     title="Interactive gradient background"
@@ -721,7 +801,7 @@ export function interactiveExports(project: GradientProject) {
     html: `${note ? `${note}\n` : ''}${built.body}`,
     markup: `${note ? `${note}\n` : ''}${built.markup}`,
     stylesheet: built.stylesheet,
-    runtime: shaderRuntime(built.fragmentSource),
+    runtime: shaderRuntime(built.fragmentSources),
     javascript: interactiveJavaScriptExport(project),
     glsl: interactiveGlslExport(project),
     react: interactiveReactExport(project),

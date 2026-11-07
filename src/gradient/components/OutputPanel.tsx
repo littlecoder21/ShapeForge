@@ -17,7 +17,7 @@ import { exportPng } from '../engine/raster';
 import { outputOf } from '../engine/model';
 import { parseProjectFile } from '../engine/projectFile';
 import { createPresetArchive, extractProjectJsonFromZip } from '../engine/presetArchive';
-import { interactiveExports } from '../interactive/export';
+import { interactiveExports } from '../../interactive/export';
 import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
 import OutputSettingsForm from './OutputSettingsForm';

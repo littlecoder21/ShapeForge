@@ -1,14 +1,18 @@
-import { hexToRgb } from '../../engine/color';
-import fragmentShaderTemplate from '../shaders/gradient.frag.glsl?raw';
-import vertexShaderSource from '../shaders/gradient.vert.glsl?raw';
-import { PointerManager } from '../input/PointerManager';
-import { assembleFragmentShader } from '../rig/glsl';
-import { activeRules, rigSignature, type InteractionRig } from '../rig/model';
-import { createRigBuffers, evaluateRig, idleMotionPoint, packTrail, type PointerFrame } from '../rigRuntime';
-import { resolveStyleParams, SHADER_STYLE_INDEX } from '../styles';
+import { hexToRgb } from '../../gradient/engine/color';
+import fragmentShaderTemplate from '../../gradient/interactive/shaders/gradient.frag.glsl?raw';
+import vertexShaderSource from '../../gradient/interactive/shaders/gradient.vert.glsl?raw';
+import { PointerManager } from '../../gradient/interactive/input/PointerManager';
+import { activeRules, rigSignature, type InteractionRig } from '../../gradient/interactive/rig/model';
+import { createRigBuffers, evaluateRig, idleMotionPoint, packTrail, type PointerFrame } from '../../gradient/interactive/rigRuntime';
+import { resolveStyleParams, SHADER_STYLE_INDEX } from '../../gradient/interactive/styles';
 import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_GEOMETRY, normalizeInteractiveSettings, type InteractiveLayerState, type InteractiveRendererStatus, type InteractiveSettings, type InteractiveUpdate, type ShaderGeometry, type ShaderLayerColorBlend, type ShaderMeshPoint, type ShaderStop } from '../types';
-import { bakePaletteLut } from '../paletteLut';
+import { bakePaletteLut } from '../../gradient/interactive/paletteLut';
 import { UNIFORM_NAMES } from '../uniforms';
+import { assembleProceduralShader } from '../../procedural/glsl';
+import { createProceduralState, uploadProceduralUniforms, type ProceduralState } from '../../procedural/proceduralRuntime';
+import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../../procedural/types';
+import { AdaptiveResolution } from './AdaptiveResolution';
+import { getFrameScheduler } from './FrameScheduler';
 
 type GL = WebGLRenderingContext | WebGL2RenderingContext;
 type Uniforms = Record<string, WebGLUniformLocation | null>;
@@ -19,6 +23,8 @@ const MAX_MESH_POINTS = 8;
 const LUT_SIZE = 512;
 const MAX_RENDER_PIXELS = 1_200_000;
 const MAX_RENDER_SCALE = 1.25;
+/** the lowest absolute render scale (device pixels per CSS pixel) adaptive resolution may reach */
+const MIN_ADAPTIVE_RENDER_SCALE = 0.5;
 const QUALITY_SCALE = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 } as const;
 const QUALITY_OCTAVES = { low: 3, medium: 4, high: 5, ultra: 6 } as const;
 const GEOMETRY_ID = { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 } as const;
@@ -89,6 +95,8 @@ export interface InteractiveRendererOptions {
   meshPoints?: ShaderMeshPoint[];
   meshBase?: string;
   layerMix?: InteractiveUpdate['layerMix'];
+  /** the layer's procedural engine; null / disabled = the manual gradient only */
+  procedural?: ProceduralConfig | null;
   onStatusChange?: (status: InteractiveRendererStatus, message?: string) => void;
 }
 
@@ -98,6 +106,8 @@ interface PendingBuild {
   fragment: WebGLShader;
   key: string;
   withRig: boolean;
+  /** true when the procedural engine is compiled into this program */
+  withProcedural: boolean;
 }
 
 export class InteractiveRenderer {
@@ -115,7 +125,8 @@ export class InteractiveRenderer {
   private program: WebGLProgram | null = null;
   private pending: PendingBuild | null = null;
   private builtKey = '';
-  private failedKey = '';
+  /** keys whose compile failed on this device, so a failing shader is never retried until its key changes */
+  private readonly failedKeys = new Set<string>();
   private parallelCompile = false;
   private buffer: WebGLBuffer | null = null;
   private paletteTexture: WebGLTexture | null = null;
@@ -141,15 +152,20 @@ export class InteractiveRenderer {
   private lutEnabled = false;
   private cachedRippleCount = -1;
   private shaderTime = 0;
-  private frameEma = 0;
-  private slowFrameCount = 0;
-  private adaptiveScale = 1;
+  /** resolution / effort controller: steps down when frames are slow, and recovers gradually */
+  private readonly adaptive = new AdaptiveResolution();
+  /** the procedural engine's config when it is active, else null */
+  private procedural: ProceduralConfig | null = null;
+  private proceduralState: ProceduralState | null = null;
+  /** true while the program in use has the procedural code compiled in */
+  private proceduralBuilt = false;
   private maxFragmentUniformVectors = 0;
   private positionAttribute = -1;
   private uvAttribute = -1;
   private resizeObserver: ResizeObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
   private mediaQuery: MediaQueryList | null = null;
+  private readonly scheduler = getFrameScheduler();
   private frameId = 0;
   private previousFrame = 0;
   private clock = 0;
@@ -176,6 +192,8 @@ export class InteractiveRenderer {
     this.refreshMeshBase();
     if (options.geometry) this.geometry = normalizeGeometry(options.geometry);
     this.refreshPaletteData();
+    this.procedural = options.procedural && isProceduralActive(options.procedural) ? options.procedural : null;
+    this.syncProceduralState();
     this.refreshInteractionColors();
     this.refreshRigFlags();
     this.onStatusChange = options.onStatusChange;
@@ -226,9 +244,7 @@ export class InteractiveRenderer {
         this.settings = next;
         // Only a change of quality / resolution should restart adaptive resolution; slider drags must not.
         if (previous.quality !== next.quality || previous.resolutionScale !== next.resolutionScale) {
-          this.frameEma = 0;
-          this.slowFrameCount = 0;
-          this.adaptiveScale = 1;
+          this.adaptive.reset();
           needsResize = true;
         }
         if (!sameValue(previous.interactionColors, next.interactionColors) || previous.interactionColor !== next.interactionColor) this.refreshInteractionColors();
@@ -273,6 +289,15 @@ export class InteractiveRenderer {
       const base = /^#[0-9a-f]{6}$/i.test(update.meshBase) ? update.meshBase : '';
       if (base !== this.meshBase) { this.meshBase = base; this.refreshMeshBase(); }
     }
+    if (update.procedural !== undefined) {
+      const active = update.procedural && isProceduralActive(update.procedural) ? update.procedural : null;
+      if (!sameValue(active, this.procedural)) {
+        this.procedural = active;
+        this.syncProceduralState();
+        // only a change in which distortion types exist (or on / off) changes the compiled shader
+        this.ensureBuild();
+      }
+    }
     if (needsResize) this.resize();
     this.schedule();
   }
@@ -290,7 +315,7 @@ export class InteractiveRenderer {
   destroy() {
     if (this.disposed) return;
     this.disposed = true;
-    cancelAnimationFrame(this.frameId);
+    this.cancelFrame();
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     this.mediaQuery?.removeEventListener('change', this.handleMotionChange);
@@ -314,6 +339,7 @@ export class InteractiveRenderer {
     this.program = null;
     this.paletteTexture = null;
     this.layerMixTexture = null;
+    this.proceduralState = null;
     this.gl = null;
   }
 
@@ -337,28 +363,31 @@ export class InteractiveRenderer {
     };
   }
 
-  private desiredKey(withRig: boolean) {
+  /** What the shader is built from: interaction rules, quality, and which procedural distortion types exist. */
+  private desiredKey(withRig: boolean, withProcedural = withRig) {
     const octaves = QUALITY_OCTAVES[this.settings.quality];
     const depth = this.settings.quality === 'low' ? 1 : 2;
-    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${depth}`;
+    const procedural = withProcedural ? proceduralSignature(this.procedural) : 'off';
+    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${depth}#${procedural}`;
   }
 
   /** Starts a new compile when the structure of the interaction (or the quality) changed. */
   private ensureBuild() {
     if (!this.gl || this.disposed) return;
     const key = this.desiredKey(true);
-    if (key === this.builtKey || key === this.pending?.key || key === this.failedKey) return;
+    if (key === this.builtKey || key === this.pending?.key || this.failedKeys.has(key)) return;
     this.beginBuild(true);
   }
 
-  private beginBuild(withRig: boolean) {
+  private beginBuild(withRig: boolean, withProcedural = withRig) {
     const gl = this.gl;
     if (!gl) return;
     this.discardPending(gl);
     const rig: InteractionRig | null = withRig ? this.settings.rig : null;
+    const procedural = withProcedural && isProceduralActive(this.procedural) ? this.procedural : null;
     const octaves = QUALITY_OCTAVES[this.settings.quality];
     const warpDepth = this.settings.quality === 'low' ? 1 : 2;
-    const fragmentSource = shaderSource(assembleFragmentShader(fragmentShaderTemplate, rig, { octaves, warpDepth }), 'fragment', this.webgl2);
+    const fragmentSource = shaderSource(assembleProceduralShader(fragmentShaderTemplate, rig, { octaves, warpDepth }, procedural), 'fragment', this.webgl2);
     const vertexSource = shaderSource(vertexShaderSource, 'vertex', this.webgl2);
     const vertex = gl.createShader(gl.VERTEX_SHADER);
     const fragment = gl.createShader(gl.FRAGMENT_SHADER);
@@ -371,7 +400,7 @@ export class InteractiveRenderer {
     gl.attachShader(program, vertex);
     gl.attachShader(program, fragment);
     gl.linkProgram(program);
-    this.pending = { program, vertex, fragment, key: this.desiredKey(withRig), withRig };
+    this.pending = { program, vertex, fragment, key: this.desiredKey(withRig, withProcedural), withRig, withProcedural: procedural !== null };
   }
 
   private discardPending(gl: GL) {
@@ -393,9 +422,15 @@ export class InteractiveRenderer {
     if (!linked) {
       const detail = (gl.getShaderInfoLog(pending.fragment) || gl.getProgramInfoLog(pending.program) || '').trim().slice(0, 500);
       this.discardPending(gl);
+      this.failedKeys.add(pending.key);
+      if (pending.withProcedural) {
+        // Fallback ladder, step 1: keep the interaction rig, drop only the procedural engine.
+        this.beginBuild(true, false);
+        this.message = `The procedural gradient could not compile on this device${detail ? `: ${detail}` : '.'} Showing the manual gradient instead.`;
+        return true;
+      }
       if (pending.withRig) {
-        // The interaction rig could not run here: keep the gradient alive without it and say why.
-        this.failedKey = pending.key;
+        // Step 2: the interaction rig could not run here: keep the gradient alive without it and say why.
         this.beginBuild(false);
         this.message = `Interaction effects could not compile on this device${detail ? `: ${detail}` : '.'}`;
         return true;
@@ -408,10 +443,11 @@ export class InteractiveRenderer {
     const previous = this.program;
     this.program = pending.program;
     this.builtKey = pending.key;
+    this.proceduralBuilt = pending.withProcedural;
     this.pending = null;
     if (previous) gl.deleteProgram(previous);
     this.bindProgram(gl, pending.program);
-    const message = !pending.withRig && this.failedKey ? this.message : this.paletteNotice();
+    const message = this.failedKeys.size && (!pending.withRig || (!pending.withProcedural && isProceduralActive(this.procedural))) ? this.message : this.paletteNotice();
     this.setStatus('ready', message);
     return false;
   }
@@ -457,17 +493,39 @@ export class InteractiveRenderer {
     this.uploadLayerMixTexture(gl);
   }
 
+  /* ───────────── procedural engine ───────────── */
+
+  /** Most noise octaves a procedural distortion stage may use right now: the quality level, minus adaptive effort. */
+  private octaveCap() {
+    return Math.max(1, QUALITY_OCTAVES[this.settings.quality] - this.adaptive.effort);
+  }
+
+  /** Keeps the animated state in step with the config. A disabled config keeps its state but uploads "off". */
+  private syncProceduralState() {
+    if (this.procedural) {
+      if (this.proceduralState) this.proceduralState.setConfig(this.procedural);
+      else this.proceduralState = createProceduralState(this.procedural, { lut: this.paletteLut, octaveCap: this.octaveCap() });
+    } else if (this.proceduralState) {
+      this.proceduralState.setConfig({ ...this.proceduralState.getConfig(), enabled: false });
+    }
+  }
+
   /* ───────────── lifecycle ───────────── */
+
+  private cancelFrame() {
+    if (this.frameId) this.scheduler.cancel(this.frameId);
+    this.frameId = 0;
+  }
 
   private readonly handleContextLost = (event: Event) => {
     event.preventDefault();
-    cancelAnimationFrame(this.frameId);
-    this.frameId = 0;
+    this.cancelFrame();
     this.paletteTexture = null;
     this.layerMixTexture = null;
     this.pending = null;
     this.program = null;
     this.builtKey = '';
+    this.proceduralBuilt = false;
     this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
   };
 
@@ -480,7 +538,7 @@ export class InteractiveRenderer {
       if (context) this.gl = context;
       if (!this.gl) throw new Error('The WebGL context could not be restored.');
       this.parallelCompile = !!this.gl.getExtension('KHR_parallel_shader_compile');
-      this.failedKey = '';
+      this.failedKeys.clear();
       this.initGeometryAndTextures(this.gl);
       this.resize();
       this.beginBuild(true);
@@ -499,10 +557,7 @@ export class InteractiveRenderer {
   private readonly handleVisibilityChange = () => {
     this.visible = document.visibilityState === 'visible';
     if (this.visible) this.schedule();
-    else {
-      cancelAnimationFrame(this.frameId);
-      this.frameId = 0;
-    }
+    else this.cancelFrame();
   };
 
   private setStatus(status: InteractiveRendererStatus, message = '') {
@@ -513,9 +568,10 @@ export class InteractiveRenderer {
   }
 
   private paletteNotice() {
-    return this.adaptiveScale < 1
-      ? `Adaptive resolution reduced to ${Math.round(this.adaptiveScale * 100)}% to maintain performance.`
-      : '';
+    const { scale, effort } = this.adaptive;
+    if (scale >= 1 && effort === 0) return '';
+    const resolution = scale < 1 ? `Adaptive resolution reduced to ${Math.round(scale * 100)}%` : 'Adaptive quality active';
+    return `${resolution}${effort > 0 ? ' with reduced shader effort' : ''} to maintain performance.`;
   }
 
   private observe() {
@@ -535,10 +591,7 @@ export class InteractiveRenderer {
       this.intersectionObserver = new IntersectionObserver(entries => {
         this.visible = entries[0]?.isIntersecting ?? true;
         if (this.visible) this.schedule();
-        else {
-          cancelAnimationFrame(this.frameId);
-          this.frameId = 0;
-        }
+        else this.cancelFrame();
       });
       this.intersectionObserver.observe(this.canvas);
     }
@@ -552,7 +605,7 @@ export class InteractiveRenderer {
     const heightCss = this.canvas.clientHeight;
     const pixelBudgetScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, widthCss * heightCss));
     const scale = clamp(
-      Math.min(this.baseResolutionScale() * this.adaptiveScale, MAX_RENDER_SCALE, pixelBudgetScale),
+      Math.min(this.baseResolutionScale() * this.adaptive.scale, MAX_RENDER_SCALE, pixelBudgetScale),
       0.35,
       MAX_RENDER_SCALE,
     );
@@ -575,7 +628,7 @@ export class InteractiveRenderer {
   private schedule() {
     if (this.disposed || !this.gl || !this.visible || this.frameId) return;
     if (this.status !== 'ready' && this.status !== 'compiling') return;
-    this.frameId = requestAnimationFrame(this.render);
+    this.frameId = this.scheduler.request(this.render);
   }
 
   private readonly render = (now: number) => {
@@ -594,29 +647,28 @@ export class InteractiveRenderer {
     const delta = Math.min(0.05, rawDelta);
     this.previousFrame = now;
     this.clock += delta;
-    const animated = this.settings.animate && this.settings.speed > 0 && !this.paused && !this.reducedMotion;
-    if (animated) this.shaderTime += delta * this.settings.speed;
+    const motionEnabled = this.settings.animate && !this.paused && !this.reducedMotion;
+    const animated = motionEnabled && this.settings.speed > 0;
+    const timeScale = this.scheduler.timeScale;
+    if (animated) this.shaderTime += delta * this.settings.speed * timeScale;
     else if (!this.settings.animate) this.shaderTime = 0;
     if (rawDelta > 0) {
-      this.frameEma = this.frameEma ? this.frameEma * 0.9 + rawDelta * 0.1 : rawDelta;
-      this.slowFrameCount = this.frameEma > 0.02 ? this.slowFrameCount + 1 : 0;
-      if (this.slowFrameCount >= 18 && this.baseResolutionScale() * this.adaptiveScale > 0.5) {
-        this.adaptiveScale = Math.max(
-          0.5 / this.baseResolutionScale(),
-          this.adaptiveScale * 0.8,
-        );
-        this.slowFrameCount = 0;
+      // the floor is an absolute render scale, so it depends on the current base resolution
+      this.adaptive.setMinScale(MIN_ADAPTIVE_RENDER_SCALE / this.baseResolutionScale());
+      if (this.adaptive.update(rawDelta)) {
         this.resize();
         this.setStatus('ready', this.paletteNotice());
       }
     }
     const pointer = this.pointer.advance(delta, this.clock);
-    this.draw(gl, program, pointer);
+    this.draw(gl, program, pointer, delta, motionEnabled ? timeScale : 0);
 
     const idleMotion = this.settings.idleMotion && !this.paused && !this.reducedMotion;
     const ambient = !this.paused && !this.reducedMotion && (this.rigAmbient || this.settings.breath > 0);
     const hovering = this.rigRuleCount() > 0 && pointer.active > 0.003;
-    if (animated || idleMotion || ambient || hovering || this.pointer.hasActivity() || this.pending) this.schedule();
+    const proceduralSettling = this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isSettling();
+    const proceduralAnimating = motionEnabled && this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isAnimated();
+    if (animated || idleMotion || ambient || hovering || proceduralSettling || proceduralAnimating || this.pointer.hasActivity() || this.pending) this.schedule();
   };
 
   private rigRuleCount() {
@@ -630,7 +682,7 @@ export class InteractiveRenderer {
 
   /* ───────────── drawing ───────────── */
 
-  private draw(gl: GL, program: WebGLProgram, pointer: PointerFrame) {
+  private draw(gl: GL, program: WebGLProgram, pointer: PointerFrame, delta: number, motionScale: number) {
     gl.useProgram(program);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -687,6 +739,9 @@ export class InteractiveRenderer {
     set1f('uBreathRate', settings.breathRate);
     set1f('uRotation', settings.rotation);
     set1f('uZoom', settings.zoom);
+    set1f('uMeshDrift', settings.meshDrift);
+    set1f('uMeshSpread', settings.meshSpread);
+    set1f('uMeshBlend', settings.meshBlend);
     set1f('uInteractionRadius', settings.interactionRadius);
     set1f('uInteractionStrength', settings.interactionStrength * Math.min(1, Math.abs(reaction)));
     set1f('uGlow', settings.glow);
@@ -720,6 +775,18 @@ export class InteractiveRenderer {
     set1f('uRippleCount', rippleCount);
     gl.uniform4fv(this.uniforms['uRipples[0]'] ?? null, this.rippleData);
 
+    // procedural engine: positions, colours and forces are advanced on the CPU (12 points), the shader gets the numbers
+    const procedural = this.proceduralState;
+    if (procedural && this.proceduralBuilt) {
+      const frame = this.rigFrame;
+      Object.assign(frame, pointer);
+      if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
+      if (!reacts && !idlePointer) { frame.active = 0; frame.down = 0; frame.t2active = 0; }
+      procedural.setQuality({ octaveCap: this.octaveCap() });
+      procedural.step(delta, frame, this.canvas.width / Math.max(1, this.canvas.height), motionScale);
+      uploadProceduralUniforms(gl, this.uniforms, procedural.buffers);
+    }
+
     // interaction rig: drives are evaluated on the CPU, the shader only receives the final numbers
     if (!this.builtKey.startsWith('base#') && this.rigRuleCount() > 0) {
       const frame = this.rigFrame;
@@ -733,6 +800,7 @@ export class InteractiveRenderer {
       gl.uniform4fv(this.uniforms['uRuleC[0]'] ?? null, this.rigBuffers.c);
       gl.uniform4fv(this.uniforms['uRuleD[0]'] ?? null, this.rigBuffers.d);
       gl.uniform4fv(this.uniforms['uRuleE[0]'] ?? null, this.rigBuffers.e);
+      gl.uniform4fv(this.uniforms['uRuleF[0]'] ?? null, this.rigBuffers.f);
       gl.uniform4fv(this.uniforms['uTrail[0]'] ?? null, this.rigBuffers.trail);
       gl.uniform3f(this.uniforms.uTouch2 ?? null, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
@@ -768,6 +836,8 @@ export class InteractiveRenderer {
       this.paletteColors[offset + 3] = i / (MAX_STOPS - 1);
       this.paletteAlphas[i] = this.paletteLut[sample + 3] / 255;
     }
+    // procedural points take their colours from this same palette LUT
+    this.proceduralState?.setPaletteLut(this.paletteLut);
     if (this.gl) this.uploadPaletteTexture(this.gl);
   }
 

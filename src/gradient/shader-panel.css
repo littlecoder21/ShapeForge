@@ -5,7 +5,8 @@
 .gs-shader .gs-sh-section > summary::-webkit-details-marker { display: none; }
 .gs-shader .gs-sh-section-body { display: grid; gap: 8px; padding-top: 8px; }
 .gs-field { display: grid; gap: 4px; min-width: 0; }
-.gs-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.gs-chip-row { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: 3px; }
+.gs-chip-row > * { flex: 0 0 auto; }
 .gs-chip-row .chip.active { background: var(--sh-accent); color: #fff; border-color: var(--sh-accent); }
 
 /* layer strip */
@@ -14,7 +15,7 @@
 .gs-layer-strip-count { font-size: 11px; opacity: .7; }
 .gs-layer-strip-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .gs-layer-strip-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 232px; overflow: auto; }
-.gs-layer-row { display: grid; grid-template-columns: auto 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; border: 1px solid transparent; }
+.gs-layer-row { display: grid; grid-template-columns: auto 22px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; border: 1px solid transparent; }
 .gs-layer-row.selected { background: rgba(124,92,255,.12); }
 .gs-layer-row.primary { border-color: var(--sh-accent); }
 .gs-layer-row input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--sh-accent); }
@@ -37,8 +38,11 @@
 .gs-shader-card small { font-size: 11px; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gs-shader-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .gs-shader-sub { display: grid; gap: 10px; }
-.gs-shader-sub-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; position: sticky; top: 0; z-index: 2; padding: 6px 0; background: inherit; backdrop-filter: blur(6px); }
-.gs-shader-sub-tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+.gs-shader-sub-head { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; position: sticky; top: 0; z-index: 2; padding: 4px 0; background: inherit; backdrop-filter: blur(6px); min-width: 0; }
+.gs-shader-sub-head > b { flex: none; font-size: 12px; }
+.gs-shader-sub-head > .btn { flex: none; font-size: 11px; padding: 3px 6px; }
+.gs-shader-sub-tabs { display: flex; gap: 4px; margin-left: auto; flex: 1 1 auto; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+.gs-shader-sub-tabs .chip { flex: 0 0 auto; font-size: 10px; padding: 3px 7px; }
 
 /* style library */
 .gs-style-grid, .gs-preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }

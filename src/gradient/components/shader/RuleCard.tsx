@@ -18,7 +18,7 @@ interface Props {
   onMove: (direction: -1 | 1) => void;
 }
 
-const SHAPES_WITH_ASPECT = ['ellipse', 'box', 'diamond'];
+const SHAPES_WITH_ASPECT = ['ellipse', 'box', 'diamond', 'capsule', 'roundBox'];
 
 export default function RuleCard({ rule, index, total, initiallyOpen = false, onChange, onRemove, onDuplicate, onMove }: Props) {
   const [open, setOpen] = useState(initiallyOpen);
@@ -86,6 +86,8 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
         {(rule.shape === 'star' || rule.shape === 'poly') && <Num label={rule.shape === 'star' ? 'Points' : 'Sides'} value={rule.shapeN} min={rule.shape === 'star' ? 2 : 3} max={12} step={1} def={5} onChange={shapeN => patch({ shapeN })} />}
         {rule.shape !== 'circle' && <Switch label="Face the direction of motion" checked={rule.follow} onChange={follow => patch({ follow })} />}
         <Num label="Organic edge" value={rule.edge} min={0} max={1} def={0} onChange={edge => patch({ edge }, 'edge')} />
+        <Num label="Fade curve power" value={rule.fadePower} min={0.25} max={4} def={1} onChange={fadePower => patch({ fadePower }, 'fade-power')} testId={`rig-fade-power-${index}`} />
+        <Num label="Fade distance" value={rule.fadeWidth} min={0.25} max={2} def={1} unit="×" onChange={fadeWidth => patch({ fadeWidth }, 'fade-width')} testId={`rig-fade-width-${index}`} />
         <div className="gs-falloff-row">
           <Select id={`rig-falloff-${index}`} label="Falloff" value={rule.falloff} options={RIG_FALLOFFS} onChange={falloff => patch({ falloff })} />
           <FalloffChart falloff={rule.falloff} />

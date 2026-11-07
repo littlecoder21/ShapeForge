@@ -2,6 +2,7 @@ import { normalizePointerMode, type PointerMode } from './pointerModes';
 import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type InteractiveStyle } from './styles';
 import { instantiateRig, normalizeRig, type InteractionRig } from './rig/model';
 import { defaultRig, rigFromLegacyMode } from './rig/presets';
+import { normalizeProcedural, type ProceduralConfig } from '../../procedural/types';
 
 export type { InteractiveStyle } from './styles';
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
@@ -30,6 +31,7 @@ export interface ShaderLayerConfig {
   mixMode: ShaderLayerColorBlend;
   mixStrength: number;
   mixSpeed: number;
+  procedural?: ProceduralConfig;
 }
 
 export interface ShaderGeometry {
@@ -262,6 +264,7 @@ export function normalizeShaderLayer(raw: unknown): ShaderLayerConfig {
       : DEFAULT_SHADER_LAYER.mixMode,
     mixStrength: Number.isFinite(Number(value.mixStrength)) ? Math.min(1, Math.max(0, Number(value.mixStrength))) : DEFAULT_SHADER_LAYER.mixStrength,
     mixSpeed: Number.isFinite(Number(value.mixSpeed)) ? Math.min(2, Math.max(0, Number(value.mixSpeed))) : DEFAULT_SHADER_LAYER.mixSpeed,
+    ...(value.procedural && typeof value.procedural === 'object' ? { procedural: normalizeProcedural(value.procedural) } : {}),
   };
 }
 

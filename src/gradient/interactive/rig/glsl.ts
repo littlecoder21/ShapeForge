@@ -27,6 +27,16 @@ const FALLOFF_GLSL: Record<RigFalloffId, string> = {
   bands: '(0.5 + 0.5 * cos(q * 18.0 - uClock * 3.0)) * (1.0 - smoothstep(0.0, 1.0, q))',
   tail: 'exp(-q * 3.0)',
   dome: 'sqrt(max(1.0 - q * q, 0.0))',
+  cosine: '(q < 1.0 ? 0.5 + 0.5 * cos(3.14159265 * q) : 0.0)',
+  exponential: 'exp(-q * 4.5)',
+  power: 'pow(max(1.0 - q, 0.0), 2.8)',
+  bell: 'exp(-((q - 0.35) * 3.0) * ((q - 0.35) * 3.0))',
+  softstep: '1.0 - smoothstep(0.2, 0.85, q)',
+  quadratic: 'pow(max(1.0 - q, 0.0), 2.0)',
+  cubic: 'pow(max(1.0 - q, 0.0), 3.0)',
+  quintic: 'pow(max(1.0 - q, 0.0), 5.0)',
+  sine: 'sin(1.5707963 * clamp(1.0 - q, 0.0, 1.0))',
+  logarithmic: 'log(1.0 + 8.0 * max(1.0 - q, 0.0)) / 2.1972246',
 };
 
 const SHAPE_GLSL: Record<RigShapeId, string> = {
@@ -38,6 +48,13 @@ const SHAPE_GLSL: Record<RigShapeId, string> = {
   cross: 'vec2 e = abs(rigRot(d, -ang)); return min(e.x, e.y);',
   star: 'vec2 e = rigRot(d, -ang); return length(e) / (0.65 + 0.35 * cos(rc.w * atan(e.y, e.x)));',
   poly: 'vec2 e = rigRot(d, -ang); float an = 6.2831853 / max(rc.w, 3.0); float aa = mod(atan(e.y, e.x) + 3.14159265, an) - an * 0.5; return length(e) * cos(aa) / cos(an * 0.5);',
+  capsule: 'vec2 e = rigRot(d, -ang); return length(vec2(max(abs(e.x) - 0.32, 0.0), e.y)) + min(abs(e.x) - 0.32, 0.0) + 0.42;',
+  roundBox: 'vec2 e = abs(rigRot(d, -ang)); vec2 q = e - vec2(max(rc.x, 0.2) * 0.42, 0.42); return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) + 0.22;',
+  triangle: 'vec2 e = rigRot(d, -ang); float an = 2.0943951; float aa = mod(atan(e.y, e.x) + 3.14159265, an) - an * 0.5; return length(e) * cos(aa) / cos(an * 0.5);',
+  hexagon: 'vec2 e = rigRot(d, -ang); float an = 1.04719755; float aa = mod(atan(e.y, e.x) + 3.14159265, an) - an * 0.5; return length(e) * cos(aa) / cos(an * 0.5);',
+  ringShape: 'return abs(length(d) - 0.48) + 0.18;',
+  heart: 'vec2 e = rigRot(d, -ang) * 1.6; float h = length(e) - 0.45 - 0.16 * sin(atan(e.y, e.x) * 2.0); return max(h + 0.4, 0.0);',
+  clover: 'float a = atan(d.y, d.x); return length(d) / (0.45 + 0.2 * cos(4.0 * a));',
 };
 
 const BLEND_GLSL: Record<RigBlend, string> = {
@@ -138,6 +155,19 @@ rgAlpha = max(rgAlpha, clamp(rgArc * rgA, 0.0, 0.85));`,
 float rgRm = 1.0 - smoothstep(rgP3, rgP3 + 0.25, abs(rgRr));
 col = RG_BLEND(col, rgCol, clamp(rgRm * rgA, 0.0, 1.0));
 rgAlpha = max(rgAlpha, clamp(rgRm * rgA * 0.8, 0.0, 0.85));`,
+  grain: `float rgGn = field(p * rgP1 + vec2(rgT * rgP2, -rgT * rgP2 * 0.73));
+float rgGt = (rgGn - 0.5) * 2.0;
+col = RG_BLEND(col, rgCol * (0.5 + 0.5 * rgGn), clamp(abs(rgA * rgGt), 0.0, 1.0));`,
+  stripes: `vec2 rgSp = rigRot(p * vec2(uAspect, 1.0), rgP3 * 0.0174533);
+float rgSt = step(0.5, fract(rgSp.x * rgP1));
+col = RG_BLEND(col, rgCol, clamp(rgA * (1.0 - smoothstep(rgP2, rgP2 + 0.08, abs(fract(rgSp.x * rgP1) - 0.5) * 2.0)) * rgSt, 0.0, 1.0));`,
+  checker: `vec2 rgCp = rigRot(p * vec2(uAspect, 1.0), rgP2 * 0.0174533) * rgP1;
+float rgCk = mod(floor(rgCp.x) + floor(rgCp.y), 2.0);
+col = RG_BLEND(col, rgCol, clamp(rgA * rgCk, 0.0, 1.0));`,
+  crosshatch: `vec2 rgHp = p * vec2(uAspect, 1.0) * rgP1;
+float rgHx = 1.0 - smoothstep(rgP2, rgP2 + 0.08, abs(fract(rgHp.x + rgHp.y) - 0.5));
+float rgHy = 1.0 - smoothstep(rgP2, rgP2 + 0.08, abs(fract(rgHp.x - rgHp.y) - 0.5));
+col = RG_BLEND(col, rgCol, clamp(rgA * max(rgHx, rgHy), 0.0, 1.0));`,
   scanlines: 'col *= 1.0 - rgW * clamp(abs(rgAmt), 0.0, 1.0) * rgP2 * (0.5 + 0.5 * sin(p.y * rgP1 * 3.14159265));',
   halftone: `vec2 rgHg = rigRot(p * vec2(uAspect, 1.0), rgP2 * 0.0174533) * rgP1;
 float rgHd = length(fract(rgHg) - 0.5);
@@ -177,7 +207,7 @@ function sourceCode(rule: RigRule, weightFn: string): string {
       vec4 rgTr = uTrail[j];
       if (rgTr.z > 0.0) {
         float rgQj = 1.0;
-        float rgWj = ${weightFn}((p - rgTr.xy) * ${asp}, rgAng, rgCc, rgR, rgQj) * rgTr.z;
+        float rgWj = ${weightFn}((p - rgTr.xy) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQj) * rgTr.z;
         if (rgWj > rgW) { rgW = rgWj; rgC = rgTr.xy; rgQ = rgQj; rgT = rgTr.w; }
       }
     }`;
@@ -188,18 +218,18 @@ function sourceCode(rule: RigRule, weightFn: string): string {
       float rgAge = max(uClock - rgCk.z, 0.0);
       float rgEnv = exp(-rgAge / max(rgDd.z, 0.05)) * rgCk.w;
       float rgQj = 1.0;
-      float rgWj = ${weightFn}((p - rgCk.xy) * ${asp}, rgAng, rgCc, rgR, rgQj) * rgEnv;
+      float rgWj = ${weightFn}((p - rgCk.xy) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQj) * rgEnv;
       if (rgWj > rgW) { rgW = rgWj; rgC = rgCk.xy; rgQ = rgQj; rgT = rgAge; }
     }`;
     case 'touch2':
       return `rgC = uTouch2.xy;
-    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgQ);`;
+    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQ);`;
     case 'fixed':
       return `rgC = rgDd.zw;
-    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgQ);`;
+    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQ);`;
     case 'orbit':
       return `rgC = vec2(0.5 + rgDd.z * cos(uClock * rgDd.w) / max(uAspect, 0.001), 0.5 + rgDd.z * sin(uClock * rgDd.w * 1.31));
-    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgQ);`;
+    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQ);`;
     case 'symmetry':
       return `float rgCnt = clamp(floor(rgDd.z + 0.5), 2.0, 8.0);
     vec2 rgRel = (uPointer - 0.5) * ${asp};
@@ -208,12 +238,12 @@ function sourceCode(rule: RigRule, weightFn: string): string {
       float rgAn = 6.2831853 * float(j) / rgCnt + uClock * rgDd.w;
       vec2 rgCj = 0.5 + rigRot(rgRel, rgAn) / ${asp};
       float rgQj = 1.0;
-      float rgWj = ${weightFn}((p - rgCj) * ${asp}, rgAng, rgCc, rgR, rgQj);
+      float rgWj = ${weightFn}((p - rgCj) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQj);
       if (rgWj > rgW) { rgW = rgWj; rgC = rgCj; rgQ = rgQj; }
     }`;
     default:
       return `rgC = uPointer;
-    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgQ);`;
+    rgW = ${weightFn}((p - rgC) * ${asp}, rgAng, rgCc, rgR, rgF.xy, rgQ);`;
   }
 }
 
@@ -233,6 +263,7 @@ function ruleBlock(index: number, rule: RigRule, stage: 'warp' | 'pre' | 'post')
     vec4 rgB = uRuleB[${index}];
     vec4 rgCc = uRuleC[${index}];
     vec4 rgDd = uRuleD[${index}];
+    vec4 rgF = uRuleF[${index}];
     float rgAmt = rgB.x;
     float rgR = max(rgB.y, 0.005);
     float rgP1 = rgB.z;
@@ -280,10 +311,11 @@ export function generateRigGlsl(rig: Pick<InteractionRig, 'rules'> | null): Gene
   falloffs.forEach(falloff => parts.push(`float rigFall${cap(falloff)}(float q) { return ${FALLOFF_GLSL[falloff]}; }`));
   combos.forEach(combo => {
     const [shape, falloff] = combo.split(':') as [RigShapeId, RigFalloffId];
-    parts.push(`float rigW${cap(shape)}${cap(falloff)}(vec2 d, float ang, vec4 rc, float R, out float q) {
+    parts.push(`float rigW${cap(shape)}${cap(falloff)}(vec2 d, float ang, vec4 rc, float R, vec2 fade, out float q) {
   q = rigDist${cap(shape)}(d, ang, rc) / R;
   if (rc.z > 0.001) q = max(q * (1.0 + rc.z * 1.6 * field(d * 5.0 + vec2(uClock * 0.2, -uClock * 0.15))), 0.0);
-  return rigFall${cap(falloff)}(q);
+  float fadeQ = pow(max(q / max(fade.y, 0.05), 0.0), max(fade.x, 0.1));
+  return rigFall${cap(falloff)}(fadeQ);
 }`);
   });
   const header = 'float rgSpd = clamp(length(uVelocity) * 1.5, 0.0, 1.0);\n  vec2 rgVel = uVelocity;';

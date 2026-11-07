@@ -43,7 +43,7 @@ export interface PointerEngine {
 }
 
 export interface RigBuffers {
-  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; trail: Float32Array; count: number;
+  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; f: Float32Array; trail: Float32Array; count: number;
 }
 
 export interface RigEvalRule {
@@ -55,6 +55,8 @@ export interface RigEvalRule {
   aspect: number;
   rotation: number;
   edge: number;
+  fadePower: number;
+  fadeWidth: number;
   shapeN: number;
   sp1: number;
   sp2: number;

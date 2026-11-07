@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { GradientLayer } from '../../engine/model';
 import { SHADER_STYLE_MAP } from '../../interactive/styles';
+import { newProcedural } from '../../../procedural/types';
 import { useShader } from './context';
 
 function swatch(layer: GradientLayer): string {
@@ -33,6 +34,7 @@ export default function LayerStrip() {
       {layers.map(layer => {
         const on = !!layer.shader?.enabled;
         const isSelected = selected.includes(layer.id);
+        const procedural = !!layer.shader?.procedural?.enabled;
         return <li key={layer.id} className={`gs-layer-row ${primary?.id === layer.id ? 'primary' : ''} ${isSelected ? 'selected' : ''}`}>
           <input type="checkbox" checked={isSelected} onChange={() => toggle(layer.id)} aria-label={`Edit ${layer.name || layer.type}`} data-testid={`shader-select-${layer.id}`} />
           <span className="gs-layer-swatch" style={{ background: swatch(layer) }} aria-hidden="true" />
@@ -41,6 +43,12 @@ export default function LayerStrip() {
             <small>{on ? SHADER_STYLE_MAP[layer.shader?.style ?? 'flow'].label : 'CSS only'}{layer.visible ? '' : ' · hidden'}</small>
           </button>
           <button type="button" role="switch" aria-checked={on} aria-label={`Shader on ${layer.name || layer.type}`} className={`gs-mini-switch ${on ? 'on' : ''}`} onClick={() => patchLayers({ enabled: !on }, [layer.id])} data-testid={`shader-layer-toggle-${layer.id}`}><i /></button>
+          <button type="button" role="switch" aria-checked={procedural} aria-label={`Procedural on ${layer.name || layer.type}`} title="Toggle procedural for this layer" className={`gs-mini-switch ${procedural ? 'on' : ''}`} onClick={() => patchLayers(current => ({
+            enabled: procedural ? current.shader?.enabled ?? false : true,
+            procedural: !procedural
+              ? { ...(current.shader?.procedural ?? newProcedural()), enabled: true }
+              : current.shader?.procedural ? { ...current.shader.procedural, enabled: false } : undefined,
+          }), [layer.id])} data-testid={`procedural-layer-toggle-${layer.id}`}><i /></button>
         </li>;
       })}
     </ul>

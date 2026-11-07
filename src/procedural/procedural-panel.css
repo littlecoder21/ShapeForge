@@ -1,0 +1,9 @@
+/* Layout helpers for the Procedural sub-panel. Colours come from the surrounding panel (currentColor), so it follows the theme. */
+.gs-sh-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.gs-sh-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.gs-sh-chips .chip[aria-pressed="true"] { outline: 1px solid currentColor; }
+.gs-sh-stage { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent); }
+.gs-sh-stage:first-of-type { border-top: 0; }
+.gs-sh-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.gs-sh-swatches input[type="color"] { width: 34px; height: 28px; padding: 0; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; background: none; cursor: pointer; }
+.gs-sh-userpreset { display: inline-flex; gap: 2px; }

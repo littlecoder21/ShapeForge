@@ -76,6 +76,7 @@ uniform vec4 uRuleB[8];
 uniform vec4 uRuleC[8];
 uniform vec4 uRuleD[8];
 uniform vec4 uRuleE[8];
+uniform vec4 uRuleF[8];
 uniform vec4 uTrail[12];
 uniform vec3 uTouch2;
 
@@ -563,7 +564,7 @@ void main() {
     colorPosition = wrapT(basePosition * 0.35 + pxV * 0.9 * (0.4 + sp.w) + pxHash * 0.12 * sp.w + 0.4);
     float pxEdge = smoothstep(0.5 - sp.y - 0.02, 0.5 - sp.y + 0.01, max(abs(pxF.x - 0.5), abs(pxF.y - 0.5)));
     alpha *= 1.0 - pxEdge * step(0.001, sp.y);
-  } else {
+  } else if (uStyle < 26.5) {
     /* galaxy spiral: sp = arms, twist, core size, spin */
     float gxR = length(warped) + 0.0001;
     float gxA = atan(warped.y, warped.x);
@@ -573,6 +574,77 @@ void main() {
     colorPosition = wrapT(basePosition * 0.3 + gxSpiral * 0.3 + (1.0 - gxR) * 0.25 + 0.25);
     alpha *= clamp(0.45 + 0.55 * gxSpiral * exp(-gxR * 0.9) + gxCore, 0.0, 1.0);
     rimLight = gxCore * 0.9;
+  } else if (uStyle < 27.5) {
+    /* vortex flow: sp = turns, turbulence, speed, centre offset */
+    vec2 vxD = warped - vec2(sp.w * 0.2, 0.0);
+    float vxR = length(vxD);
+    float vxN = field(vxD * 3.0 + vec2(t * sp.z * 0.15, -t * sp.z * 0.1));
+    float vxA = atan(vxD.y, vxD.x) + vxR * sp.x + (vxN - 0.5) * sp.y * 2.0;
+    colorPosition = wrapT(basePosition * 0.35 + vxA * 0.09 + vxN * 0.3 + 0.45);
+    rimLight = exp(-abs(sin(vxA * 2.0)) * 8.0) * 0.28;
+  } else if (uStyle < 28.5) {
+    /* embers: sp = density, drift, glow, flicker */
+    vec2 emP = warped * sp.x + vec2(0.0, t * sp.y * 0.6);
+    vec2 emCell = floor(emP);
+    vec2 emF = fract(emP) - 0.5;
+    float emHash = fract(sin(dot(emCell, vec2(12.9898, 78.233))) * 43758.5453);
+    float emPulse = 0.5 + 0.5 * sin(t * (2.0 + emHash * 5.0) + emHash * 36.0);
+    float emDot = exp(-dot(emF, emF) * (18.0 + sp.z * 22.0)) * step(0.62 - sp.w * 0.25, emHash) * emPulse;
+    float emSmoke = field(warped * 2.0 + vec2(0.0, -t * 0.08));
+    colorPosition = wrapT(basePosition * 0.25 + emSmoke * 0.45 + emHash * 0.15 + 0.15);
+    rimLight = emDot * sp.z;
+    alpha *= clamp(0.65 + emDot * 0.8, 0.0, 1.0);
+  } else if (uStyle < 29.5) {
+    /* woven textile: sp = thread count, width, relief, motion */
+    vec2 weP = warped * sp.x + vec2(t * sp.w * 0.12, -t * sp.w * 0.08);
+    vec2 weF = fract(weP);
+    float weX = 1.0 - smoothstep(sp.y, sp.y + 0.12, abs(weF.x - 0.5) * 2.0);
+    float weY = 1.0 - smoothstep(sp.y, sp.y + 0.12, abs(weF.y - 0.5) * 2.0);
+    float weThread = max(weX, weY);
+    float weShade = mix(0.65, 1.2, mix(weX, weY, step(0.5, fract(weP.x + weP.y))));
+    colorPosition = wrapT(basePosition * 0.65 + (weX - weY) * sp.z * 0.16 + 0.18 + (weShade - 1.0) * 0.08);
+    rimLight = weThread * sp.z * 0.18;
+  } else if (uStyle < 30.5) {
+    /* liquid chrome: sp = band scale, reflection, warp, motion */
+    float chN = field(warped * (2.0 + sp.z * 4.0) + r * 1.2 + vec2(t * sp.w * 0.08, 0.0));
+    float chBand = 0.5 + 0.5 * cos((warped.y * sp.x + chN * sp.z * 3.0 + t * sp.w) * 3.14159265);
+    colorPosition = wrapT(basePosition * 0.28 + chBand * 0.58 + chN * 0.14);
+    rimLight = pow(chBand, 8.0) * sp.y;
+  } else if (uStyle < 31.5) {
+    /* organic cells: sp = cell scale, edge glow, drift, irregularity */
+    vec2 ocP = warped * sp.x + r * sp.w * 0.35;
+    float ocN = field(ocP + vec2(t * sp.z * 0.08, -t * sp.z * 0.06));
+    float ocCell = abs(sin(ocP.x * 2.1 + ocP.y * 1.7 + ocN * 5.0));
+    float ocEdge = exp(-abs(ocCell - 0.28) * 24.0);
+    colorPosition = wrapT(basePosition * 0.3 + ocN * 0.55 + ocCell * 0.2);
+    rimLight = ocEdge * sp.y * 0.55;
+  } else if (uStyle < 32.5) {
+    /* botanical bloom: sp = petal count, fold, motion, core */
+    float btR = length(warped);
+    float btA = atan(warped.y, warped.x) + t * sp.z * 0.15;
+    float btPetal = 0.5 + 0.5 * cos(btA * max(sp.x, 3.0) + btR * (3.0 + sp.y * 5.0));
+    float btForm = 1.0 - smoothstep(0.15, 0.9, btR - btPetal * (0.18 + sp.y * 0.22));
+    float btCore = exp(-btR * btR * (5.0 + sp.w * 14.0));
+    colorPosition = wrapT(basePosition * 0.35 + btPetal * 0.4 + btCore * 0.2 + 0.1);
+    alpha *= clamp(0.35 + btForm * 0.65, 0.0, 1.0);
+    rimLight = btCore * sp.w;
+  } else if (uStyle < 33.5) {
+    /* synthwave grid: sp = grid density, horizon, glow, travel */
+    float syD = max(0.04, warped.y - sp.y);
+    vec2 syP = vec2(warped.x / syD, 1.0 / syD + t * sp.w);
+    vec2 syF = abs(fract(syP * sp.x) - 0.5);
+    float syGrid = 1.0 - smoothstep(0.44, 0.5, max(syF.x, syF.y));
+    colorPosition = wrapT(basePosition * 0.45 + 0.25 + fract(syP.y * 0.04) * 0.25);
+    rimLight = syGrid * sp.z * 0.75;
+  } else {
+    /* CRT phosphor: sp = scanline count, curvature, glow, flicker */
+    vec2 crP = warped * (1.0 + dot(warped, warped) * sp.y * 0.35);
+    float crLine = 0.72 + 0.28 * sin(crP.y * sp.x * 3.14159265);
+    float crFlicker = 1.0 - sp.w * (0.03 + 0.03 * sin(t * 47.0));
+    float crNoise = field(crP * vec2(90.0, 4.0) + vec2(0.0, t * 0.4));
+    colorPosition = wrapT(basePosition + (crNoise - 0.5) * 0.04);
+    alpha *= crLine * crFlicker;
+    rimLight = sp.z * (1.0 - crLine) * 0.35;
   }
 
   float colorDistortion = interactionWarp * (interactionWave * 0.12 + cos(pointerDistance * 13.0 + uClock) * 0.06);

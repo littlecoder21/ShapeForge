@@ -16,7 +16,7 @@ export interface ShaderPanelContext {
   update: (patch: Partial<InteractiveSettings>, coalesce?: string) => void;
   updateRig: (change: (rig: InteractionRig) => InteractionRig, coalesce?: string) => void;
   /** apply a shader-layer patch to the given layers (default: the targets); enabling a layer also switches the project shader on */
-  patchLayers: (patch: Partial<ShaderLayerConfig>, ids?: string[], coalesce?: string) => void;
+  patchLayers: (patch: Partial<ShaderLayerConfig> | ((layer: GradientLayer) => Partial<ShaderLayerConfig>), ids?: string[], coalesce?: string) => void;
   /** make a layer the one the rest of the studio edits */
   focusLayer: (id: string) => void;
   announce: (message: string) => void;

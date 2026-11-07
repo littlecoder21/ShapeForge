@@ -232,6 +232,7 @@ export function createRigBuffers() {
     c: new Float32Array(RIG_MAX_RULES * 4),
     d: new Float32Array(RIG_MAX_RULES * 4),
     e: new Float32Array(RIG_MAX_RULES * 4),
+    f: new Float32Array(RIG_MAX_RULES * 4),
     trail: new Float32Array(RIG_TRAIL_POINTS * 4),
     count: 0,
   };
@@ -322,9 +323,12 @@ export function evaluateRig(rig, frame, buffers, options) {
     out.c[base + 3] = finiteOr(rule.shapeN, 5);
     const rgb = hexToRgbArray(rule.color);
     out.e[base] = rgb[0]; out.e[base + 1] = rgb[1]; out.e[base + 2] = rgb[2]; out.e[base + 3] = 1;
+    out.f[base] = clampNumber(finiteOr(rule.fadePower, 1), 0.25, 4);
+    out.f[base + 1] = clampNumber(finiteOr(rule.fadeWidth, 1), 0.25, 2);
+    out.f[base + 2] = 0; out.f[base + 3] = 0;
     count++;
   }
-  for (let i = count * 4; i < RIG_MAX_RULES * 4; i++) { out.b[i] = 0; out.c[i] = 0; out.d[i] = 0; out.e[i] = 0; }
+  for (let i = count * 4; i < RIG_MAX_RULES * 4; i++) { out.b[i] = 0; out.c[i] = 0; out.d[i] = 0; out.e[i] = 0; out.f[i] = 0; }
   out.count = count;
   return out;
 }

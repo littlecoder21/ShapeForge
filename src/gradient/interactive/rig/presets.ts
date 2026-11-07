@@ -133,6 +133,9 @@ export const RIG_PRESETS: RigPreset[] = [
   make('paint-streak', 'Paint streak', T, 'Smears the gradient like wet, flowing paint.', () => [r('smear', { amount: 1.8, source: 'trail', radius: 1.3 }, [1.3])]),
   make('velocity-smear', 'Velocity smear', T, 'Stretches the colour field in the direction of motion.', () => [r('smear', { amount: 2, radius: 1.4 }, [2])]),
   make('echo-trail', 'Echo trail', T, 'Repeats offset fading echoes behind the pointer.', () => [r('glow', { amount: 0.9, source: 'trail', falloff: 'ring', radius: 0.6 })]),
+  make('colour-grain', 'Colour grain', T, 'Brushes animated coloured grain into a soft-edged area.', () => [r('grain', { amount: 0.9, colorMode: 'spectrum', radius: 1.2 }, [52, 0.5])]),
+  make('woven-ink', 'Woven ink', T, 'Combines a coloured crosshatch with a soft ink tint.', () => [r('crosshatch', { amount: 0.8, colorMode: 'custom', color: '#b7d8ff', radius: 1.25 }, [30, 0.13]), r('tint', { amount: 0.35, colorMode: 'custom', color: '#4455bb', blend: 'screen' })]),
+  make('signal-checker', 'Signal checker', T, 'A rotating checker texture with a restrained chromatic wash.', () => [r('checker', { amount: 0.65, colorMode: 'spectrum', radius: 1.4 }, [20, 25]), r('prism', { amount: 0.45, radius: 1.2 }, [0.8])]),
 
   /* ── 3D materials ── */
   make('liquid-silk', 'Iridescent liquid silk', M, 'Glossy, multicolour folds that ripple under the cursor.', () => [r('bump', { amount: 1.1, radius: 1.3 }, [1.3, 30, 45, 0.4]), r('wave', { amount: 0.7 }, [18, 2.5, 0.1, 1])]),

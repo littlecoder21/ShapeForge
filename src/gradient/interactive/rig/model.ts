@@ -18,10 +18,12 @@ export type RigEffectId =
   | 'lens' | 'bump' | 'mosaic' | 'mirror' | 'kaleido'
   | 'palette' | 'prism' | 'timewarp' | 'hue' | 'saturate' | 'tone' | 'invert' | 'posterize' | 'tint' | 'thinfilm'
   | 'glow' | 'light' | 'spotlight' | 'sparkle' | 'lightning' | 'rings'
-  | 'glitch' | 'scanlines' | 'halftone';
+  | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch';
 export type RigStage = 'warp' | 'pre' | 'post';
-export type RigShapeId = 'circle' | 'ellipse' | 'box' | 'diamond' | 'line' | 'cross' | 'star' | 'poly';
-export type RigFalloffId = 'gauss' | 'smooth' | 'linear' | 'plateau' | 'ring' | 'spike' | 'hard' | 'bands' | 'tail' | 'dome';
+export type RigShapeId = 'circle' | 'ellipse' | 'box' | 'diamond' | 'line' | 'cross' | 'star' | 'poly'
+  | 'capsule' | 'roundBox' | 'triangle' | 'hexagon' | 'ringShape' | 'heart' | 'clover';
+export type RigFalloffId = 'gauss' | 'smooth' | 'linear' | 'plateau' | 'ring' | 'spike' | 'hard' | 'bands' | 'tail' | 'dome'
+  | 'cosine' | 'exponential' | 'power' | 'bell' | 'softstep' | 'quadratic' | 'cubic' | 'quintic' | 'sine' | 'logarithmic';
 export type RigSourceId = 'pointer' | 'trail' | 'clicks' | 'touch2' | 'fixed' | 'orbit' | 'symmetry';
 export type RigColorMode = 'palette' | 'scene' | 'custom' | 'spectrum';
 export type RigBlend = 'mix' | 'add' | 'screen' | 'multiply';
@@ -31,7 +33,7 @@ export type RigDriveSource =
 export type RigDriveTarget = 'amount' | 'radius' | 'p1' | 'p2' | 'p3' | 'p4';
 export type RigDriveMode = 'scale' | 'boost' | 'swing';
 export type RigDriveCurve = 'linear' | 'ease' | 'invert' | 'step' | 'sqrt';
-export type RigEffectGroup = 'Move' | 'Waves' | 'Lens' | 'Colour' | 'Light' | 'Glitch & time';
+export type RigEffectGroup = 'Move' | 'Waves' | 'Lens' | 'Colour' | 'Light' | 'Texture' | 'Glitch & time';
 
 export interface RigDrive {
   source: RigDriveSource;
@@ -63,6 +65,8 @@ export interface RigRule {
   rotation: number;
   shapeN: number;
   edge: number;
+  fadePower: number;
+  fadeWidth: number;
   sp1: number;
   sp2: number;
   drives: RigDrive[];
@@ -123,6 +127,10 @@ export const RIG_EFFECTS: RigEffectDef[] = [
   { id: 'spiral', label: 'Spiral arms', stage: 'warp', group: 'Waves', icon: '✺', blurb: 'Bends the field into rotating spiral arms.', amount: amt('Strength', -2, 2, 1), params: [par('Arms', 1, 8, 3, 1), par('Tightness', 0, 20, 8, 0.5), par('Spin', -4, 4, 1)], defaults: { falloff: 'smooth', radius: 1.4 } },
   { id: 'noise', label: 'Turbulence', stage: 'warp', group: 'Waves', icon: '≋', blurb: 'Churns the field with flowing noise.', amount: amt('Churn', 0, 2, 1.2), params: [par('Scale', 1, 14, 5, 0.5), par('Speed', 0, 4, 1, 0.1)], defaults: { falloff: 'smooth', radius: 1.3 } },
   { id: 'melt', label: 'Melt drips', stage: 'warp', group: 'Waves', icon: '⍒', blurb: 'Pulls colours downward in gravity-driven drips.', amount: amt('Melt', 0, 2, 1), params: [par('Length', 0.2, 2, 1), par('Columns', 2, 20, 7, 1)], defaults: { falloff: 'smooth', radius: 1.4 } },
+  { id: 'grain', label: 'Colour grain', stage: 'post', group: 'Texture', icon: '⁙', blurb: 'Adds a coloured, animated grain texture inside the influence shape.', amount: amt('Strength', 0, 1.5, 0.7), params: [par('Grain size', 8, 160, 48, 1), par('Animation', 0, 2, 0.4)], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
+  { id: 'stripes', label: 'Tinted stripes', stage: 'post', group: 'Texture', icon: '▤', blurb: 'Overlays adjustable diagonal stripes.', amount: amt('Strength', 0, 1.5, 0.8), params: [par('Density', 4, 120, 32, 1), par('Width', 0.05, 0.95, 0.35), par('Angle', -180, 180, 35, 1, '°')], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
+  { id: 'checker', label: 'Colour checker', stage: 'post', group: 'Texture', icon: '▦', blurb: 'Adds a two-tone checker texture with adjustable scale and rotation.', amount: amt('Strength', 0, 1.5, 0.7), params: [par('Cells', 2, 100, 18, 1), par('Angle', -180, 180, 0, 1, '°')], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
+  { id: 'crosshatch', label: 'Crosshatch', stage: 'post', group: 'Texture', icon: '▧', blurb: 'Draws a hand-printed crosshatch pattern in the selected colour.', amount: amt('Strength', 0, 1.5, 0.8), params: [par('Density', 4, 100, 28, 1), par('Line width', 0.03, 0.45, 0.12)], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
 
   { id: 'lens', label: 'Lens', stage: 'warp', group: 'Lens', icon: '◍', blurb: 'A magnifying glass; negative values pinch.', amount: amt('Magnify', -1, 1, 0.9), params: [par('Profile', 0.3, 4, 1.5)], defaults: { falloff: 'dome', radius: 1.1 } },
   { id: 'bump', label: 'Glossy bump (3D)', stage: 'warp', group: 'Lens', icon: '◉', blurb: 'Embosses a glossy dome with specular light and colour fringes.', amount: amt('Height', -2, 2, 1.2), params: [par('Depth', 0, 2, 1), par('Shine', 2, 60, 24, 1), par('Light angle', -180, 180, 45, 1, '°'), par('Colour fringe', 0, 1, 0.3)], defaults: { falloff: 'dome', radius: 1.2 } },
@@ -154,7 +162,7 @@ export const RIG_EFFECTS: RigEffectDef[] = [
 ];
 
 export const RIG_EFFECT_MAP = Object.fromEntries(RIG_EFFECTS.map(effect => [effect.id, effect])) as Record<RigEffectId, RigEffectDef>;
-export const RIG_EFFECT_GROUPS: RigEffectGroup[] = ['Move', 'Waves', 'Lens', 'Colour', 'Light', 'Glitch & time'];
+export const RIG_EFFECT_GROUPS: RigEffectGroup[] = ['Move', 'Waves', 'Lens', 'Colour', 'Light', 'Texture', 'Glitch & time'];
 
 export const RIG_SHAPES: { id: RigShapeId; label: string; hint: string }[] = [
   { id: 'circle', label: 'Circle', hint: 'Round influence' },
@@ -165,12 +173,23 @@ export const RIG_SHAPES: { id: RigShapeId; label: string; hint: string }[] = [
   { id: 'cross', label: 'Cross', hint: 'Two crossing beams' },
   { id: 'star', label: 'Star', hint: 'Lobes set by “Points”' },
   { id: 'poly', label: 'Polygon', hint: 'Regular polygon set by “Sides”' },
+  { id: 'capsule', label: 'Capsule', hint: 'Rounded bar with adjustable aspect and angle' },
+  { id: 'roundBox', label: 'Rounded box', hint: 'Soft-cornered square' },
+  { id: 'triangle', label: 'Triangle', hint: 'Three-sided radial influence' },
+  { id: 'hexagon', label: 'Hexagon', hint: 'Six-sided radial influence' },
+  { id: 'ringShape', label: 'Ring', hint: 'Hollow circular band' },
+  { id: 'heart', label: 'Heart', hint: 'Heart-shaped influence' },
+  { id: 'clover', label: 'Clover', hint: 'Four-lobed flower influence' },
 ];
 
 export const RIG_FALLOFFS: { id: RigFalloffId; label: string }[] = [
   { id: 'gauss', label: 'Gaussian' }, { id: 'smooth', label: 'Smooth' }, { id: 'linear', label: 'Linear' }, { id: 'plateau', label: 'Plateau' },
   { id: 'dome', label: 'Dome' }, { id: 'ring', label: 'Ring' }, { id: 'spike', label: 'Spike' }, { id: 'hard', label: 'Hard disc' },
   { id: 'bands', label: 'Bands' }, { id: 'tail', label: 'Long tail' },
+  { id: 'cosine', label: 'Cosine' }, { id: 'exponential', label: 'Exponential' },
+  { id: 'power', label: 'Power' }, { id: 'bell', label: 'Bell' }, { id: 'softstep', label: 'Soft step' },
+  { id: 'quadratic', label: 'Quadratic' }, { id: 'cubic', label: 'Cubic' }, { id: 'quintic', label: 'Quintic' },
+  { id: 'sine', label: 'Sine' }, { id: 'logarithmic', label: 'Logarithmic' },
 ];
 
 /** The same curves as the GLSL, for the little chart on each rule card. */
@@ -185,6 +204,16 @@ export const RIG_FALLOFF_FN: Record<RigFalloffId, (q: number) => number> = {
   bands: q => (0.5 + 0.5 * Math.cos(q * 18)) * (1 - (Math.min(1, Math.max(0, q)) ** 2 * (3 - 2 * Math.min(1, Math.max(0, q))))),
   tail: q => Math.exp(-q * 3),
   dome: q => Math.sqrt(Math.max(1 - q * q, 0)),
+  cosine: q => q <= 1 ? 0.5 + 0.5 * Math.cos(Math.PI * q) : 0,
+  exponential: q => Math.exp(-q * 4.5),
+  power: q => Math.max(1 - q, 0) ** 2.8,
+  bell: q => Math.exp(-(((q - 0.35) * 3) ** 2)),
+  softstep: q => 1 - (Math.min(1, Math.max(0, (q - 0.2) / 0.65)) ** 2 * (3 - 2 * Math.min(1, Math.max(0, (q - 0.2) / 0.65)))),
+  quadratic: q => Math.max(1 - q, 0) ** 2,
+  cubic: q => Math.max(1 - q, 0) ** 3,
+  quintic: q => Math.max(1 - q, 0) ** 5,
+  sine: q => Math.sin(Math.PI * 0.5 * Math.min(1, Math.max(0, 1 - q))),
+  logarithmic: q => Math.log(1 + 8 * Math.max(1 - q, 0)) / Math.log(9),
 };
 
 export interface RigSourceDef { id: RigSourceId; label: string; hint: string; params: RigParamDef[] }
@@ -271,6 +300,8 @@ export function makeRule(effect: RigEffectId, over: Partial<Omit<RigRule, 'id' |
     rotation: 0,
     shapeN: 5,
     edge: 0,
+    fadePower: 1,
+    fadeWidth: 1,
     sp1: sourceDefaults[0] ?? 0,
     sp2: sourceDefaults[1] ?? 0,
     drives: [],
@@ -358,6 +389,8 @@ export function normalizeRule(raw: unknown): RigRule | null {
     rotation: num(value.rotation, -360, 360, 0),
     shapeN: Math.round(num(value.shapeN, 2, 12, 5)),
     edge: num(value.edge, 0, 1, 0),
+    fadePower: num(value.fadePower, 0.25, 4, 1),
+    fadeWidth: num(value.fadeWidth, 0.25, 2, 1),
     sp1: sourceParams[0] ? num(value.sp1, sourceParams[0].min, sourceParams[0].max, sourceParams[0].def) : 0,
     sp2: sourceParams[1] ? num(value.sp2, sourceParams[1].min, sourceParams[1].max, sourceParams[1].def) : 0,
     drives: (Array.isArray(value.drives) ? value.drives : []).map(normalizeDrive).filter((drive): drive is RigDrive => !!drive).slice(0, RIG_MAX_DRIVES),

@@ -26,21 +26,25 @@ function lintGlsl(source: string) {
   assert.equal(parens, 0, 'unbalanced parentheses');
   assert.doesNotMatch(source, /\bRG_(FALL|BLEND)\(/, 'unreplaced macro');
   assert.doesNotMatch(source, /\/\*@RIG_/, 'unreplaced marker');
-  for (const match of source.replace(/uniform [^;]*;/g, '').matchAll(/uRule[BCDE]\[(\d+)\]/g)) assert.ok(Number(match[1]) < RIG_MAX_RULES);
+  for (const match of source.replace(/uniform [^;]*;/g, '').matchAll(/uRule[BCDEF]\[(\d+)\]/g)) assert.ok(Number(match[1]) < RIG_MAX_RULES);
 }
 
-test('the style registry is the single source of truth: 27 styles, contiguous GLSL indices', () => {
-  assert.equal(SHADER_STYLE_LIST.length, 27);
-  assert.equal(SHADER_STYLE_LIST.filter(style => style.isNew).length, 15);
-  assert.deepEqual(SHADER_STYLE_IDS.map(id => SHADER_STYLE_INDEX[id]), Array.from({ length: 27 }, (_, index) => index));
+test('the style registry is the single source of truth: 35 styles, contiguous GLSL indices', () => {
+  assert.equal(SHADER_STYLE_LIST.length, 35);
+  assert.equal(SHADER_STYLE_LIST.filter(style => style.isNew).length, 23);
+  assert.deepEqual(SHADER_STYLE_IDS.map(id => SHADER_STYLE_INDEX[id]), Array.from({ length: 35 }, (_, index) => index));
   assert.equal(SHADER_STYLE_INDEX.smoke, 10);
   assert.equal(SHADER_STYLE_INDEX.fire, 11);
   for (const style of SHADER_STYLE_LIST) {
     assert.ok(style.params.length <= 4, `${style.id} has more than four parameters`);
     if (style.isNew) assert.equal(style.params.length, 4, `${style.id} should expose four controls`);
     // every index has a branch in the shader (the last style is the final else)
-    if (style.index < 26) assert.ok(template.includes(`uStyle < ${style.index}.5`), `no branch for style ${style.id}`);
+    if (style.index < 34) assert.ok(template.includes(`uStyle < ${style.index}.5`), `no branch for style ${style.id}`);
   }
+});
+
+test('interaction shape and fade catalogs total 35 choices', () => {
+  assert.equal(RIG_SHAPES.length + RIG_FALLOFFS.length, 35);
 });
 
 test('style parameters clamp into range and fall back to the style defaults', () => {
@@ -128,6 +132,17 @@ test('rigSignature changes with structure but not with slider values', () => {
   const disabled = makeRig('b', [makeRule('swirl'), { ...makeRule('glow'), enabled: false }]);
   assert.equal(activeRules(disabled).length, 1);
   assert.equal(rigSignature(disabled), rigSignature(makeRig('c', [makeRule('swirl')])));
+});
+
+test('fade customization is packed as uniforms and leaves the shader structure stable', () => {
+  const rule = makeRule('glow', { fadePower: 2.4, fadeWidth: 1.6 });
+  const rig = makeRig('fade', [rule]);
+  const buffers = createRigBuffers();
+  evaluateRig(rig, createPointerEngine().advance(1 / 60, 0), buffers);
+  assert.deepEqual(Array.from(buffers.f.slice(0, 2)), [2.4, 1.6]);
+  const shader = assembleFragmentShader(template, rig);
+  assert.ok(shader.includes('uRuleF[0]'));
+  assert.ok(shader.includes('float fadeQ = pow(max(q / max(fade.y, 0.05), 0.0), max(fade.x, 0.1));'));
 });
 
 test('the generated shader contains only the effects in use', () => {
