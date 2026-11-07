@@ -13,5 +13,5 @@ export const UNIFORM_NAMES = [
   'uPaletteAlpha[0]', 'uRipples[0]', 'uWrapMode', 'uToneMap', 'uVignette',
   'uSheen', 'uGrain', 'uLutEnabled', 'uPaletteLut', 'uProjectOutput',
   'uLayerMixEnabled', 'uLayerMixMode', 'uLayerMixStrength', 'uLayerMixSpeed', 'uLayerMixLut',
-  'uRuleB[0]', 'uRuleC[0]', 'uRuleD[0]', 'uRuleE[0]', 'uRuleF[0]', 'uTrail[0]', 'uTouch2',
+  'uRuleB[0]', 'uRuleC[0]', 'uRuleD[0]', 'uRuleE[0]', 'uRuleF[0]', 'uRuleG[0]', 'uRuleH[0]', 'uRuleI[0]', 'uRuleTextureAtlas', 'uTrail[0]', 'uTouch2',
 ] as const;

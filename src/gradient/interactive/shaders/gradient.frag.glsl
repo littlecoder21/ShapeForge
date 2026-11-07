@@ -66,6 +66,7 @@ uniform float uLayerMixStrength;
 uniform float uLayerMixSpeed;
 uniform sampler2D uPaletteLut;
 uniform sampler2D uLayerMixLut;
+uniform sampler2D uRuleTextureAtlas;
 uniform vec4 uPalette[8];
 uniform float uPaletteAlpha[8];
 uniform vec4 uRipples[8];
@@ -77,6 +78,9 @@ uniform vec4 uRuleC[8];
 uniform vec4 uRuleD[8];
 uniform vec4 uRuleE[8];
 uniform vec4 uRuleF[8];
+uniform vec4 uRuleG[8];
+uniform vec4 uRuleH[8];
+uniform vec4 uRuleI[8];
 uniform vec4 uTrail[12];
 uniform vec3 uTouch2;
 

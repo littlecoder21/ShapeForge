@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { assembleFragmentShader, generateRigGlsl, RIG_FUNCTIONS_MARKER } from './rig/glsl';
 import {
-  RIG_EFFECTS, RIG_EFFECT_MAP, RIG_FALLOFFS, RIG_MAX_RULES, RIG_SHAPES, RIG_SOURCES, RIG_COLOR_MODES, RIG_BLENDS,
+  RIG_EFFECTS, RIG_EFFECT_MAP, RIG_FALLOFFS, RIG_MAX_RULES, RIG_SHAPES, RIG_SOURCES, RIG_COLOR_MODES, RIG_BLENDS, RIG_CSS_FX_TYPES,
   activeRules, makeDrive, makeRig, makeRule, normalizeRig, rigSignature,
 } from './rig/model';
 import { RIG_PRESETS, RIG_PRESET_MAP, rigFromLegacyMode } from './rig/presets';
@@ -26,7 +26,7 @@ function lintGlsl(source: string) {
   assert.equal(parens, 0, 'unbalanced parentheses');
   assert.doesNotMatch(source, /\bRG_(FALL|BLEND)\(/, 'unreplaced macro');
   assert.doesNotMatch(source, /\/\*@RIG_/, 'unreplaced marker');
-  for (const match of source.replace(/uniform [^;]*;/g, '').matchAll(/uRule[BCDEF]\[(\d+)\]/g)) assert.ok(Number(match[1]) < RIG_MAX_RULES);
+  for (const match of source.replace(/uniform [^;]*;/g, '').matchAll(/uRule[BCDEFGH]\[(\d+)\]/g)) assert.ok(Number(match[1]) < RIG_MAX_RULES);
 }
 
 test('the style registry is the single source of truth: 35 styles, contiguous GLSL indices', () => {
@@ -43,8 +43,8 @@ test('the style registry is the single source of truth: 35 styles, contiguous GL
   }
 });
 
-test('interaction shape and fade catalogs total 35 choices', () => {
-  assert.equal(RIG_SHAPES.length + RIG_FALLOFFS.length, 35);
+test('interaction shape and fade catalogs include built-in and custom options', () => {
+  assert.equal(RIG_SHAPES.length + RIG_FALLOFFS.length, 36);
 });
 
 test('style parameters clamp into range and fall back to the style defaults', () => {
@@ -127,6 +127,12 @@ test('rigSignature changes with structure but not with slider values', () => {
   rig.rules[0].drives.push(makeDrive({ source: 'speed' }));
   rig.rules[1].color = '#ff0000';
   assert.equal(rigSignature(rig), before, 'numbers are uniforms, so no recompilation');
+  rig.rules[0].cssFx = { type: 'brightness', enabled: true, params: { amount: 140 } };
+  const withCssFx = rigSignature(rig);
+  rig.rules[0].cssFx.params.amount = 180;
+  assert.equal(rigSignature(rig), withCssFx, 'CSS FX parameters are uniforms');
+  rig.rules[0].cssFx.type = 'contrast';
+  assert.notEqual(rigSignature(rig), withCssFx, 'changing the CSS FX rebuilds its shader operation');
   rig.rules[0].falloff = 'ring';
   assert.notEqual(rigSignature(rig), before);
   const disabled = makeRig('b', [makeRule('swirl'), { ...makeRule('glow'), enabled: false }]);
@@ -134,15 +140,56 @@ test('rigSignature changes with structure but not with slider values', () => {
   assert.equal(rigSignature(disabled), rigSignature(makeRig('c', [makeRule('swirl')])));
 });
 
+test('per-rule CSS FX are normalized, packed, and emitted as shader operations', () => {
+  const rig = normalizeRig({
+    rules: [{
+      ...makeRule('glow'),
+      cssFx: { type: 'color-drift', params: { angle: 42, amount: 150 } },
+    }],
+  })!;
+  const rule = rig.rules[0];
+  assert.deepEqual(rule.cssFx, { type: 'color-drift', enabled: true, params: { angle: 42, amount: 150 } });
+  const buffers = createRigBuffers();
+  evaluateRig(rig, createPointerEngine().advance(1 / 60, 0), buffers);
+  assert.deepEqual(Array.from(buffers.i.slice(0, 4)), [150, 42, 150, 0]);
+  const shader = assembleFragmentShader(template, rig);
+  assert.ok(shader.includes('vec4 rgI = uRuleI[0]'));
+  assert.ok(shader.includes('rgFxCol = rigCssHue(rgFxCol, rgI.y * 0.0174533)'));
+  assert.ok(shader.includes('rgFxCol, max(rgI.z, 0.0) / 100.0'));
+  assert.equal(normalizeRig({ rules: [{ ...makeRule('glow'), cssFx: { type: 'blur', params: { radius: 8 } } }] })?.rules[0].cssFx, null);
+  for (const type of RIG_CSS_FX_TYPES) {
+    const fxRule = makeRule('glow', { cssFx: { type, enabled: true, params: {} } });
+    lintGlsl(assembleFragmentShader(template, makeRig('css-fx', [fxRule])));
+  }
+});
+
 test('fade customization is packed as uniforms and leaves the shader structure stable', () => {
-  const rule = makeRule('glow', { fadePower: 2.4, fadeWidth: 1.6 });
+  const rule = makeRule('glow', {
+    fadePower: 2.4, fadeWidth: 1.6, fadeMode: 'angle', fadeStart: 0.2,
+    fadeSoftness: 0.7, fadeOpacity: 0.65, fadeInvert: true,
+  });
   const rig = makeRig('fade', [rule]);
   const buffers = createRigBuffers();
   evaluateRig(rig, createPointerEngine().advance(1 / 60, 0), buffers);
-  assert.deepEqual(Array.from(buffers.f.slice(0, 2)), [2.4, 1.6]);
+  assert.ok(Math.abs(buffers.f[0] - 2.4) < 0.0001);
+  assert.ok(Math.abs(buffers.f[1] - 1.6) < 0.0001);
+  assert.ok(Array.from(buffers.g.slice(0, 3)).every((value, index) => Math.abs(value - [0.2, 0.7, 0.65][index]) < 0.0001));
+  assert.equal(buffers.g[3], 7);
   const shader = assembleFragmentShader(template, rig);
   assert.ok(shader.includes('uRuleF[0]'));
-  assert.ok(shader.includes('float fadeQ = pow(max(q / max(fade.y, 0.05), 0.0), max(fade.x, 0.1));'));
+  assert.ok(shader.includes('uRuleG[0]'));
+  assert.ok(shader.includes('q = max(shapeQ, clamp(0.5 + dot(fd, vec2(cos(ang), sin(ang))) * 0.5, 0.0, 1.0));'));
+});
+
+test('custom interaction polygons are clamped, capped, and emitted as bounded GLSL', () => {
+  const points = Array.from({ length: 40 }, (_, index) => ({ x: index / 4 - 5, y: index / -4 + 5 }));
+  const normalized = normalizeRig({ rules: [{ ...makeRule('glow'), shape: 'custom', customPoints: points }] })!;
+  const rule = normalized.rules[0];
+  assert.equal(rule.customPoints.length, 32);
+  assert.ok(rule.customPoints.every(point => Math.abs(point.x) <= 1 && Math.abs(point.y) <= 1));
+  const shader = assembleFragmentShader(template, makeRig('custom', [rule]));
+  assert.ok(shader.includes('float rigDistCustom0'));
+  assert.ok(shader.includes('float rigWRule0'));
 });
 
 test('the generated shader contains only the effects in use', () => {

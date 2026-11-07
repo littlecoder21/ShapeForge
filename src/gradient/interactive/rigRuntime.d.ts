@@ -43,7 +43,7 @@ export interface PointerEngine {
 }
 
 export interface RigBuffers {
-  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; f: Float32Array; trail: Float32Array; count: number;
+  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; f: Float32Array; g: Float32Array; h: Float32Array; i: Float32Array; trail: Float32Array; count: number;
 }
 
 export interface RigEvalRule {
@@ -57,6 +57,13 @@ export interface RigEvalRule {
   edge: number;
   fadePower: number;
   fadeWidth: number;
+  fadeMode?: string;
+  fadeStart?: number;
+  fadeSoftness?: number;
+  fadeOpacity?: number;
+  fadeInvert?: boolean;
+  texture?: { enabled: boolean; scale?: number; offsetX?: number; offsetY?: number };
+  cssFx?: { enabled: boolean; params: Readonly<Record<string, number>> } | null;
   shapeN: number;
   sp1: number;
   sp2: number;

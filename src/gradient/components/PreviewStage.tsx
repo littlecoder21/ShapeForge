@@ -13,6 +13,7 @@ import { CHECKER } from './ui';
 import LayeredArt from './LayeredArt';
 import { DirectionAwareRange } from '../../shared/controls';
 import { normalizeInteractiveSettings } from '../interactive/types';
+import { getPointerHub } from '../../interactive/core/gpu/PointerHub';
 
 /* The interactive canvas. The art is a real DOM composition (the exact CSS that gets exported), scaled with a CSS transform;
  * handles are an SVG overlay. Zoom / pan / pinch only touch the transform, never the project. */
@@ -149,21 +150,10 @@ function PreviewStage({ store, mode, playing, onTogglePlay, onPlaybackComplete }
     return best;
   };
   const cancelDrag = () => { const g = gest.current; if (g.t === 'drag') { store.updateLayer(g.start.id, () => g.start); store.end(); } setRead(null); };
+  /* One real pointer event goes to the central pointer hub, which hands it to every shader layer directly. This replaced
+   * re-dispatching a synthetic DOM PointerEvent to every shader canvas (N allocations + N dispatches per pointer move). */
   const relayShaderPointer = (event: RPointerEvent) => {
-    const canvases = worldRef.current?.querySelectorAll<HTMLCanvasElement>('.gs-shader-canvas');
-    if (!canvases) return;
-    canvases.forEach(canvas => {
-      if (canvas === event.target) return;
-      canvas.dispatchEvent(new PointerEvent(event.type, {
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        button: event.button,
-        buttons: event.buttons,
-        pressure: event.pressure,
-      }));
-    });
+    getPointerHub().dispatch(event.type, event);
   };
   const beginPinch = () => {
     const ids = [...pointers.current.keys()].slice(0, 2) as [number, number]; cancelDrag();

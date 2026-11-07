@@ -1,4 +1,5 @@
 import { createPointerEngine, type PointerClick, type PointerEngine, type PointerFrame } from '../rigRuntime';
+import { getPointerHub, type PointerHub, type PointerKind, type PointerSample, type PointerSink } from '../../../interactive/core/gpu/PointerHub';
 
 export { pointerSmoothingFactor } from '../rigRuntime';
 export type { PointerFrame } from '../rigRuntime';
@@ -36,25 +37,21 @@ function engineOptions(options: Omit<PointerOptions, 'onChange'>) {
   };
 }
 
-/** Listens to pointer events on one canvas and feeds the shared engine (rigRuntime.js). */
-export class PointerManager {
+/** One layer's pointer state: the shared engine (rigRuntime.js) plus this layer's canvas rectangle.
+ *  It no longer listens to the DOM itself: the central PointerHub hands it every pointer event once. */
+export class PointerManager implements PointerSink {
   private readonly canvas: HTMLCanvasElement;
   private readonly onChange: () => void;
   private readonly engine: PointerEngine;
-  private readonly listeners: Array<[string, EventListener]> = [];
+  private readonly unregister: () => void;
   private rect: DOMRect | null = null;
 
-  constructor(canvas: HTMLCanvasElement, options: PointerOptions) {
+  constructor(canvas: HTMLCanvasElement, options: PointerOptions, hub: PointerHub = getPointerHub()) {
     this.canvas = canvas;
     this.onChange = options.onChange;
     this.engine = createPointerEngine(engineOptions(options));
     canvas.style.touchAction = 'none';
-    this.listen('pointermove', this.handleMove);
-    this.listen('pointerdown', this.handleDown);
-    this.listen('pointerup', this.handleUp);
-    this.listen('pointercancel', this.handleCancel);
-    this.listen('pointerleave', this.handleLeave);
-    window.addEventListener('scroll', this.invalidate, { passive: true, capture: true });
+    this.unregister = hub.register(this);
   }
 
   updateOptions(options: Omit<PointerOptions, 'onChange'>) {
@@ -63,6 +60,10 @@ export class PointerManager {
 
   /** Called by the renderer when the canvas is resized so pointer events do not force a layout read. */
   invalidateRect() {
+    this.rect = null;
+  }
+
+  invalidate() {
     this.rect = null;
   }
 
@@ -87,59 +88,47 @@ export class PointerManager {
   }
 
   destroy() {
-    window.removeEventListener('scroll', this.invalidate, { capture: true });
-    this.listeners.forEach(([type, listener]) => this.canvas.removeEventListener(type, listener));
-    this.listeners.length = 0;
+    this.unregister();
     this.engine.reset();
   }
 
-  private listen(type: string, handler: (event: PointerEvent) => void) {
-    const listener: EventListener = event => handler(event as PointerEvent);
-    this.canvas.addEventListener(type, listener, { passive: true });
-    this.listeners.push([type, listener]);
-  }
-
-  private position(event: PointerEvent) {
+  private position(sample: PointerSample) {
     // getBoundingClientRect forces layout; cache it between resizes and refresh when scrolled / moved.
     const rect = this.rect ?? (this.rect = this.canvas.getBoundingClientRect());
     if (!rect.width || !rect.height) { this.rect = null; return null; }
     return {
-      x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
-      y: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1),
+      x: clamp((sample.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp(1 - (sample.clientY - rect.top) / rect.height, 0, 1),
     };
   }
 
-  private readonly invalidate = () => { this.rect = null; };
-
-  private readonly handleMove = (event: PointerEvent) => {
-    const position = this.position(event);
-    if (!position) return;
-    this.engine.move(event.pointerId, position.x, position.y, event.pointerType);
+  handle(kind: PointerKind, sample: PointerSample) {
+    switch (kind) {
+      case 'move': {
+        const position = this.position(sample);
+        if (!position) return;
+        this.engine.move(sample.pointerId, position.x, position.y, sample.pointerType);
+        break;
+      }
+      case 'down': {
+        this.rect = null;
+        const position = this.position(sample);
+        if (!position) return;
+        this.engine.down(sample.pointerId, position.x, position.y, sample.pointerType);
+        break;
+      }
+      case 'up':
+        this.engine.up(sample.pointerId);
+        break;
+      case 'cancel':
+        this.engine.up(sample.pointerId);
+        this.engine.leave(sample.pointerId, sample.pointerType);
+        break;
+      case 'leave':
+        this.rect = null;
+        this.engine.leave(sample.pointerId, sample.pointerType);
+        break;
+    }
     this.onChange();
-  };
-
-  private readonly handleDown = (event: PointerEvent) => {
-    this.rect = null;
-    const position = this.position(event);
-    if (!position) return;
-    this.engine.down(event.pointerId, position.x, position.y, event.pointerType);
-    this.onChange();
-  };
-
-  private readonly handleUp = (event: PointerEvent) => {
-    this.engine.up(event.pointerId);
-    this.onChange();
-  };
-
-  private readonly handleCancel = (event: PointerEvent) => {
-    this.engine.up(event.pointerId);
-    this.engine.leave(event.pointerId, event.pointerType);
-    this.onChange();
-  };
-
-  private readonly handleLeave = (event: PointerEvent) => {
-    this.rect = null;
-    this.engine.leave(event.pointerId, event.pointerType);
-    this.onChange();
-  };
+  }
 }

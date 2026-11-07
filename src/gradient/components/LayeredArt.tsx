@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
 import { effectDefs, layerCss, stableNames } from '../engine/css';
 import type { GradientLayer, GradientProject } from '../engine/model';
+import { planSingleLayer, resolveRenderProject } from '../interactive/singleLayer';
 import InteractiveCanvas from './InteractiveCanvas';
 
 /** One <style> per layer: React only rewrites the style of the layer that actually changed, so dragging a handle on one
@@ -13,16 +14,21 @@ const LayerStyle = memo(function LayerStyle({ layer, canvas, rootSel, scope }: {
 interface Props { project: GradientProject; rootClass: string; playing?: boolean; interactiveShaders?: boolean; className?: string; testId?: string }
 
 /** The live DOM composition of a project — the same CSS the Output panel exports, scoped to `.rootClass`. */
-function LayeredArt({ project, rootClass, playing = false, interactiveShaders = false, className = '', testId }: Props) {
+function LayeredArt({ project: source, rootClass, playing = false, interactiveShaders = false, className = '', testId }: Props) {
+  // Keep the original CSS stack intact and draw one shared procedural overlay on its host layer.
+  const project = useMemo(() => resolveRenderProject(source), [source]);
+  const singleLayer = useMemo(() => planSingleLayer(source), [source]);
   const visible = project.layers.filter(l => l.visible);
   const effectKey = JSON.stringify([project.canvas, visible.map(l => [l.id, l.effects, l.type === 'mesh' ? l.mesh.points.map(point => point.effects) : []])]);
   const names = { ...stableNames, scope: rootClass };
   const defs = useMemo(() => effectDefs(project, names), [effectKey, rootClass]);
   const rootSel = `.${rootClass}`;
-  return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId}>
+  return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId} data-single-layer={project !== source ? 'on' : undefined}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} scope={rootClass} />)}
     {[...visible].reverse().map(l => <i key={l.id} className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}>
-      {project.shader?.enabled && l.shader?.enabled && project.shader.renderBackend !== 'css' && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
+      {project.shader?.enabled && l.shader?.enabled && project.shader.renderBackend !== 'css'
+        && (!singleLayer.active || l.id === singleLayer.hostId)
+        && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
       {l.text
         ? <span className="g-text">{l.text.content}</span>
         : l.type === 'mesh' && [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ point, index }) => <i key={point.id} className={`mesh-point-${index}`} />)}

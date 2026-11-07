@@ -11,25 +11,21 @@ import { UNIFORM_NAMES } from '../uniforms';
 import { assembleProceduralShader } from '../../procedural/glsl';
 import { createProceduralState, uploadProceduralUniforms, type ProceduralState } from '../../procedural/proceduralRuntime';
 import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../../procedural/types';
-import { AdaptiveResolution } from './AdaptiveResolution';
+import { ruleTextureAtlasDataUri } from '../../gradient/interactive/rig/textureAtlas';
 import { getFrameScheduler } from './FrameScheduler';
+import { QUALITY_PRESETS, layerWeight, requestedScale, renderSize, type LayerLoad } from './gpu/GlobalRenderBudget';
+import type { LutHandle } from './gpu/GpuResourceManager';
+import type { ProgramEntry } from './gpu/ShaderProgramManager';
+import { getSharedRenderer, type RenderClient, type SharedRenderer } from './gpu/SharedRenderer';
 
 type GL = WebGLRenderingContext | WebGL2RenderingContext;
-type Uniforms = Record<string, WebGLUniformLocation | null>;
 
 const MAX_STOPS = 8;
 const MAX_RIPPLES = 8;
 const MAX_MESH_POINTS = 8;
 const LUT_SIZE = 512;
-const MAX_RENDER_PIXELS = 1_200_000;
-const MAX_RENDER_SCALE = 1.25;
-/** the lowest absolute render scale (device pixels per CSS pixel) adaptive resolution may reach */
-const MIN_ADAPTIVE_RENDER_SCALE = 0.5;
-const QUALITY_SCALE = { low: 0.55, medium: 0.75, high: 1, ultra: 1.35 } as const;
-const QUALITY_OCTAVES = { low: 3, medium: 4, high: 5, ultra: 6 } as const;
 const GEOMETRY_ID = { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 } as const;
 const LAYER_BLEND_ID: Record<ShaderLayerColorBlend, number> = { mix: 0, multiply: 1, screen: 2, overlay: 3, add: 4 };
-const COMPLETION_STATUS_KHR = 0x91b1;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 function normalizePalette(stops: ShaderStop[]): ShaderStop[] {
@@ -87,6 +83,17 @@ function sameValue(a: unknown, b: unknown): boolean {
   return true;
 }
 
+/** Palette lookup tables baked on the CPU are shared by every layer with the same colours (small LRU). */
+const lutBakeCache = new Map<string, Uint8Array>();
+function bakeLutCached(key: string, palette: ShaderStop[], space: ShaderGeometry['space']): Uint8Array {
+  const cached = lutBakeCache.get(key);
+  if (cached) { lutBakeCache.delete(key); lutBakeCache.set(key, cached); return cached; }
+  const baked = bakePaletteLut(palette, space ?? 'srgb', LUT_SIZE);
+  lutBakeCache.set(key, baked);
+  if (lutBakeCache.size > 48) lutBakeCache.delete(lutBakeCache.keys().next().value as string);
+  return baked;
+}
+
 export interface InteractiveRendererOptions {
   palette?: ShaderStop[];
   settings?: Partial<InteractiveSettings>;
@@ -98,20 +105,30 @@ export interface InteractiveRendererOptions {
   /** the layer's procedural engine; null / disabled = the manual gradient only */
   procedural?: ProceduralConfig | null;
   onStatusChange?: (status: InteractiveRendererStatus, message?: string) => void;
+  /** injected for tests; the app always uses the one shared renderer */
+  renderer?: SharedRenderer;
 }
 
 interface PendingBuild {
-  program: WebGLProgram;
-  vertex: WebGLShader;
-  fragment: WebGLShader;
+  entry: ProgramEntry;
+  /** the structural key (without the WebGL version tag) */
   key: string;
   withRig: boolean;
   /** true when the procedural engine is compiled into this program */
   withProcedural: boolean;
 }
 
-export class InteractiveRenderer {
+/* One shader layer.
+ *
+ * It keeps everything that belongs to the layer — palette, geometry, mesh points, style, motion settings, interaction state,
+ * its own pointer engine and procedural simulation — and draws through the SHARED renderer: the WebGL context, the compiled
+ * programs, the palette textures, the frame loop, the pointer input and the resolution budget are all shared infrastructure.
+ * The public interface (constructor, update, setPaused, resetInteraction, getStatus, destroy) is unchanged. */
+export class InteractiveRenderer implements RenderClient {
+  id = 0;
   private readonly canvas: HTMLCanvasElement;
+  private readonly hub: SharedRenderer;
+  private readonly context2d: CanvasRenderingContext2D | null;
   private readonly onStatusChange?: InteractiveRendererOptions['onStatusChange'];
   private settings: InteractiveSettings;
   private layerState: InteractiveLayerState = { styleParams: resolveStyleParams('flow'), reaction: 1 };
@@ -121,17 +138,17 @@ export class InteractiveRenderer {
   private meshPoints: ShaderMeshPoint[];
   private meshBase: string;
   private readonly pointer: PointerManager;
-  private gl: GL | null = null;
-  private program: WebGLProgram | null = null;
+  private entry: ProgramEntry | null = null;
   private pending: PendingBuild | null = null;
   private builtKey = '';
   /** keys whose compile failed on this device, so a failing shader is never retried until its key changes */
   private readonly failedKeys = new Set<string>();
-  private parallelCompile = false;
-  private buffer: WebGLBuffer | null = null;
-  private paletteTexture: WebGLTexture | null = null;
-  private layerMixTexture: WebGLTexture | null = null;
-  private uniforms: Uniforms = {};
+  private paletteHandle: LutHandle | null = null;
+  private layerMixHandle: LutHandle | null = null;
+  private ruleTextureAtlas: WebGLTexture | null = null;
+  private ruleTextureKey = '';
+  private ruleTextureRequest = 0;
+  private ruleTextureImage: HTMLImageElement | null = null;
   private readonly paletteColors = new Float32Array(MAX_STOPS * 4);
   private readonly paletteAlphas = new Float32Array(MAX_STOPS);
   private readonly meshPointData = new Float32Array(MAX_MESH_POINTS * 4);
@@ -152,33 +169,34 @@ export class InteractiveRenderer {
   private lutEnabled = false;
   private cachedRippleCount = -1;
   private shaderTime = 0;
-  /** resolution / effort controller: steps down when frames are slow, and recovers gradually */
-  private readonly adaptive = new AdaptiveResolution();
   /** the procedural engine's config when it is active, else null */
   private procedural: ProceduralConfig | null = null;
   private proceduralState: ProceduralState | null = null;
   /** true while the program in use has the procedural code compiled in */
   private proceduralBuilt = false;
-  private maxFragmentUniformVectors = 0;
-  private positionAttribute = -1;
-  private uvAttribute = -1;
+  /** the procedural simulation only advances when something can have changed */
+  private proceduralDirty = true;
+  private lastOctaveCap = -1;
+  /** settings-derived uniforms are uploaded only when they changed (or another layer used the shared program since) */
+  private staticDirty = true;
   private resizeObserver: ResizeObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
   private mediaQuery: MediaQueryList | null = null;
-  private readonly scheduler = getFrameScheduler();
-  private frameId = 0;
   private previousFrame = 0;
   private clock = 0;
   private paused = false;
   private visible = true;
   private reducedMotion = false;
   private disposed = false;
+  private registered = false;
+  private animating = false;
+  private lastBudgetKey = '';
   private status: InteractiveRendererStatus = 'fallback';
   private message = '';
-  private readonly webgl2: boolean;
 
   constructor(canvas: HTMLCanvasElement, options: InteractiveRendererOptions = {}) {
     this.canvas = canvas;
+    this.hub = options.renderer ?? getSharedRenderer();
     this.settings = normalizeInteractiveSettings({ ...DEFAULT_INTERACTIVE_SETTINGS, ...options.settings });
     this.layerState = {
       styleParams: resolveStyleParams(this.settings.style, options.layer?.styleParams),
@@ -197,31 +215,20 @@ export class InteractiveRenderer {
     this.refreshInteractionColors();
     this.refreshRigFlags();
     this.onStatusChange = options.onStatusChange;
-    this.pointer = new PointerManager(canvas, this.pointerOptions());
+    this.pointer = new PointerManager(canvas, this.pointerOptions(), this.hub.pointers);
+    // the layer's own canvas is a plain 2D surface now; the shared renderer copies finished frames into it
+    this.context2d = canvas.getContext('2d');
 
-    const contextOptions: WebGLContextAttributes = {
-      alpha: true,
-      antialias: false,
-      depth: false,
-      premultipliedAlpha: false,
-      preserveDrawingBuffer: false,
-      powerPreference: 'default',
-    };
-    const context2 = canvas.getContext('webgl2', contextOptions);
-    const context1 = context2 ? null : canvas.getContext('webgl', contextOptions);
-    this.gl = context2 ?? context1;
-    this.webgl2 = context2 !== null;
-
-    if (!this.gl) {
+    if (!this.hub.available || !this.context2d) {
       this.setStatus('fallback', 'WebGL is unavailable; the static gradient can remain visible.');
     } else {
-      this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
-      this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
+      this.hub.register(this);
+      this.registered = true;
       try {
-        this.parallelCompile = !!this.gl.getExtension('KHR_parallel_shader_compile');
-        this.initGeometryAndTextures(this.gl);
+        this.refreshRuleTextureAtlas();
         this.observe();
         this.resize();
+        this.acquireTextures();
         this.beginBuild(true);
         this.setStatus('compiling', 'Compiling the gradient shader…');
         this.schedule();
@@ -242,12 +249,14 @@ export class InteractiveRenderer {
       if (!sameValue(next, this.settings)) {
         const previous = this.settings;
         this.settings = next;
+        this.staticDirty = true;
         // Only a change of quality / resolution should restart adaptive resolution; slider drags must not.
         if (previous.quality !== next.quality || previous.resolutionScale !== next.resolutionScale) {
-          this.adaptive.reset();
+          this.hub.budget.reset();
           needsResize = true;
         }
         if (!sameValue(previous.interactionColors, next.interactionColors) || previous.interactionColor !== next.interactionColor) this.refreshInteractionColors();
+        if (!sameValue(previous.rig, next.rig)) this.refreshRuleTextureAtlas();
         if (previous.style !== next.style) this.layerState = { ...this.layerState, styleParams: resolveStyleParams(next.style, this.layerState.styleParams) };
         this.pointer.updateOptions(this.pointerOptions());
         this.refreshRigFlags();
@@ -260,6 +269,7 @@ export class InteractiveRenderer {
         styleParams: resolveStyleParams(this.settings.style, update.layer.styleParams ?? this.layerState.styleParams),
         reaction: update.layer.reaction ?? this.layerState.reaction,
       };
+      this.staticDirty = true;
     }
     if (update.palette) {
       const palette = normalizePalette(update.palette);
@@ -271,12 +281,14 @@ export class InteractiveRenderer {
     }
     if (update.layerMix && !sameValue(update.layerMix, this.layerMix)) {
       this.layerMix = update.layerMix;
+      this.staticDirty = true;
       this.refreshLayerMixTexture();
     }
     if (update.geometry) {
       const geometry = normalizeGeometry(update.geometry);
       if (!sameValue(geometry, this.geometry)) {
         this.geometry = geometry;
+        this.staticDirty = true;
         this.refreshPaletteData();
         this.refreshLayerMixTexture();
       }
@@ -294,11 +306,14 @@ export class InteractiveRenderer {
       if (!sameValue(active, this.procedural)) {
         this.procedural = active;
         this.syncProceduralState();
+        this.hub.invalidateBudget();
+        needsResize = true;
         // only a change in which distortion types exist (or on / off) changes the compiled shader
         this.ensureBuild();
       }
     }
     if (needsResize) this.resize();
+    this.proceduralDirty = true;
     this.schedule();
   }
 
@@ -315,32 +330,85 @@ export class InteractiveRenderer {
   destroy() {
     if (this.disposed) return;
     this.disposed = true;
-    this.cancelFrame();
+    this.hub.cancelFrame(this);
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     this.mediaQuery?.removeEventListener('change', this.handleMotionChange);
     window.removeEventListener('resize', this.handleWindowResize);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
-    this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
     this.pointer.destroy();
-    const gl = this.gl;
-    if (gl) {
-      this.discardPending(gl);
-      if (this.buffer) gl.deleteBuffer(this.buffer);
-      if (this.program) gl.deleteProgram(this.program);
-      if (this.paletteTexture) gl.deleteTexture(this.paletteTexture);
-      if (this.layerMixTexture) gl.deleteTexture(this.layerMixTexture);
-      // Browsers cap live WebGL contexts (about 16). Releasing explicitly stops removed shader layers from
-      // pushing the remaining layers' contexts out ("too many active WebGL contexts") while garbage collection lags.
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-    }
-    this.buffer = null;
-    this.program = null;
-    this.paletteTexture = null;
-    this.layerMixTexture = null;
+    this.discardPending();
+    // deterministic cleanup: this layer gives back its program reference and its textures; the manager frees what nobody uses
+    this.hub.programs.release(this.entry);
+    this.hub.resources.releaseLut(this.paletteHandle);
+    this.hub.resources.releaseLut(this.layerMixHandle);
+    if (this.ruleTextureAtlas) this.hub.gpu.gl?.deleteTexture(this.ruleTextureAtlas);
+    this.ruleTextureAtlas = null;
+    this.ruleTextureImage = null;
+    this.entry = null;
+    this.paletteHandle = null;
+    this.layerMixHandle = null;
+    this.ruleTextureAtlas = null;
+    this.ruleTextureKey = '';
+    this.ruleTextureImage = null;
     this.proceduralState = null;
-    this.gl = null;
+    if (this.registered) this.hub.unregister(this);
+    this.registered = false;
+  }
+
+  /* ───────────── RenderClient ───────────── */
+
+  getLoad(): LayerLoad | null {
+    if (this.disposed) return null;
+    const cssWidth = this.canvas.clientWidth;
+    const cssHeight = this.canvas.clientHeight;
+    if (!cssWidth || !cssHeight) return null;
+    const preset = QUALITY_PRESETS[this.settings.quality];
+    return {
+      id: this.id,
+      cssWidth,
+      cssHeight,
+      requestedScale: requestedScale(window.devicePixelRatio || 1, this.settings.quality, this.settings.resolutionScale),
+      weight: layerWeight(this.procedural, preset.octaves),
+    };
+  }
+
+  getInfo() {
+    return { width: this.canvas.width, height: this.canvas.height, procedural: this.proceduralBuilt, animating: this.animating };
+  }
+
+  applyScale() {
+    this.resize(false);
+    if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
+  }
+
+  onContextLost() {
+    this.hub.cancelFrame(this);
+    // every GL object died with the context: forget the handles without releasing them
+    this.entry = null;
+    this.pending = null;
+    this.paletteHandle = null;
+    this.layerMixHandle = null;
+    this.builtKey = '';
+    this.proceduralBuilt = false;
+    this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
+  }
+
+  onContextRestored() {
+    try {
+      this.failedKeys.clear();
+      this.staticDirty = true;
+      this.proceduralDirty = true;
+      this.ruleTextureKey = '';
+      this.refreshRuleTextureAtlas();
+      this.acquireTextures();
+      this.resize();
+      this.beginBuild(true);
+      this.setStatus('compiling', 'Compiling the gradient shader…');
+      this.schedule();
+    } catch (error) {
+      this.setStatus('error', error instanceof Error ? error.message : 'WebGL context restoration failed.');
+    }
   }
 
   /* ───────────── program building ───────────── */
@@ -363,65 +431,99 @@ export class InteractiveRenderer {
     };
   }
 
+  private refreshRuleTextureAtlas() {
+    const key = JSON.stringify(this.settings.rig.rules.map(rule => rule.texture));
+    if (key === this.ruleTextureKey) return;
+    this.ruleTextureKey = key;
+    const request = ++this.ruleTextureRequest;
+    const uri = ruleTextureAtlasDataUri(this.settings.rig);
+    const upload = (image?: HTMLImageElement) => {
+      const gl = this.hub.gpu.gl;
+      if (!gl || !this.registered || this.disposed || request !== this.ruleTextureRequest) return;
+      if (!this.ruleTextureAtlas) this.ruleTextureAtlas = gl.createTexture();
+      if (!this.ruleTextureAtlas) {
+        this.setStatus('ready', 'Could not allocate the interaction texture atlas.');
+        return;
+      }
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.ruleTextureAtlas);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (image) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+      } else {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+      }
+      if (gl.getError() !== gl.NO_ERROR) {
+        this.setStatus('ready', 'Could not upload an interaction texture; other shader effects remain available.');
+        return;
+      }
+      this.schedule();
+    };
+    if (!uri) {
+      this.ruleTextureImage = null;
+      upload();
+      return;
+    }
+    const image = new Image();
+    this.ruleTextureImage = image;
+    image.onload = () => upload(image);
+    image.onerror = () => {
+      if (request === this.ruleTextureRequest) this.setStatus('ready', 'Could not load an interaction texture; check the selected texture preset.');
+    };
+    image.src = uri;
+  }
+
   /** What the shader is built from: interaction rules, quality, and which procedural distortion types exist. */
   private desiredKey(withRig: boolean, withProcedural = withRig) {
-    const octaves = QUALITY_OCTAVES[this.settings.quality];
-    const depth = this.settings.quality === 'low' ? 1 : 2;
+    const { octaves, warpDepth } = QUALITY_PRESETS[this.settings.quality];
     const procedural = withProcedural ? proceduralSignature(this.procedural) : 'off';
-    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${depth}#${procedural}`;
+    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${warpDepth}#${procedural}`;
   }
 
   /** Starts a new compile when the structure of the interaction (or the quality) changed. */
   private ensureBuild() {
-    if (!this.gl || this.disposed) return;
+    if (!this.registered || this.disposed || !this.hub.available) return;
     const key = this.desiredKey(true);
     if (key === this.builtKey || key === this.pending?.key || this.failedKeys.has(key)) return;
     this.beginBuild(true);
   }
 
   private beginBuild(withRig: boolean, withProcedural = withRig) {
-    const gl = this.gl;
-    if (!gl) return;
-    this.discardPending(gl);
+    this.discardPending();
     const rig: InteractionRig | null = withRig ? this.settings.rig : null;
     const procedural = withProcedural && isProceduralActive(this.procedural) ? this.procedural : null;
-    const octaves = QUALITY_OCTAVES[this.settings.quality];
-    const warpDepth = this.settings.quality === 'low' ? 1 : 2;
-    const fragmentSource = shaderSource(assembleProceduralShader(fragmentShaderTemplate, rig, { octaves, warpDepth }, procedural), 'fragment', this.webgl2);
-    const vertexSource = shaderSource(vertexShaderSource, 'vertex', this.webgl2);
-    const vertex = gl.createShader(gl.VERTEX_SHADER);
-    const fragment = gl.createShader(gl.FRAGMENT_SHADER);
-    const program = gl.createProgram();
-    if (!vertex || !fragment || !program) throw new Error('Could not allocate the WebGL shader program.');
-    gl.shaderSource(vertex, vertexSource);
-    gl.compileShader(vertex);
-    gl.shaderSource(fragment, fragmentSource);
-    gl.compileShader(fragment);
-    gl.attachShader(program, vertex);
-    gl.attachShader(program, fragment);
-    gl.linkProgram(program);
-    this.pending = { program, vertex, fragment, key: this.desiredKey(withRig, withProcedural), withRig, withProcedural: procedural !== null };
+    const { octaves, warpDepth } = QUALITY_PRESETS[this.settings.quality];
+    const webgl2 = this.hub.gpu.webgl2;
+    const key = this.desiredKey(withRig, withProcedural);
+    // layers whose key matches share this program: it is compiled (and its source assembled) once
+    const entry = this.hub.programs.acquire(`${webgl2 ? 'gl2' : 'gl1'}|${key}`, () => ({
+      vertex: shaderSource(vertexShaderSource, 'vertex', webgl2),
+      fragment: shaderSource(assembleProceduralShader(fragmentShaderTemplate, rig, { octaves, warpDepth }, procedural), 'fragment', webgl2),
+    }), UNIFORM_NAMES);
+    if (!entry) throw new Error('Could not allocate the WebGL shader program.');
+    this.pending = { entry, key, withRig, withProcedural: procedural !== null };
   }
 
-  private discardPending(gl: GL) {
-    const pending = this.pending;
-    if (!pending) return;
-    gl.deleteProgram(pending.program);
-    gl.deleteShader(pending.vertex);
-    gl.deleteShader(pending.fragment);
+  private discardPending() {
+    if (!this.pending) return;
+    this.hub.programs.release(this.pending.entry);
     this.pending = null;
   }
 
   /** Returns true while the build is still running. Finishing never blocks when parallel compile is available. */
   private pollBuild(): boolean {
-    const gl = this.gl;
     const pending = this.pending;
-    if (!gl || !pending) return false;
-    if (this.parallelCompile && !gl.getProgramParameter(pending.program, COMPLETION_STATUS_KHR)) return true;
-    const linked = gl.getProgramParameter(pending.program, gl.LINK_STATUS) as boolean;
-    if (!linked) {
-      const detail = (gl.getShaderInfoLog(pending.fragment) || gl.getProgramInfoLog(pending.program) || '').trim().slice(0, 500);
-      this.discardPending(gl);
+    if (!pending) return false;
+    const state = this.hub.programs.poll(pending.entry);
+    if (state === 'compiling') return true;
+    if (state === 'failed') {
+      const detail = pending.entry.error;
+      this.discardPending();
       this.failedKeys.add(pending.key);
       if (pending.withProcedural) {
         // Fallback ladder, step 1: keep the interaction rig, drop only the procedural engine.
@@ -438,70 +540,31 @@ export class InteractiveRenderer {
       this.setStatus('error', `Could not compile the gradient shader${detail ? `: ${detail}` : '.'}`);
       return false;
     }
-    gl.deleteShader(pending.vertex);
-    gl.deleteShader(pending.fragment);
-    const previous = this.program;
-    this.program = pending.program;
+    const previous = this.entry;
+    this.entry = pending.entry;
     this.builtKey = pending.key;
     this.proceduralBuilt = pending.withProcedural;
     this.pending = null;
-    if (previous) gl.deleteProgram(previous);
-    this.bindProgram(gl, pending.program);
+    this.hub.programs.release(previous);
+    this.hub.programs.locate(pending.entry);
+    this.proceduralDirty = true;
+    this.staticDirty = true;
     const message = this.failedKeys.size && (!pending.withRig || (!pending.withProcedural && isProceduralActive(this.procedural))) ? this.message : this.paletteNotice();
     this.setStatus('ready', message);
     return false;
   }
 
-  private bindProgram(gl: GL, program: WebGLProgram) {
-    this.uniforms = {};
-    UNIFORM_NAMES.forEach(name => { this.uniforms[name] = gl.getUniformLocation(program, name); });
-    gl.useProgram(program);
-    this.positionAttribute = gl.getAttribLocation(program, 'aPosition');
-    this.uvAttribute = gl.getAttribLocation(program, 'aUv');
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    if (this.positionAttribute >= 0) {
-      gl.enableVertexAttribArray(this.positionAttribute);
-      gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, 16, 0);
-    }
-    if (this.uvAttribute >= 0) {
-      gl.enableVertexAttribArray(this.uvAttribute);
-      gl.vertexAttribPointer(this.uvAttribute, 2, gl.FLOAT, false, 16, 8);
-    }
-    gl.uniform1i(this.uniforms.uPaletteLut ?? null, 0);
-    gl.uniform1i(this.uniforms.uLayerMixLut ?? null, 1);
-  }
-
-  private initGeometryAndTextures(gl: GL) {
-    const buffer = gl.createBuffer();
-    if (!buffer) throw new Error('Could not allocate the WebGL vertex buffer.');
-    this.buffer = buffer;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1, -1, 0, 0,
-       1, -1, 1, 0,
-      -1,  1, 0, 1,
-      -1,  1, 0, 1,
-       1, -1, 1, 0,
-       1,  1, 1, 1,
-    ]), gl.STATIC_DRAW);
-    this.maxFragmentUniformVectors = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS) as number;
-    gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.CULL_FACE);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    this.uploadPaletteTexture(gl);
-    this.uploadLayerMixTexture(gl);
-  }
-
   /* ───────────── procedural engine ───────────── */
 
-  /** Most noise octaves a procedural distortion stage may use right now: the quality level, minus adaptive effort. */
+  /** Most noise octaves a procedural distortion stage may use right now: the quality level, minus the shared adaptive effort. */
   private octaveCap() {
-    return Math.max(1, QUALITY_OCTAVES[this.settings.quality] - this.adaptive.effort);
+    return Math.max(1, QUALITY_PRESETS[this.settings.quality].octaves - this.hub.budget.effort);
   }
 
   /** Keeps the animated state in step with the config. A disabled config keeps its state but uploads "off". */
   private syncProceduralState() {
+    this.proceduralDirty = true;
+    this.staticDirty = true;
     if (this.procedural) {
       if (this.proceduralState) this.proceduralState.setConfig(this.procedural);
       else this.proceduralState = createProceduralState(this.procedural, { lut: this.paletteLut, octaveCap: this.octaveCap() });
@@ -512,43 +575,6 @@ export class InteractiveRenderer {
 
   /* ───────────── lifecycle ───────────── */
 
-  private cancelFrame() {
-    if (this.frameId) this.scheduler.cancel(this.frameId);
-    this.frameId = 0;
-  }
-
-  private readonly handleContextLost = (event: Event) => {
-    event.preventDefault();
-    this.cancelFrame();
-    this.paletteTexture = null;
-    this.layerMixTexture = null;
-    this.pending = null;
-    this.program = null;
-    this.builtKey = '';
-    this.proceduralBuilt = false;
-    this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
-  };
-
-  private readonly handleContextRestored = () => {
-    try {
-      const options: WebGLContextAttributes = {
-        alpha: true, antialias: false, depth: false, premultipliedAlpha: false, powerPreference: 'default',
-      };
-      const context = this.webgl2 ? this.canvas.getContext('webgl2', options) : this.canvas.getContext('webgl', options);
-      if (context) this.gl = context;
-      if (!this.gl) throw new Error('The WebGL context could not be restored.');
-      this.parallelCompile = !!this.gl.getExtension('KHR_parallel_shader_compile');
-      this.failedKeys.clear();
-      this.initGeometryAndTextures(this.gl);
-      this.resize();
-      this.beginBuild(true);
-      this.setStatus('compiling', 'Compiling the gradient shader…');
-      this.schedule();
-    } catch (error) {
-      this.setStatus('error', error instanceof Error ? error.message : 'WebGL context restoration failed.');
-    }
-  };
-
   private readonly handleMotionChange = (event: MediaQueryListEvent) => {
     this.reducedMotion = event.matches;
     this.schedule();
@@ -557,7 +583,7 @@ export class InteractiveRenderer {
   private readonly handleVisibilityChange = () => {
     this.visible = document.visibilityState === 'visible';
     if (this.visible) this.schedule();
-    else this.cancelFrame();
+    else this.hub.cancelFrame(this);
   };
 
   private setStatus(status: InteractiveRendererStatus, message = '') {
@@ -568,10 +594,7 @@ export class InteractiveRenderer {
   }
 
   private paletteNotice() {
-    const { scale, effort } = this.adaptive;
-    if (scale >= 1 && effort === 0) return '';
-    const resolution = scale < 1 ? `Adaptive resolution reduced to ${Math.round(scale * 100)}%` : 'Adaptive quality active';
-    return `${resolution}${effort > 0 ? ' with reduced shader effort' : ''} to maintain performance.`;
+    return this.hub.budget.describe();
   }
 
   private observe() {
@@ -591,7 +614,7 @@ export class InteractiveRenderer {
       this.intersectionObserver = new IntersectionObserver(entries => {
         this.visible = entries[0]?.isIntersecting ?? true;
         if (this.visible) this.schedule();
-        else this.cancelFrame();
+        else this.hub.cancelFrame(this);
       });
       this.intersectionObserver.observe(this.canvas);
     }
@@ -599,77 +622,64 @@ export class InteractiveRenderer {
 
   private readonly handleWindowResize = () => this.resize();
 
-  private resize() {
-    if (!this.gl || this.disposed) return;
-    const widthCss = this.canvas.clientWidth;
-    const heightCss = this.canvas.clientHeight;
-    const pixelBudgetScale = Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, widthCss * heightCss));
-    const scale = clamp(
-      Math.min(this.baseResolutionScale() * this.adaptive.scale, MAX_RENDER_SCALE, pixelBudgetScale),
-      0.35,
-      MAX_RENDER_SCALE,
-    );
-    const width = Math.max(1, Math.min(4096, Math.round(widthCss * scale)));
-    const height = Math.max(1, Math.min(4096, Math.round(heightCss * scale)));
+  /** `measure` = the CSS size (or quality) may have changed, so the shared budget must be recomputed. */
+  private resize(measure = true) {
+    if (!this.registered || this.disposed || !this.hub.available) return;
+    if (measure) this.hub.invalidateBudget();
+    const scale = this.hub.scaleFor(this);
+    const { width, height } = renderSize(this.canvas.clientWidth, this.canvas.clientHeight, scale);
     this.pointer.invalidateRect();
+    this.proceduralDirty = true;
     if (this.canvas.width !== width || this.canvas.height !== height) {
+      // resizing a canvas clears it, so the layer must draw again right away
       this.canvas.width = width;
       this.canvas.height = height;
-      this.gl.viewport(0, 0, width, height);
       this.schedule();
     }
   }
 
-  private baseResolutionScale() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    return clamp(dpr * QUALITY_SCALE[this.settings.quality] * this.settings.resolutionScale, 0.35, this.settings.quality === 'ultra' ? 1.75 : 2);
-  }
-
   private schedule() {
-    if (this.disposed || !this.gl || !this.visible || this.frameId) return;
+    if (this.disposed || !this.registered || !this.visible) return;
     if (this.status !== 'ready' && this.status !== 'compiling') return;
-    this.frameId = this.scheduler.request(this.render);
+    this.hub.requestFrame(this);
   }
 
-  private readonly render = (now: number) => {
-    this.frameId = 0;
-    const gl = this.gl;
-    if (this.disposed || !gl || !this.visible) return;
+  /** Draws one frame of this layer. Called by the shared frame loop; returns true when another frame is needed. */
+  renderFrame(now: number): boolean {
+    const gl = this.hub.gpu.gl;
+    if (this.disposed || !gl || !this.visible) return false;
     if (this.pending) {
       // Keep drawing the previous program while a new one compiles; never block the main thread on a compile.
-      if (this.pollBuild() || this.pending) {
-        if (!this.program) { this.schedule(); return; }
-      }
+      this.pollBuild();
     }
-    const program = this.program;
-    if (!program || this.status === 'error' || this.status === 'context-lost') return;
+    const entry = this.entry;
+    if (this.status === 'error' || this.status === 'context-lost') return false;
+    if (!entry) return this.pending !== null;
     const rawDelta = this.previousFrame ? (now - this.previousFrame) / 1000 : 0;
     const delta = Math.min(0.05, rawDelta);
     this.previousFrame = now;
     this.clock += delta;
     const motionEnabled = this.settings.animate && !this.paused && !this.reducedMotion;
     const animated = motionEnabled && this.settings.speed > 0;
-    const timeScale = this.scheduler.timeScale;
+    const timeScale = getFrameScheduler().timeScale;
     if (animated) this.shaderTime += delta * this.settings.speed * timeScale;
     else if (!this.settings.animate) this.shaderTime = 0;
-    if (rawDelta > 0) {
-      // the floor is an absolute render scale, so it depends on the current base resolution
-      this.adaptive.setMinScale(MIN_ADAPTIVE_RENDER_SCALE / this.baseResolutionScale());
-      if (this.adaptive.update(rawDelta)) {
-        this.resize();
-        this.setStatus('ready', this.paletteNotice());
-      }
+    const budgetKey = `${this.hub.budget.globalScale}|${this.hub.budget.effort}`;
+    if (budgetKey !== this.lastBudgetKey) {
+      this.lastBudgetKey = budgetKey;
+      if (this.status === 'ready') this.setStatus('ready', this.paletteNotice());
     }
     const pointer = this.pointer.advance(delta, this.clock);
-    this.draw(gl, program, pointer, delta, motionEnabled ? timeScale : 0);
+    this.draw(gl, entry, pointer, delta, motionEnabled ? timeScale : 0, motionEnabled);
 
     const idleMotion = this.settings.idleMotion && !this.paused && !this.reducedMotion;
     const ambient = !this.paused && !this.reducedMotion && (this.rigAmbient || this.settings.breath > 0);
     const hovering = this.rigRuleCount() > 0 && pointer.active > 0.003;
     const proceduralSettling = this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isSettling();
     const proceduralAnimating = motionEnabled && this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isAnimated();
-    if (animated || idleMotion || ambient || hovering || proceduralSettling || proceduralAnimating || this.pointer.hasActivity() || this.pending) this.schedule();
-  };
+    this.animating = animated || idleMotion || ambient || proceduralAnimating;
+    return animated || idleMotion || ambient || hovering || proceduralSettling || proceduralAnimating || this.pointer.hasActivity() || this.pending !== null;
+  }
 
   private rigRuleCount() {
     return activeRules(this.settings.rig).length;
@@ -682,42 +692,124 @@ export class InteractiveRenderer {
 
   /* ───────────── drawing ───────────── */
 
-  private draw(gl: GL, program: WebGLProgram, pointer: PointerFrame, delta: number, motionScale: number) {
-    gl.useProgram(program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
+  private draw(gl: GL, entry: ProgramEntry, pointer: PointerFrame, delta: number, motionScale: number, motionEnabled: boolean) {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    if (!this.context2d || !this.hub.useProgram(entry) || !this.hub.gpu.beginRect(width, height)) return;
+    const loc = entry.uniforms;
     const settings = this.settings;
     const reaction = this.layerState.reaction;
     const reacts = settings.interactionEnabled && reaction !== 0;
-    const set1f = (name: string, value: number) => gl.uniform1f(this.uniforms[name] ?? null, value);
-    const set2f = (name: string, x: number, y: number) => gl.uniform2f(this.uniforms[name] ?? null, x, y);
+    const set1f = (name: string, value: number) => gl.uniform1f(loc[name] ?? null, value);
+    const set2f = (name: string, x: number, y: number) => gl.uniform2f(loc[name] ?? null, x, y);
+
+    // the program is shared: its uniforms hold whatever the last layer wrote, so a layer re-sends its settings whenever it
+    // changed or another layer drew with this program in between; when neither happened only the per-frame values go up
+    const uploadStatic = this.staticDirty || entry.lastOwner !== this.id;
+    if (uploadStatic) {
+      this.uploadStatic(gl, loc, set1f, set2f, reaction);
+      entry.lastOwner = this.id;
+      this.staticDirty = false;
+    }
+
     const idlePointer = settings.idleMotion && pointer.active < 0.003 && !this.paused && !this.reducedMotion;
     const idle = idlePointer ? idleMotionPoint(settings.idlePath, this.clock, settings.idleSpeed, settings.idleSize) : null;
     const pointerX = idle ? idle.x : pointer.x;
     const pointerY = idle ? idle.y : pointer.y;
     const pointerActive = idle ? 0.42 : pointer.active;
 
-    set2f('uResolution', this.canvas.width, this.canvas.height);
+    set2f('uResolution', width, height);
     set2f('uPointer', pointerX, pointerY);
     set2f('uVelocity', pointer.vx, pointer.vy);
     set1f('uPointerActive', reacts || idlePointer ? pointerActive : 0);
     set1f('uPointerDown', reacts ? pointer.down : 0);
     set1f('uTime', settings.animate ? this.shaderTime : 0);
     set1f('uClock', this.clock);
-    set1f('uAspect', this.canvas.width / Math.max(1, this.canvas.height));
+    set1f('uAspect', width / Math.max(1, height));
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.paletteHandle?.texture ?? null);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.layerMixHandle?.texture ?? null);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.ruleTextureAtlas);
+    gl.uniform1i(loc.uRuleTextureAtlas ?? null, 2);
+
+    const rippleCount = this.refreshRippleData();
+    set1f('uRippleCount', rippleCount);
+    gl.uniform4fv(loc['uRipples[0]'] ?? null, this.rippleData);
+
+    // procedural engine: positions, colours and forces are advanced on the CPU (12 points), the shader gets the numbers
+    const procedural = this.proceduralState;
+    if (procedural && this.proceduralBuilt) {
+      const octaveCap = this.octaveCap();
+      if (octaveCap !== this.lastOctaveCap) { this.lastOctaveCap = octaveCap; procedural.setQuality({ octaveCap }); this.proceduralDirty = true; }
+      // update the simulation only when it can have changed: it moves, it is settling, the pointer is involved, or its inputs changed
+      const needsStep = this.proceduralDirty || (motionEnabled && procedural.isAnimated()) || procedural.isSettling() || pointer.active > 0.003 || idle !== null || this.pointer.hasActivity();
+      if (needsStep) {
+        const frame = this.rigFrame;
+        Object.assign(frame, pointer);
+        if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
+        if (!reacts && !idlePointer) { frame.active = 0; frame.down = 0; frame.t2active = 0; }
+        procedural.step(delta, frame, width / Math.max(1, height), motionScale);
+        this.proceduralDirty = false;
+      }
+      if (uploadStatic) uploadProceduralUniforms(gl, loc, procedural.buffers);
+      else {
+        // only the numbers that move: the colour centres, their colours, the palette-mean base colour, octave cap and clock
+        const buffers = procedural.buffers;
+        gl.uniform4fv(loc['uProcPoints[0]'] ?? null, buffers.points);
+        gl.uniform4fv(loc['uProcColors[0]'] ?? null, buffers.colors);
+        gl.uniform4fv(loc.uProcBase ?? null, buffers.base);
+        gl.uniform4fv(loc.uProcC ?? null, buffers.c);
+        gl.uniform4fv(loc.uProcD ?? null, buffers.d);
+      }
+    }
+
+    // interaction rig: drives are evaluated on the CPU, the shader only receives the final numbers
+    if (!this.builtKey.startsWith('base#') && this.rigRuleCount() > 0) {
+      const frame = this.rigFrame;
+      Object.assign(frame, pointer);
+      frame.clock = this.clock;
+      frame.trailLife = settings.rig.physics.trailLife;
+      if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
+      evaluateRig(settings.rig, frame, this.rigBuffers, { radiusScale: settings.interactionRadius, reaction, enabled: reacts || idlePointer });
+      packTrail(this.pointer.getEngine(), frame, this.rigBuffers, reacts);
+      gl.uniform4fv(loc['uRuleB[0]'] ?? null, this.rigBuffers.b);
+      gl.uniform4fv(loc['uRuleC[0]'] ?? null, this.rigBuffers.c);
+      gl.uniform4fv(loc['uRuleD[0]'] ?? null, this.rigBuffers.d);
+      gl.uniform4fv(loc['uRuleE[0]'] ?? null, this.rigBuffers.e);
+      gl.uniform4fv(loc['uRuleF[0]'] ?? null, this.rigBuffers.f);
+      gl.uniform4fv(loc['uRuleG[0]'] ?? null, this.rigBuffers.g);
+      gl.uniform4fv(loc['uRuleH[0]'] ?? null, this.rigBuffers.h);
+      gl.uniform4fv(loc['uRuleI[0]'] ?? null, this.rigBuffers.i);
+      gl.uniform4fv(loc['uTrail[0]'] ?? null, this.rigBuffers.trail);
+      gl.uniform3f(loc.uTouch2 ?? null, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    // copy this layer's rectangle into its own canvas right away: the shared buffer is reused by the next layer
+    this.hub.gpu.copyTo(this.context2d, width, height);
+  }
+
+  /** Uniforms that follow from the layer's settings, palette, geometry and mesh (not from time or the pointer). */
+  private uploadStatic(
+    gl: GL,
+    loc: ProgramEntry['uniforms'],
+    set1f: (name: string, value: number) => void,
+    set2f: (name: string, x: number, y: number) => void,
+    reaction: number,
+  ) {
+    const settings = this.settings;
     set1f('uStyle', SHADER_STYLE_INDEX[settings.style]);
     const styleParams = this.layerState.styleParams;
-    gl.uniform4f(this.uniforms.uStyleP ?? null, styleParams[0], styleParams[1], styleParams[2], styleParams[3]);
+    gl.uniform4f(loc.uStyleP ?? null, styleParams[0], styleParams[1], styleParams[2], styleParams[3]);
     set1f('uGradientKind', GEOMETRY_ID[this.geometry.kind]);
     set1f('uGradientAngle', this.geometry.angle * Math.PI / 180);
     set2f('uGradientOrigin', this.geometry.originX / 100, 1 - this.geometry.originY / 100);
     set2f('uGradientRadius', this.geometry.radiusX / 100, this.geometry.radiusY / 100);
     set1f('uShaderMix', settings.shaderMix);
-    gl.uniform3f(this.uniforms.uInteractionColor ?? null, this.interactionColor[0], this.interactionColor[1], this.interactionColor[2]);
-    gl.uniform3fv(this.uniforms['uInteractionColors[0]'] ?? null, this.interactionColorData);
+    gl.uniform3f(loc.uInteractionColor ?? null, this.interactionColor[0], this.interactionColor[1], this.interactionColor[2]);
+    gl.uniform3fv(loc['uInteractionColors[0]'] ?? null, this.interactionColorData);
     set1f('uInteractionColorCount', Math.min(5, settings.interactionColors.length));
     set1f('uInteractionColorMix', settings.interactionColorMix);
     set1f('uInteractionColorSpeed', settings.interactionColorSpeed);
@@ -753,61 +845,22 @@ export class InteractiveRenderer {
     set1f('uSheen', settings.sheen);
     set1f('uGrain', settings.filmGrain);
     set1f('uLutEnabled', this.lutEnabled ? 1 : 0);
-    set1f('uLayerMixEnabled', this.layerMixTexture && this.layerMix.palette.length ? 1 : 0);
+    set1f('uLayerMixEnabled', this.layerMixHandle && this.layerMix.palette.length ? 1 : 0);
     set1f('uLayerMixMode', LAYER_BLEND_ID[this.layerMix.mode]);
     set1f('uLayerMixStrength', this.layerMix.strength);
     set1f('uLayerMixSpeed', this.layerMix.speed);
     set1f('uProjectOutput', settings.renderBackend === 'webgl' ? 1 : 0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.layerMixTexture);
-    gl.uniform1f(this.uniforms.uStopCount ?? null, MAX_STOPS);
-    gl.uniform4fv(this.uniforms['uPalette[0]'] ?? null, this.paletteColors);
-    gl.uniform1fv(this.uniforms['uPaletteAlpha[0]'] ?? null, this.paletteAlphas);
-
-    gl.uniform1f(this.uniforms.uMeshCount ?? null, this.meshPoints.length);
-    gl.uniform4f(this.uniforms.uMeshBase ?? null, this.meshBaseRgb[0], this.meshBaseRgb[1], this.meshBaseRgb[2], this.meshBase ? 1 : 0);
-    gl.uniform4fv(this.uniforms['uMeshPoints[0]'] ?? null, this.meshPointData);
-    gl.uniform4fv(this.uniforms['uMeshColors[0]'] ?? null, this.meshColorData);
-
-    const rippleCount = this.refreshRippleData();
-    set1f('uRippleCount', rippleCount);
-    gl.uniform4fv(this.uniforms['uRipples[0]'] ?? null, this.rippleData);
-
-    // procedural engine: positions, colours and forces are advanced on the CPU (12 points), the shader gets the numbers
-    const procedural = this.proceduralState;
-    if (procedural && this.proceduralBuilt) {
-      const frame = this.rigFrame;
-      Object.assign(frame, pointer);
-      if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
-      if (!reacts && !idlePointer) { frame.active = 0; frame.down = 0; frame.t2active = 0; }
-      procedural.setQuality({ octaveCap: this.octaveCap() });
-      procedural.step(delta, frame, this.canvas.width / Math.max(1, this.canvas.height), motionScale);
-      uploadProceduralUniforms(gl, this.uniforms, procedural.buffers);
-    }
-
-    // interaction rig: drives are evaluated on the CPU, the shader only receives the final numbers
-    if (!this.builtKey.startsWith('base#') && this.rigRuleCount() > 0) {
-      const frame = this.rigFrame;
-      Object.assign(frame, pointer);
-      frame.clock = this.clock;
-      frame.trailLife = settings.rig.physics.trailLife;
-      if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
-      evaluateRig(settings.rig, frame, this.rigBuffers, { radiusScale: settings.interactionRadius, reaction, enabled: reacts || idlePointer });
-      packTrail(this.pointer.getEngine(), frame, this.rigBuffers, reacts);
-      gl.uniform4fv(this.uniforms['uRuleB[0]'] ?? null, this.rigBuffers.b);
-      gl.uniform4fv(this.uniforms['uRuleC[0]'] ?? null, this.rigBuffers.c);
-      gl.uniform4fv(this.uniforms['uRuleD[0]'] ?? null, this.rigBuffers.d);
-      gl.uniform4fv(this.uniforms['uRuleE[0]'] ?? null, this.rigBuffers.e);
-      gl.uniform4fv(this.uniforms['uRuleF[0]'] ?? null, this.rigBuffers.f);
-      gl.uniform4fv(this.uniforms['uTrail[0]'] ?? null, this.rigBuffers.trail);
-      gl.uniform3f(this.uniforms.uTouch2 ?? null, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
-    }
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.uniform1f(loc.uStopCount ?? null, MAX_STOPS);
+    gl.uniform4fv(loc['uPalette[0]'] ?? null, this.paletteColors);
+    gl.uniform1fv(loc['uPaletteAlpha[0]'] ?? null, this.paletteAlphas);
+    gl.uniform1f(loc.uMeshCount ?? null, this.meshPoints.length);
+    gl.uniform4f(loc.uMeshBase ?? null, this.meshBaseRgb[0], this.meshBaseRgb[1], this.meshBaseRgb[2], this.meshBase ? 1 : 0);
+    gl.uniform4fv(loc['uMeshPoints[0]'] ?? null, this.meshPointData);
+    gl.uniform4fv(loc['uMeshColors[0]'] ?? null, this.meshColorData);
   }
 
   private refreshInteractionColors() {
+    this.staticDirty = true;
     const rgb = hexToRgb(this.settings.interactionColor);
     this.interactionColor = [rgb.r / 255, rgb.g / 255, rgb.b / 255];
     this.interactionColorData.fill(0);
@@ -818,6 +871,7 @@ export class InteractiveRenderer {
   }
 
   private refreshMeshBase() {
+    this.staticDirty = true;
     const rgb = this.meshBase ? hexToRgb(this.meshBase) : { r: 0, g: 0, b: 0 };
     this.meshBaseRgb = [rgb.r / 255, rgb.g / 255, rgb.b / 255];
   }
@@ -826,7 +880,8 @@ export class InteractiveRenderer {
     const key = JSON.stringify([this.palette, this.geometry.space ?? 'srgb']);
     if (key === this.paletteKey) return;
     this.paletteKey = key;
-    this.paletteLut = bakePaletteLut(this.palette, this.geometry.space ?? 'srgb', LUT_SIZE);
+    this.staticDirty = true;
+    this.paletteLut = bakeLutCached(key, this.palette, this.geometry.space);
     for (let i = 0; i < MAX_STOPS; i++) {
       const sample = Math.round(i / (MAX_STOPS - 1) * (LUT_SIZE - 1)) * 4;
       const offset = i * 4;
@@ -838,57 +893,44 @@ export class InteractiveRenderer {
     }
     // procedural points take their colours from this same palette LUT
     this.proceduralState?.setPaletteLut(this.paletteLut);
-    if (this.gl) this.uploadPaletteTexture(this.gl);
+    this.proceduralDirty = true;
+    if (this.registered && this.hub.available) this.acquirePaletteTexture();
   }
 
-  private uploadPaletteTexture(gl: GL) {
-    if (!this.paletteTexture) this.paletteTexture = gl.createTexture();
-    if (!this.paletteTexture) {
-      this.lutEnabled = false;
-      return;
-    }
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.paletteTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LUT_SIZE, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.paletteLut);
-    this.lutEnabled = gl.getError() === gl.NO_ERROR && this.maxFragmentUniformVectors >= 16;
+  /** Palette textures are shared by content: layers with the same colours use one GPU texture. */
+  private acquirePaletteTexture() {
+    const previous = this.paletteHandle;
+    this.paletteHandle = this.hub.resources.acquireLut(this.paletteKey, LUT_SIZE, () => this.paletteLut);
+    this.hub.resources.releaseLut(previous);
+    this.lutEnabled = this.paletteHandle !== null && this.hub.gpu.maxFragmentUniformVectors >= 16;
+    this.staticDirty = true;
+  }
+
+  private acquireTextures() {
+    this.acquirePaletteTexture();
+    this.refreshLayerMixTexture();
   }
 
   private refreshLayerMixTexture() {
-    if (this.gl) this.uploadLayerMixTexture(this.gl);
-  }
-
-  private uploadLayerMixTexture(gl: GL) {
+    if (!this.registered || !this.hub.available) return;
     if (!this.layerMix.palette.length) {
-      if (this.layerMixTexture) gl.deleteTexture(this.layerMixTexture);
-      this.layerMixTexture = null;
+      this.hub.resources.releaseLut(this.layerMixHandle);
+      this.layerMixHandle = null;
       this.layerMixKey = '';
       return;
     }
     const space = this.layerMix.space ?? this.geometry.space ?? 'srgb';
     const key = JSON.stringify([this.layerMix.palette, space]);
-    if (key === this.layerMixKey && this.layerMixTexture) return;
-    const data = bakePaletteLut(this.layerMix.palette, space, LUT_SIZE);
-    if (!this.layerMixTexture) this.layerMixTexture = gl.createTexture();
-    if (!this.layerMixTexture) return;
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.layerMixTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LUT_SIZE, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
-    if (gl.getError() !== gl.NO_ERROR) {
-      gl.deleteTexture(this.layerMixTexture);
-      this.layerMixTexture = null;
-      this.layerMixKey = '';
-    } else this.layerMixKey = key;
+    if (key === this.layerMixKey && this.layerMixHandle) return;
+    const previous = this.layerMixHandle;
+    this.layerMixHandle = this.hub.resources.acquireLut(key, LUT_SIZE, () => bakeLutCached(key, this.layerMix.palette, space));
+    this.hub.resources.releaseLut(previous);
+    this.layerMixKey = this.layerMixHandle ? key : '';
+    this.staticDirty = true;
   }
 
   private refreshMeshData() {
+    this.staticDirty = true;
     this.meshPointData.fill(0);
     this.meshColorData.fill(0);
     this.meshPoints.forEach((point, index) => {

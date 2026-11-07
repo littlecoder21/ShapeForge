@@ -17,7 +17,10 @@ const mixLayerOf = (project: GradientProject, layer: GradientLayer) =>
  * It used to rebuild the layer palette from the whole `project` each time, which handed the renderer a fresh palette
  * array, which re-baked the 512-entry colour LUT and re-uploaded two textures per shader layer, many times a second.
  * Everything below is keyed on the few inputs that really matter, and the memo comparator skips the render outright
- * when none of them changed. */
+ * when none of them changed.
+ *
+ * Resolution is no longer divided per layer here: the shared renderer owns one global budget (see
+ * interactive/core/gpu/GlobalRenderBudget.ts) and decides every layer's render scale from the whole composition. */
 function InteractiveCanvasInner({ project, layer, interactive = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<InteractiveRenderer | null>(null);
@@ -40,8 +43,6 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
   }), [config, layer.shader?.controls, layer.shader?.style]);
   const rendererSettings = useMemo(() => ({
     ...settings,
-    // Keep total preview fragment work roughly level as shader layers are stacked.
-    resolutionScale: settings.resolutionScale / Math.sqrt(Math.max(1, project.layers.filter(item => item.visible && item.shader?.enabled).length)),
     interactionColor: settings.interactionColorSource === 'layer'
       ? interactionColorsForLayer(adapted.palette)[0] ?? settings.interactionColor
       : settings.interactionColor,
@@ -49,7 +50,7 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
       ? interactionColorsForLayer(adapted.palette)
       : settings.interactionColors,
     renderBackend: settings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' as const : settings.renderBackend,
-  }), [settings, layer, adapted.palette, project.layers]);
+  }), [settings, layer, adapted.palette]);
   const styleParamsKey = (layer.shader?.styleParams ?? []).join(',');
   const layerState = useMemo<InteractiveLayerState>(() => ({
     styleParams: resolveStyleParams(settings.style, layer.shader?.styleParams),

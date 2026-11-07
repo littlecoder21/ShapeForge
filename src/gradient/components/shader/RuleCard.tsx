@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react';
 import { Switch } from '../../../shared/controls';
+import { EFFECTS } from '../../engine/effects';
 import {
-  RIG_BLENDS, RIG_COLOR_MODES, RIG_DRIVE_CURVES, RIG_DRIVE_MODES, RIG_DRIVE_SOURCES, RIG_EFFECTS, RIG_EFFECT_MAP, RIG_FALLOFFS, RIG_MAX_DRIVES, RIG_SHAPES, RIG_SOURCES, RIG_SOURCE_MAP,
-  makeDrive, makeRule, type RigDrive, type RigDriveTarget, type RigRule,
+  RIG_BLENDS, RIG_COLOR_MODES, RIG_CSS_FX_TYPES, RIG_DRIVE_CURVES, RIG_DRIVE_MODES, RIG_DRIVE_SOURCES, RIG_EFFECTS, RIG_EFFECT_MAP, RIG_FADE_MODES, RIG_FALLOFFS, RIG_MAX_DRIVES, RIG_SHAPES, RIG_SOURCES, RIG_SOURCE_MAP,
+  makeDrive, makeRule, type RigCssFxType, type RigDrive, type RigDriveTarget, type RigRule,
 } from '../../interactive/rig/model';
 import { FalloffChart, Num, Select } from './parts';
+import CustomShapeEditor from './CustomShapeEditor';
+import RuleTextureEditor from './RuleTextureEditor';
 
 interface Props {
   rule: RigRule;
@@ -31,6 +34,19 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
     p[slot] = value;
     patch({ p }, `p${slot}`);
   };
+  const setCssFx = (type: string) => {
+    if (type === 'none') return patch({ cssFx: null });
+    if (!RIG_CSS_FX_TYPES.includes(type as RigCssFxType)) return;
+    const effect = EFFECTS[type];
+    patch({
+      cssFx: {
+        type: type as RigCssFxType,
+        enabled: true,
+        params: Object.fromEntries(effect.params.map(param => [param.key, param.def])),
+      },
+    });
+  };
+  const cssFx = rule.cssFx?.enabled ? rule.cssFx : null;
   const changeEffect = (effect: RigRule['effect']) => {
     const fresh = makeRule(effect);
     onChange({ ...rule, effect, amount: fresh.amount, p: fresh.p, drives: rule.drives.filter(drive => drive.target === 'amount' || drive.target === 'radius') });
@@ -81,13 +97,19 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
       <div className="gs-rule-group">
         <h4>Shape & fade</h4>
         <Select id={`rig-shape-${index}`} label="Shape" value={rule.shape} options={RIG_SHAPES.map(item => ({ id: item.id, label: item.label }))} onChange={shape => patch({ shape })} />
+        {rule.shape === 'custom' && <CustomShapeEditor points={rule.customPoints} onChange={customPoints => patch({ customPoints })} />}
         {SHAPES_WITH_ASPECT.includes(rule.shape) && <Num label="Aspect" value={rule.aspect} min={0.2} max={5} def={1} onChange={aspect => patch({ aspect }, 'aspect')} />}
         {rule.shape !== 'circle' && <Num label="Rotation" value={rule.rotation} min={-180} max={180} step={1} def={0} unit="°" onChange={rotation => patch({ rotation }, 'rotation')} />}
         {(rule.shape === 'star' || rule.shape === 'poly') && <Num label={rule.shape === 'star' ? 'Points' : 'Sides'} value={rule.shapeN} min={rule.shape === 'star' ? 2 : 3} max={12} step={1} def={5} onChange={shapeN => patch({ shapeN })} />}
         {rule.shape !== 'circle' && <Switch label="Face the direction of motion" checked={rule.follow} onChange={follow => patch({ follow })} />}
         <Num label="Organic edge" value={rule.edge} min={0} max={1} def={0} onChange={edge => patch({ edge }, 'edge')} />
-        <Num label="Fade curve power" value={rule.fadePower} min={0.25} max={4} def={1} onChange={fadePower => patch({ fadePower }, 'fade-power')} testId={`rig-fade-power-${index}`} />
-        <Num label="Fade distance" value={rule.fadeWidth} min={0.25} max={2} def={1} unit="×" onChange={fadeWidth => patch({ fadeWidth }, 'fade-width')} testId={`rig-fade-width-${index}`} />
+        <Select id={`rig-fade-direction-${index}`} label="Fade direction" value={rule.fadeMode} options={RIG_FADE_MODES} onChange={fadeMode => patch({ fadeMode })} />
+        <Num label="Fade start" value={rule.fadeStart} min={0} max={0.95} step={0.01} def={0} onChange={fadeStart => patch({ fadeStart }, 'fade-start')} testId={`rig-fade-start-${index}`} />
+        <Num label="Fade extent" value={rule.fadeWidth} min={0.25} max={2} step={0.01} def={1} unit="×" onChange={fadeWidth => patch({ fadeWidth }, 'fade-width')} testId={`rig-fade-width-${index}`} />
+        <Num label="Fade curve power" value={rule.fadePower} min={0.25} max={4} step={0.01} def={1} onChange={fadePower => patch({ fadePower }, 'fade-power')} testId={`rig-fade-power-${index}`} />
+        <Num label="Edge softness" value={rule.fadeSoftness} min={0} max={1} step={0.01} def={0} onChange={fadeSoftness => patch({ fadeSoftness }, 'fade-softness')} testId={`rig-fade-softness-${index}`} />
+        <Num label="Fade strength" value={rule.fadeOpacity} min={0} max={1} step={0.01} def={1} onChange={fadeOpacity => patch({ fadeOpacity }, 'fade-opacity')} testId={`rig-fade-opacity-${index}`} />
+        <Switch label="Invert fade" checked={rule.fadeInvert} onChange={fadeInvert => patch({ fadeInvert })} />
         <div className="gs-falloff-row">
           <Select id={`rig-falloff-${index}`} label="Falloff" value={rule.falloff} options={RIG_FALLOFFS} onChange={falloff => patch({ falloff })} />
           <FalloffChart falloff={rule.falloff} />
@@ -100,6 +122,56 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
         {def.usesColor && rule.colorMode === 'custom' && <input type="color" className="gs-interaction-color" value={rule.color} onChange={event => patch({ color: event.target.value }, 'color')} aria-label="Custom colour" />}
         {def.usesBlend && <Select id={`rig-blend-${index}`} label="Blend" value={rule.blend} options={RIG_BLENDS} onChange={blend => patch({ blend })} />}
       </div>}
+
+      <div className="gs-rule-group">
+        <h4>CSS FX</h4>
+        <label className="field-label" htmlFor={`rig-css-fx-${index}`}>Shader-compatible CSS effect</label>
+        <select
+          id={`rig-css-fx-${index}`}
+          className="generate-select"
+          value={cssFx?.type ?? 'none'}
+          onChange={event => setCssFx(event.target.value)}
+          data-testid={`rig-css-fx-${index}`}
+        >
+          <option value="none">None</option>
+          <optgroup label="Supported in the shader">
+            {RIG_CSS_FX_TYPES.map(type => <option key={type} value={type}>{EFFECTS[type].label}</option>)}
+          </optgroup>
+          <optgroup label="Unsupported in per-rule shader FX">
+            {Object.values(EFFECTS).filter(effect => !RIG_CSS_FX_TYPES.includes(effect.id as RigCssFxType))
+              .sort((a, b) => a.label.localeCompare(b.label))
+              .map(effect => <option key={effect.id} value={effect.id} disabled>{effect.label} — not supported</option>)}
+          </optgroup>
+        </select>
+        <p className="hint">Only effects with fragment-shader equivalents can run inside an interaction rule; other CSS filters are listed but disabled.</p>
+        {cssFx && EFFECTS[cssFx.type].params.map(param => (
+          <Num
+            key={param.key}
+            label={param.label}
+            value={cssFx.params[param.key] ?? param.def}
+            min={param.min}
+            max={param.max}
+            step={param.step}
+            def={param.def}
+            unit={param.unit}
+            onChange={value => patch({ cssFx: { ...cssFx, params: { ...cssFx.params, [param.key]: value } } }, `css-fx-${param.key}`)}
+          />
+        ))}
+      </div>
+
+      <div className="gs-rule-group">
+        <h4>CSS texture</h4>
+        <Switch
+          label="Apply texture inside this interaction"
+          checked={rule.texture.enabled}
+          onChange={enabled => patch({ texture: { ...rule.texture, enabled } })}
+          testId={`rig-texture-on-${index}`}
+        />
+        {rule.texture.enabled && <>
+          <Select id={`rig-texture-blend-${index}`} label="Texture blend" value={rule.blend} options={RIG_BLENDS} onChange={blend => patch({ blend })} />
+          <RuleTextureEditor texture={rule.texture} onChange={texture => patch({ texture })} />
+        </>}
+      </div>
 
       <div className="gs-rule-group">
         <h4>Drives <small>what controls this live</small></h4>

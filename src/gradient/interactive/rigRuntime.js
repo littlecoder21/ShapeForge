@@ -233,6 +233,9 @@ export function createRigBuffers() {
     d: new Float32Array(RIG_MAX_RULES * 4),
     e: new Float32Array(RIG_MAX_RULES * 4),
     f: new Float32Array(RIG_MAX_RULES * 4),
+    g: new Float32Array(RIG_MAX_RULES * 4),
+    h: new Float32Array(RIG_MAX_RULES * 4),
+    i: new Float32Array(RIG_MAX_RULES * 4),
     trail: new Float32Array(RIG_TRAIL_POINTS * 4),
     count: 0,
   };
@@ -326,9 +329,24 @@ export function evaluateRig(rig, frame, buffers, options) {
     out.f[base] = clampNumber(finiteOr(rule.fadePower, 1), 0.25, 4);
     out.f[base + 1] = clampNumber(finiteOr(rule.fadeWidth, 1), 0.25, 2);
     out.f[base + 2] = 0; out.f[base + 3] = 0;
+    out.g[base] = clampNumber(finiteOr(rule.fadeStart, 0), 0, 0.95);
+    out.g[base + 1] = clampNumber(finiteOr(rule.fadeSoftness, 0), 0, 1);
+    out.g[base + 2] = clampNumber(finiteOr(rule.fadeOpacity, 1), 0, 1);
+    const fadeMode = rule.fadeMode === 'horizontal' ? 1 : rule.fadeMode === 'vertical' ? 2 : rule.fadeMode === 'angle' ? 3 : 0;
+    out.g[base + 3] = fadeMode + (rule.fadeInvert ? 4 : 0);
+    const texture = rule.texture || {};
+    const textureScale = Math.max(1, finiteOr(texture.scale, 36));
+    out.h[base] = textureScale;
+    out.h[base + 1] = finiteOr(texture.offsetX, 0) / textureScale;
+    out.h[base + 2] = finiteOr(texture.offsetY, 0) / textureScale;
+    out.h[base + 3] = texture.enabled === true ? 1 : 0;
+    const cssFx = rule.cssFx && rule.cssFx.enabled ? rule.cssFx.params || {} : {};
+    out.i[base] = finiteOr(cssFx.amount, finiteOr(cssFx.angle, 0));
+    out.i[base + 1] = finiteOr(cssFx.angle, 0);
+    out.i[base + 2] = finiteOr(cssFx.amount, 0);
     count++;
   }
-  for (let i = count * 4; i < RIG_MAX_RULES * 4; i++) { out.b[i] = 0; out.c[i] = 0; out.d[i] = 0; out.e[i] = 0; out.f[i] = 0; }
+  for (let i = count * 4; i < RIG_MAX_RULES * 4; i++) { out.b[i] = 0; out.c[i] = 0; out.d[i] = 0; out.e[i] = 0; out.f[i] = 0; out.g[i] = 0; out.h[i] = 0; out.i[i] = 0; }
   out.count = count;
   return out;
 }

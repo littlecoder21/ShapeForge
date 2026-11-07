@@ -122,6 +122,9 @@ export interface InteractiveSettings {
   idleSize: number;
   paletteWrap: 'mirror' | 'repeat';
   renderBackend: 'css' | 'webgl' | 'overlay';
+  /** "Use as single layer": the shader layers are rendered as ONE procedural layer in which every layer is a colour stop
+   *  (see singleLayer.ts). Additive and optional: absent = off, so existing projects load unchanged. */
+  singleLayer?: boolean;
 }
 
 /** Values that belong to one layer rather than the whole project. */
@@ -350,5 +353,7 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     idleSize: finite('idleSize', 0.05, 0.48),
     paletteWrap: choice('paletteWrap', ['mirror', 'repeat'], DEFAULT_INTERACTIVE_SETTINGS.paletteWrap),
     renderBackend: choice('renderBackend', ['css', 'webgl', 'overlay'], DEFAULT_INTERACTIVE_SETTINGS.renderBackend),
+    // written only when on, so projects that never used it serialise exactly as before
+    ...(value.singleLayer === true ? { singleLayer: true } : {}),
   };
 }

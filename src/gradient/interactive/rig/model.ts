@@ -1,3 +1,6 @@
+import { TEXTURE_DEFAULTS, normalizeTexture } from '../../engine/textureControls';
+import type { TextureData } from '../../engine/model';
+
 /* ═══════════════════════ Interaction rig — data model ═══════════════════════
  * An interaction is a short stack of rules. Each rule combines:
  *   • an EFFECT   what happens (pull, swirl, glow, hue shift, glass bump…)
@@ -21,9 +24,14 @@ export type RigEffectId =
   | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch';
 export type RigStage = 'warp' | 'pre' | 'post';
 export type RigShapeId = 'circle' | 'ellipse' | 'box' | 'diamond' | 'line' | 'cross' | 'star' | 'poly'
-  | 'capsule' | 'roundBox' | 'triangle' | 'hexagon' | 'ringShape' | 'heart' | 'clover';
+  | 'capsule' | 'roundBox' | 'triangle' | 'hexagon' | 'ringShape' | 'heart' | 'clover' | 'custom';
 export type RigFalloffId = 'gauss' | 'smooth' | 'linear' | 'plateau' | 'ring' | 'spike' | 'hard' | 'bands' | 'tail' | 'dome'
   | 'cosine' | 'exponential' | 'power' | 'bell' | 'softstep' | 'quadratic' | 'cubic' | 'quintic' | 'sine' | 'logarithmic';
+export type RigFadeMode = 'radial' | 'horizontal' | 'vertical' | 'angle';
+export interface RigShapePoint { x: number; y: number }
+export type RigCssFxType = 'brightness' | 'contrast' | 'saturate' | 'hue' | 'grayscale' | 'color-drift';
+export interface RigCssFx { type: RigCssFxType; enabled: boolean; params: Record<string, number> }
+export const RIG_CSS_FX_TYPES: RigCssFxType[] = ['brightness', 'contrast', 'saturate', 'hue', 'grayscale', 'color-drift'];
 export type RigSourceId = 'pointer' | 'trail' | 'clicks' | 'touch2' | 'fixed' | 'orbit' | 'symmetry';
 export type RigColorMode = 'palette' | 'scene' | 'custom' | 'spectrum';
 export type RigBlend = 'mix' | 'add' | 'screen' | 'multiply';
@@ -45,12 +53,43 @@ export interface RigDrive {
   rate: number;
 }
 
+function normalizeCssFx(raw: unknown): RigCssFx | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.type !== 'string' || !RIG_CSS_FX_TYPES.includes(value.type as RigCssFxType)) return null;
+  const ranges: Record<RigCssFxType, { key: string; min: number; max: number; def: number }[]> = {
+    brightness: [{ key: 'amount', min: 0, max: 250, def: 120 }],
+    contrast: [{ key: 'amount', min: 0, max: 250, def: 120 }],
+    saturate: [{ key: 'amount', min: 0, max: 300, def: 140 }],
+    hue: [{ key: 'angle', min: 0, max: 360, def: 40 }],
+    grayscale: [{ key: 'amount', min: 0, max: 100, def: 100 }],
+    'color-drift': [{ key: 'angle', min: 0, max: 360, def: 24 }, { key: 'amount', min: 0, max: 200, def: 100 }],
+  };
+  const type = value.type as RigCssFxType;
+  const params = value.params && typeof value.params === 'object' ? value.params as Record<string, unknown> : {};
+  return {
+    type,
+    enabled: value.enabled !== false,
+    params: Object.fromEntries(ranges[type].map(({ key, min, max, def }) => [key, num(params[key], min, max, def)])),
+  };
+}
+
 export interface RigRule {
   id: string;
   enabled: boolean;
   effect: RigEffectId;
   shape: RigShapeId;
+  /** Normalized closed boundary used when shape is custom. Coordinates are centered and fit within [-1, 1]. */
+  customPoints: RigShapePoint[];
   falloff: RigFalloffId;
+  fadeMode: RigFadeMode;
+  fadeStart: number;
+  fadeSoftness: number;
+  fadeOpacity: number;
+  fadeInvert: boolean;
+  texture: TextureData;
+  /** One CSS FX with a fragment-shader equivalent, applied within this rule's influence. */
+  cssFx: RigCssFx | null;
   source: RigSourceId;
   colorMode: RigColorMode;
   color: string;
@@ -180,6 +219,12 @@ export const RIG_SHAPES: { id: RigShapeId; label: string; hint: string }[] = [
   { id: 'ringShape', label: 'Ring', hint: 'Hollow circular band' },
   { id: 'heart', label: 'Heart', hint: 'Heart-shaped influence' },
   { id: 'clover', label: 'Clover', hint: 'Four-lobed flower influence' },
+  { id: 'custom', label: 'Custom', hint: 'Draw a shape or load an SVG boundary' },
+];
+
+export const RIG_FADE_MODES: { id: RigFadeMode; label: string }[] = [
+  { id: 'radial', label: 'Radial' }, { id: 'horizontal', label: 'Horizontal' },
+  { id: 'vertical', label: 'Vertical' }, { id: 'angle', label: 'Along angle' },
 ];
 
 export const RIG_FALLOFFS: { id: RigFalloffId; label: string }[] = [
@@ -287,7 +332,15 @@ export function makeRule(effect: RigEffectId, over: Partial<Omit<RigRule, 'id' |
     enabled: true,
     effect,
     shape: def.defaults?.shape ?? 'circle',
+    customPoints: [],
     falloff: def.defaults?.falloff ?? 'gauss',
+    fadeMode: 'radial',
+    fadeStart: 0,
+    fadeSoftness: 0,
+    fadeOpacity: 1,
+    fadeInvert: false,
+    texture: normalizeTexture({ ...TEXTURE_DEFAULTS, enabled: false }),
+    cssFx: null,
     source,
     colorMode: 'palette',
     color: '#ffffff',
@@ -331,10 +384,29 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 export const activeRules = (rig: Pick<InteractionRig, 'rules'>): RigRule[] => rig.rules.filter(rule => rule.enabled).slice(0, RIG_MAX_RULES);
 
+export function normalizeShapePoints(raw: unknown): RigShapePoint[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 32).flatMap(point => {
+    if (!point || typeof point !== 'object') return [];
+    const value = point as Record<string, unknown>;
+    const x = Number(value.x), y = Number(value.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+    return [{ x: clamp(x, -1, 1), y: clamp(y, -1, 1) }];
+  });
+}
+
 /** Everything that changes the generated GLSL. Slider values are deliberately absent. */
 export function rigSignature(rig: Pick<InteractionRig, 'rules'>): string {
   return activeRules(rig)
-    .map(rule => [rule.effect, rule.shape, rule.falloff, rule.source, RIG_EFFECT_MAP[rule.effect].usesColor ? rule.colorMode : '-', RIG_EFFECT_MAP[rule.effect].usesBlend ? rule.blend : '-', rule.follow ? 'f' : '-'].join('.'))
+    .map(rule => [
+      rule.effect, rule.shape, rule.shape === 'custom' ? JSON.stringify(rule.customPoints) : '-',
+      rule.falloff, rule.fadeMode, rule.source,
+      rule.texture.enabled ? 'texture' : '-',
+      rule.cssFx?.enabled ? rule.cssFx.type : '-',
+      RIG_EFFECT_MAP[rule.effect].usesColor ? rule.colorMode : '-',
+      RIG_EFFECT_MAP[rule.effect].usesBlend ? rule.blend : '-',
+      rule.follow ? 'f' : '-',
+    ].join('.'))
     .join('|');
 }
 
@@ -376,7 +448,15 @@ export function normalizeRule(raw: unknown): RigRule | null {
     enabled: value.enabled !== false,
     effect,
     shape: pick(value.shape, RIG_SHAPES.map(item => item.id), 'circle'),
+    customPoints: normalizeShapePoints(value.customPoints),
     falloff: pick(value.falloff, RIG_FALLOFFS.map(item => item.id), base.falloff),
+    fadeMode: pick(value.fadeMode, ['radial', 'horizontal', 'vertical', 'angle'] as const, 'radial'),
+    fadeStart: num(value.fadeStart, 0, 0.95, 0),
+    fadeSoftness: num(value.fadeSoftness, 0, 1, 0),
+    fadeOpacity: num(value.fadeOpacity, 0, 1, 1),
+    fadeInvert: value.fadeInvert === true,
+    texture: normalizeTexture(value.texture),
+    cssFx: normalizeCssFx(value.cssFx),
     source,
     colorMode: pick(value.colorMode, RIG_COLOR_MODES.map(item => item.id), 'palette'),
     color: typeof value.color === 'string' && HEX.test(value.color) ? value.color : '#ffffff',

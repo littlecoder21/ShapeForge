@@ -6,6 +6,7 @@ import { POINTER_MODES } from './pointerModes';
 import { bakePaletteLut, encodePaletteLut } from './paletteLut';
 import { UNIFORM_NAMES } from './uniforms';
 import { assembleFragmentShader } from './rig/glsl';
+import { ruleTextureAtlasDataUri } from './rig/textureAtlas';
 import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from './styles';
 import fragmentShaderTemplate from './shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from './shaders/gradient.vert.glsl?raw';
@@ -57,7 +58,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
   let gl = canvas.getContext('webgl2', glOptions), isWebGL2 = !!gl;
   if (!gl) gl = canvas.getContext('webgl', glOptions);
   if (!gl) { canvas.dataset.shaderStatus = 'fallback'; return; }
-  let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
+  let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, ruleTextureAtlas = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
   let frameId = 0, lastFrame = 0, clock = 0, shaderTime = 0, visible = true, lost = false;
   let frameEma = 0, slowFrameCount = 0, adaptiveScale = 1;
   const engine = RigRuntime.createPointerEngine({
@@ -209,6 +210,33 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     }
     gl.uniform1i(locations.uPaletteLut, 0);
     gl.uniform1i(locations.uLayerMixLut, 1);
+    if (ruleTextureAtlas) gl.deleteTexture(ruleTextureAtlas);
+    ruleTextureAtlas = gl.createTexture();
+    if (ruleTextureAtlas) {
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, ruleTextureAtlas);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+      gl.uniform1i(locations.uRuleTextureAtlas, 2);
+      const atlas = canvas.dataset.shaderTextureAtlas;
+      if (atlas) {
+        const image = new Image();
+        image.onload = () => {
+          if (lost || !ruleTextureAtlas) return;
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, ruleTextureAtlas);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+          schedule();
+        };
+        image.onerror = () => { canvas.dataset.shaderTextureError = 'Could not load a CSS texture used by an interaction rule.'; };
+        image.src = atlas;
+      }
+    }
     canvas.dataset.shaderStatus = 'ready';
     if (settings.renderBackend === 'webgl') canvas.parentElement && canvas.parentElement.classList.add('gs-webgl-ready');
   };
@@ -305,6 +333,8 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     gl.uniform1i(locations.uPaletteLut, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, layerMixTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, ruleTextureAtlas);
     gl.uniform1i(locations.uLayerMixLut, 1);
     gl.uniform1f(locations.uStopCount, maxStops);
     gl.uniform4fv(locations['uPalette[0]'], colors);
@@ -346,6 +376,9 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
       gl.uniform4fv(locations['uRuleD[0]'], rigBuffers.d);
       gl.uniform4fv(locations['uRuleE[0]'], rigBuffers.e);
       gl.uniform4fv(locations['uRuleF[0]'], rigBuffers.f);
+      gl.uniform4fv(locations['uRuleG[0]'], rigBuffers.g);
+      gl.uniform4fv(locations['uRuleH[0]'], rigBuffers.h);
+      gl.uniform4fv(locations['uRuleI[0]'], rigBuffers.i);
       gl.uniform4fv(locations['uTrail[0]'], rigBuffers.trail);
       gl.uniform3f(locations.uTouch2, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
@@ -428,6 +461,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     if (program) gl.deleteProgram(program);
     if (paletteTexture) gl.deleteTexture(paletteTexture);
     if (layerMixTexture) gl.deleteTexture(layerMixTexture);
+    if (ruleTextureAtlas) gl.deleteTexture(ruleTextureAtlas);
   };
   });
 })(${rootExpression});
@@ -503,9 +537,10 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     const layerMixLut = entry.layerMix.palette.length
       ? encodePaletteLut(bakePaletteLut(entry.layerMix.palette, entry.layerMix.space))
       : '';
+    const textureAtlas = ruleTextureAtlasDataUri(entry.settings.rig);
     const attributes = useMarkers
-      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__"`
-      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}"`;
+      ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__" data-shader-texture-atlas="${escapeAttribute(textureAtlas)}"`
+      : `data-shader-settings="${escapeAttribute(entry.settings)}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}" data-shader-texture-atlas="${escapeAttribute(textureAtlas)}"`;
     const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;pointer-events:auto;touch-action:pan-y"></canvas>`;
     if (row) {
       html = html.replace(row, `${row.replace(/">$/, ' gs-shader-export-layer">')}${canvas}`);
@@ -574,7 +609,7 @@ export function interactiveGlslExport(project?: GradientProject) {
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
     `// Styles (uStyle): ${SHADER_STYLE_IDS.map(id => `${SHADER_STYLE_INDEX[id]} ${id}`).join(', ')}. uStyleP carries the four style parameters.`,
     '// The interaction (pointer / touch reaction) is generated from the interaction builder: only the rules in use are compiled.',
-    '// uRuleB / uRuleC / uRuleD / uRuleE / uRuleF hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
+    '// uRuleB through uRuleI hold the packed rule values, uTrail the pointer trail, uTouch2 the second finger.',
     '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',

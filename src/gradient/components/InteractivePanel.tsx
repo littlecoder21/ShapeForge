@@ -12,6 +12,7 @@ import StylePanel from './shader/StylePanel';
 import SetupPanel from './shader/SetupPanel';
 import MotionPanel from './shader/MotionPanel';
 import ProceduralPanel from './shader/ProceduralPanel';
+import SingleLayerSwitch from './shader/SingleLayerSwitch';
 import InteractPanel from './shader/InteractPanel';
 import FinishPanel from './shader/FinishPanel';
 import '../shader-panel.css';
@@ -83,7 +84,9 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
     style: primary ? SHADER_STYLE_MAP[primary.shader?.style ?? settings.style].label : '—',
     setup: `${enabledCount} of ${project.layers.length} layers`,
     motion: `${settings.animate ? 'Animated' : 'Still'} · ${settings.speed.toFixed(2)}×`,
-    procedural: procedural?.enabled ? `${procedural.mode === 'full' ? 'Full' : 'Hybrid'} · up to ${procedural.points.max} points` : 'Off',
+    procedural: settings.singleLayer === true
+      ? 'Single layer · all layers merged'
+      : procedural?.enabled ? `${procedural.mode === 'full' ? 'Full' : 'Hybrid'} · up to ${procedural.points.max} points` : 'Off',
     interaction: describeRig(settings.rig),
     finish: `${settings.quality[0].toUpperCase()}${settings.quality.slice(1)} quality`,
   };
@@ -113,6 +116,7 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
             {SUB_PANELS.filter(item => item.id !== active.id).map(item => <button key={item.id} type="button" role="tab" aria-selected={false} className="chip" onClick={() => setView(item.id)}>{item.label.split(' ')[0]}</button>)}
           </span>
         </div>
+        {active.id === 'procedural' && <SingleLayerSwitch />}
         <active.Body />
       </section>}
     </div>
