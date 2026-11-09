@@ -1,0 +1,81 @@
+SHAPEFORGE — PROCEDURAL MESH UPGRADE (from improve.txt) + NEW PRESETS
+=====================================================================
+Unzip over the repo root (paths match the repo). Nothing outside the files listed here was changed.
+
+FILES IN THIS ZIP
+-----------------
+NEW
+  src/procedural/meshSource.ts          mesh <-> procedural bridge, CSS reference maths, live-link resolver
+  src/procedural/meshGlsl.ts            GLSL for the CSS-compatible mesh sampler (one pass)
+  src/procedural/presetsMore.ts         17 new presets + ALL_PROCEDURAL_PRESETS (built-in + new)
+  src/procedural/meshSource.test.ts     23 tests (CSS maths, mesh mapping, capacity, GLSL, runtime, convert, presets)
+  src/gradient/components/shader/MeshRenderControls.tsx   small UI block (render mode, stacking model, link, core, opacity)
+CHANGED
+  src/procedural/types.ts               mesh config group, capacity tiers, planPointCapacity, anchors with alpha/core/size
+  src/procedural/glsl.ts                loops/arrays sized to the point tier, uProcE, CSS-compatible hook
+  src/procedural/proceduralRuntime.js   tier-sized buffers, CSS-compatible packing, exact mesh anchors, up to 128 points
+  src/procedural/proceduralRuntime.d.ts types for the above
+  src/procedural/convert.ts             proceduralize keeps ALL mesh points, links to the layer, renders CSS-compatible
+  src/gradient/interactive/adapter.ts   exposes the full live mesh (`mesh`) next to the legacy 8-point list
+  src/gradient/components/InteractiveCanvas.tsx   resolves the live mesh into the procedural config; device capacity check + note
+
+WHAT NOW WORKS
+--------------
+* A mesh layer's procedural config can stay LINKED to the layer (mesh.source = 'layer'). The layer's mesh remains the only source
+  of truth: every draw re-reads its points (position, colour, alpha, size, core, translate/scale transform, order). Nothing is copied
+  into the project, so editing the mesh updates the WebGL result and "release the link" / turning the engine off loses nothing.
+* Two render modes (config.mesh.render): 'css-compatible' (default after Proceduralize) and 'unified-field' (the existing field blend,
+  now sized from the mesh points). Switching modes never recompiles the shader and never touches mesh data.
+* css-compatible reproduces mesh.ts: stacked radial gradients, FIRST point on top, premultiplied source-over, mid = 25 + core/2 as a
+  CSS colour hint (alpha = a0*(1 - t^k), k = ln0.5/ln(mid), linear when no hint is written), radii = size% of canvas WIDTH (circles in
+  pixels, any aspect ratio), mesh base colour, layer opacity. config.mesh.composite = 'layered' reproduces the studio preview instead
+  (screen-blended point boxes, linear ramp). Sampled at the pointer/ripple/procedural-distortion position, so the style's ambient
+  noise/zoom/rotation cannot bend it; procedural distortion, motion, forces and colour grading all still apply.
+* Capacity: up to 128 mesh points. Uniform arrays in tiers 12/24/48/96/128 (2 vec4 per point); only the tier is compiled in, so
+  adding/removing points inside a tier never recompiles. planPointCapacity() reads the GPU fragment-uniform limit; if a mesh does not
+  fit, the layer's procedural WebGL is not drawn, a note explains it, and ALL points stay in the data and in CSS (no silent truncation).
+* A mesh-sourced config draws exactly its mesh points (no generated extras), so the count follows the mesh.
+* Converted meshes start with static motion (the result IS the CSS mesh); motion is one switch or a preset away.
+* 17 new presets (Lava Lamp, Northern Lights, Holo Foil, Deep Sea, Peach Sorbet, Cosmic Dust, Chrome Liquid, Golden Hour, Mint Chip,
+  Vaporwave, Ember Glow, Lilac Haze, Tidal Pool, Inkwell, Citrus Splash, Midnight City, Pointer Bloom).
+
+VERIFIED HERE
+-------------
+* Real browser test: headless Chromium (WebGL via SwiftShader) rendered the SAME mesh with the browser's own CSS and with the new
+  shader function, 14 cases, compared pixel by pixel (0-255 scale):
+    1 to 5 points, different sizes/alphas/overlaps, 21:9 and 9:16 canvases, opaque base, layer opacity 0.6, stacking order,
+    128 points, layered (studio) model ............ mean diff 0.2 - 1.2, max 2 - 6   (8-bit rounding)
+    core = 0 and core = 100 extremes ............... mean 0.46, max 15 on 0.3% of pixels (Skia approximates CSS hints near the centre)
+* 23 unit tests pass (run with a vitest shim; the repo's own runner was not available here).
+* Strict `tsc` is clean for types.ts, meshSource.ts, meshGlsl.ts, glsl.ts, convert.ts, presetsMore.ts and the runtime .d.ts
+  (the gradient rig module and presets.ts were stubbed for that check).
+
+NOT DONE / NOT VERIFIED — PLEASE READ
+-------------------------------------
+1. UI is not wired in. I did not rewrite ProceduralPanel.tsx. Two small manual edits there:
+     a) import MeshRenderControls from './MeshRenderControls' and render
+          <MeshRenderControls value={config} onChange={<the panel's function that stores a new ProceduralConfig>} pointCount={layer.mesh.points.length} />
+        inside a section shown when config.origin?.from === 'mesh' || config.mesh.source === 'layer'.
+     b) import { ALL_PROCEDURAL_PRESETS } from '../../../procedural/presetsMore' and use it wherever PROCEDURAL_PRESETS is listed.
+   Until (a), a converted mesh is css-compatible + linked by default; switching to unified-field needs that control (or editing config.mesh.render).
+2. Exact translucency needs one renderer edit. The shared GL context blends SRC_ALPHA/ONE_MINUS_SRC_ALPHA into a straight-alpha canvas,
+   which stores a translucent pixel (c, a) as (c*a, a*a) (too dark). I measured it: mean error 16-27 levels on soft edges.
+   - As shipped, the shader pre-compensates (PREMULT_BLEND_COMPENSATION = true in meshGlsl.ts). That halves the error (to about 6-12 mean)
+     but cannot be exact for bright colours at low alpha.
+   - For an exact match, in src/interactive/core/InteractiveRenderer.ts around gl.drawArrays(gl.TRIANGLES, 0, 6) add:
+         const straight = <this layer's procedural buffers>.e[0] > 0.5;   // CSS-compatible mesh is on
+         if (straight) gl.disable(gl.BLEND);
+         gl.drawArrays(gl.TRIANGLES, 0, 6);
+         if (straight) gl.enable(gl.BLEND);
+     and set PREMULT_BLEND_COMPENSATION = false. Measured error then drops to ~0.3 mean / 3 max.
+3. Mesh layers are still forced to the 'overlay' backend (supportsDirectShaderGeometry unchanged): I could not confirm that the studio CSS
+   hides the per-point mesh elements under .gs-webgl-ready. In overlay the WebGL result is drawn over the CSS mesh (same picture).
+4. GlobalRenderBudget.layerWeight still weighs by points.max (<= 12); a 100-point mesh costs more than it reports.
+5. Exports (src/interactive/export.ts) were not changed or tested. Proceduralize stores a full anchor snapshot, so an export has every
+   point, but the exported renderer does not do the live link nor the blend fix.
+6. Not run: the app build, the repo's full test suite, the real gradient.frag.glsl template compile, the React panel.
+7. src/procedural/procedural.test.ts: its "ships twelve presets" assertion already did not match the 16 built-in presets before this change.
+   Update it (e.g. compare with PROCEDURAL_PRESETS.length). Everything else in that file should be unaffected: the default signature
+   ('on:warp,none,none'), default capacity (12) and default behaviour (uProcE = 0 -> the unified field) are unchanged.
+8. config.mesh.composite 'layered' ignores the 'core' by design (the studio preview's fade stop makes the ramp linear).
+9. Per-point rotate/skew and point effects (blur...) are CSS-only: they stay in the data and are listed in the conversion note.

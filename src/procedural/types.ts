@@ -7,9 +7,14 @@
  * This file has no dependency on the renderer or on React. The runtime that turns a config into animated GPU data is
  * `proceduralRuntime.js` (plain JavaScript, so exports can embed it verbatim). */
 
-/** Uniform budget: 12 colour centres + 3 distortion stages keep the whole shader under ~200 uniform vectors. */
+/** Generated colour centres (seed → points) stay under the original uniform budget: 12 centres + 3 distortion stages. */
 export const PROC_MAX_POINTS = 12;
 export const PROC_MAX_STAGES = 3;
+/** Pinned centres (a mesh layer's points) may go further: the shader loop is compiled for the smallest tier that holds them. */
+export const PROC_POINT_TIERS = [12, 24, 48, 96, 128] as const;
+export const PROC_MAX_MESH_POINTS = 128;
+/** Uniform vectors the rest of the shader needs (palette, ripples, rig rules, trail, stages …). Kept deliberately generous. */
+export const PROC_UNIFORM_RESERVE = 176;
 
 export const PROC_MODES = ['hybrid', 'full'] as const;
 export type ProceduralMode = typeof PROC_MODES[number];
@@ -41,6 +46,20 @@ export type ProceduralFalloff = typeof FALLOFFS[number];
 export const NOISE_KINDS = ['gradient', 'value'] as const;
 export type NoiseKind = typeof NOISE_KINDS[number];
 
+/** How the centres are drawn. css-compatible = the stacked radial gradients of the CSS mesh, composited in one pass;
+ *  unified-field = every centre feeds one continuous field (the `field.method` blend). */
+export const MESH_RENDER_MODES = ['css-compatible', 'unified-field'] as const;
+export type MeshRenderMode = typeof MESH_RENDER_MODES[number];
+
+/** css-compatible stacking model. background = the `background-image` list of mesh.ts (flat / exported CSS, source-over);
+ *  layered = the studio preview (one element per point, screen-blended, linear ramp). */
+export const MESH_COMPOSITES = ['background', 'layered'] as const;
+export type MeshComposite = typeof MESH_COMPOSITES[number];
+
+/** snapshot = use the stored anchors · layer = re-read the layer's live mesh points every time (the mesh stays the source of truth). */
+export const MESH_SOURCES = ['snapshot', 'layer'] as const;
+export type MeshSource = typeof MESH_SOURCES[number];
+
 export interface ProceduralStage {
   type: DistortionType;
   enabled: boolean;
@@ -62,13 +81,32 @@ export interface ProceduralStage {
   direction: number;
 }
 
-/** A colour centre fixed by a conversion (for example a mesh point). Anchors replace the first generated points. */
+/** A colour centre fixed by a conversion (for example a mesh point). Anchors replace the first generated points.
+ *  Mesh anchors also carry the point's own alpha / core / size, so nothing of the mesh point is lost in the round trip. */
 export interface ProceduralAnchor {
   x: number;
   y: number;
   color: string;
   radius: number;
   weight: number;
+  /** point alpha 0…1 (mesh anchors) */
+  alpha?: number;
+  /** core 0…100: how long the point holds its colour (mesh anchors) */
+  core?: number;
+  /** radius as a percentage of the canvas WIDTH, exactly like MeshPoint.size (mesh anchors) */
+  size?: number;
+}
+
+export interface ProceduralMeshConfig {
+  source: MeshSource;
+  render: MeshRenderMode;
+  composite: MeshComposite;
+  /** solid colour under the points ('' = none), like MeshData.base */
+  base: string;
+  /** default core for points that have none, like MeshData.core */
+  core: number;
+  /** layer opacity applied inside the shader (the preview applies layer opacity on the canvas, so this is 1 there) */
+  opacity: number;
 }
 
 export interface ProceduralConfig {
@@ -158,6 +196,8 @@ export interface ProceduralConfig {
     /** how quickly points follow the force (1/s) */
     response: number;
   };
+  /** how a mesh (or any pinned set of centres) is drawn; absent in old projects → defaults that change nothing */
+  mesh: ProceduralMeshConfig;
   anchors: ProceduralAnchor[];
   /** where this config came from (a conversion records its approximation here) */
   origin: { from: string; note: string } | null;
@@ -192,11 +232,16 @@ export const PROC_RANGES = {
     saturation: { min: 0, max: 2 }, exposure: { min: -2, max: 2 }, contrast: { min: 0.4, max: 2 }, temperature: { min: -1, max: 1 },
   },
   interaction: { radius: { min: 0.05, max: 0.8 }, strength: { min: 0, max: 2 }, response: { min: 0.5, max: 20 } },
+  mesh: { core: { min: 0, max: 100 }, opacity: { min: 0, max: 1 } },
 } as const;
 
 export const DEFAULT_PROCEDURAL_STAGE: Readonly<ProceduralStage> = Object.freeze({
   type: 'none', enabled: true, noise: 'gradient', scale: 1.6, intensity: 0.35, octaves: 3, lacunarity: 2, persistence: 0.5,
   frequency: 3, turbulence: 0.3, speed: 0.4, direction: 0,
+});
+
+export const DEFAULT_PROCEDURAL_MESH: Readonly<ProceduralMeshConfig> = Object.freeze({
+  source: 'snapshot', render: 'unified-field', composite: 'background', base: '', core: 40, opacity: 1,
 });
 
 export const DEFAULT_PROCEDURAL: Readonly<ProceduralConfig> = Object.freeze({
@@ -218,6 +263,7 @@ export const DEFAULT_PROCEDURAL: Readonly<ProceduralConfig> = Object.freeze({
     hue: 0, saturation: 1, exposure: 0, contrast: 1, temperature: 0,
   },
   interaction: { force: 'swirl', radius: 0.32, strength: 0.7, falloff: 'soft', response: 6 },
+  mesh: { ...DEFAULT_PROCEDURAL_MESH },
   anchors: [],
   origin: null,
   locks: [],
@@ -252,6 +298,34 @@ export function normalizeStage(raw: unknown, fallback: ProceduralStage = { ...DE
   };
 }
 
+function normalizeAnchor(anchor: Record<string, unknown>): ProceduralAnchor {
+  const out: ProceduralAnchor = {
+    x: num(anchor.x, -0.5, 1.5, 0.5),
+    y: num(anchor.y, -0.5, 1.5, 0.5),
+    color: hex(anchor.color, '#ffffff'),
+    radius: num(anchor.radius, 0.05, 1.5, 0.35),
+    weight: num(anchor.weight, 0, 3, 1),
+  };
+  // mesh data is written only when present, so an anchor from an old project round-trips unchanged
+  if (anchor.alpha !== undefined) out.alpha = num(anchor.alpha, 0, 1, 1);
+  if (anchor.core !== undefined) out.core = num(anchor.core, 0, 100, 40);
+  if (anchor.size !== undefined) out.size = num(anchor.size, 0.5, 200, 48);
+  return out;
+}
+
+function normalizeMesh(raw: unknown, base: Readonly<ProceduralMeshConfig>): ProceduralMeshConfig {
+  const value = isRecord(raw) ? raw : {};
+  const R = PROC_RANGES.mesh;
+  return {
+    source: pick(value.source, MESH_SOURCES, base.source),
+    render: pick(value.render, MESH_RENDER_MODES, base.render),
+    composite: pick(value.composite, MESH_COMPOSITES, base.composite),
+    base: value.base === '' ? '' : hex(value.base, base.base),
+    core: num(value.core, R.core.min, R.core.max, base.core),
+    opacity: num(value.opacity, R.opacity.min, R.opacity.max, base.opacity),
+  };
+}
+
 /** Validates / repairs any input (an old project, an imported preset, a half-filled patch). Never throws. */
 export function normalizeProcedural(raw: unknown, base: Readonly<ProceduralConfig> = DEFAULT_PROCEDURAL): ProceduralConfig {
   const value = isRecord(raw) ? raw : {};
@@ -271,13 +345,7 @@ export function normalizeProcedural(raw: unknown, base: Readonly<ProceduralConfi
     ? color.colors.filter((item): item is string => typeof item === 'string' && HEX.test(item)).slice(0, 8).map(item => item.toLowerCase())
     : [];
   const anchors = Array.isArray(value.anchors)
-    ? value.anchors.filter(isRecord).slice(0, PROC_MAX_POINTS).map(anchor => ({
-      x: num(anchor.x, -0.5, 1.5, 0.5),
-      y: num(anchor.y, -0.5, 1.5, 0.5),
-      color: hex(anchor.color, '#ffffff'),
-      radius: num(anchor.radius, 0.05, 1.5, 0.35),
-      weight: num(anchor.weight, 0.1, 3, 1),
-    }))
+    ? value.anchors.filter(isRecord).slice(0, PROC_MAX_MESH_POINTS).map(normalizeAnchor)
     : base.anchors.map(anchor => ({ ...anchor }));
   const origin = isRecord(value.origin) && typeof value.origin.from === 'string'
     ? { from: value.origin.from.slice(0, 60), note: typeof value.origin.note === 'string' ? value.origin.note.slice(0, 400) : '' }
@@ -347,6 +415,7 @@ export function normalizeProcedural(raw: unknown, base: Readonly<ProceduralConfi
       falloff: pick(interaction.falloff, FALLOFFS, bi.falloff),
       response: num(interaction.response, R.interaction.response.min, R.interaction.response.max, bi.response),
     },
+    mesh: normalizeMesh(value.mesh, base.mesh ?? DEFAULT_PROCEDURAL_MESH),
     anchors,
     origin,
     locks,
@@ -369,18 +438,75 @@ export function parseProcedural(json: string): ProceduralConfig | null {
   }
 }
 
-/** The compiled shader depends only on which distortion types are present (their numbers are uniforms), and on nothing
- *  else in the config. Toggling a stage on / off, or moving any slider, never recompiles. */
-export function proceduralSignature(config: Pick<ProceduralConfig, 'enabled' | 'distortion'> | null | undefined): string {
+/* ─────────────── point capacity ─────────────── */
+
+/** The smallest compiled tier that holds `count` centres (never below the original 12, never above the mesh maximum). */
+export function tierFor(count: number): number {
+  const wanted = Math.max(1, Math.ceil(Number.isFinite(count) ? count : 1));
+  return PROC_POINT_TIERS.find(tier => tier >= wanted) ?? PROC_POINT_TIERS[PROC_POINT_TIERS.length - 1];
+}
+
+type CapacityInput = { points?: { min: number; max: number; density: number }; anchors?: readonly unknown[]; mesh?: { source: string; render: string } };
+
+/** How many centres a config needs: generated ones (min…max by density) or its pinned anchors, whichever is more. */
+export function proceduralNeed(config: CapacityInput | null | undefined): number {
+  if (!config) return 1;
+  if (config.anchors?.length && config.mesh && (config.mesh.source === 'layer' || config.mesh.render === 'css-compatible')) return config.anchors.length;
+  const p = config.points;
+  const generated = p ? Math.min(PROC_MAX_POINTS, Math.max(1, Math.round(p.min + (p.max - p.min) * Math.min(1, Math.max(0, p.density))))) : 1;
+  return Math.max(generated, config.anchors?.length ?? 0);
+}
+
+/** The loop size the shader is compiled with for this config. */
+export const proceduralCapacity = (config: CapacityInput | null | undefined): number => tierFor(proceduralNeed(config));
+
+export interface CapacityPlan {
+  /** centres the config wants to draw */
+  requested: number;
+  /** the compiled tier needed for them */
+  capacity: number;
+  /** the largest tier this GPU can hold next to the rest of the shader */
+  supported: number;
+  /** true when `requested` does not fit: the layer must fall back to the CSS mesh (nothing is deleted) */
+  overflow: boolean;
+  message: string;
+}
+
+/** Chooses a point-storage strategy from the GPU's fragment-uniform limit. Uniform arrays are used (two vec4 per centre),
+ *  in tiers, so changing the number of points inside a tier never recompiles. 0 / unknown = assume a desktop-class limit. */
+export function planPointCapacity(requested: number, maxFragmentUniformVectors: number): CapacityPlan {
+  const limit = maxFragmentUniformVectors > 0 ? maxFragmentUniformVectors : 1024;
+  const room = Math.max(0, limit - PROC_UNIFORM_RESERVE);
+  const fits = PROC_POINT_TIERS.filter(tier => tier * 2 <= room);
+  const supported = fits.length ? fits[fits.length - 1] : PROC_POINT_TIERS[0];
+  const want = Math.max(1, Math.round(requested));
+  const capacity = tierFor(want);
+  const overflow = want > supported;
+  return {
+    requested: want, capacity, supported, overflow,
+    message: overflow
+      ? `This device can draw ${supported} mesh points in WebGL and this mesh has ${want}. Showing the CSS mesh instead; all ${want} points are kept.`
+      : '',
+  };
+}
+
+/** The compiled shader depends only on which distortion types are present (their numbers are uniforms) and on the point
+ *  tier. Toggling a stage on / off, switching the render mode, or moving any slider never recompiles. */
+export function proceduralSignature(config: (Pick<ProceduralConfig, 'enabled' | 'distortion'> & CapacityInput) | null | undefined): string {
   if (!config || !config.enabled) return 'off';
-  return `on:${config.distortion.slice(0, PROC_MAX_STAGES).map(stage => stage.type).join(',')}`;
+  const capacity = proceduralCapacity(config);
+  return `on:${config.distortion.slice(0, PROC_MAX_STAGES).map(stage => stage.type).join(',')}${capacity > PROC_MAX_POINTS ? `|p${capacity}` : ''}`;
 }
 
 export const isProceduralActive = (config: Pick<ProceduralConfig, 'enabled'> | null | undefined): boolean => !!config && config.enabled === true;
 
+/** True when the centres come from a mesh (live link or a converted snapshot). */
+export const isMeshSourced = (config: Pick<ProceduralConfig, 'mesh' | 'origin'> | null | undefined): boolean =>
+  !!config && (config.mesh.source === 'layer' || config.origin?.from === 'mesh');
+
 /** Uniform names the procedural shader code declares (arrays as `name[0]`). Listed here, not in glsl.ts, so the shared
  *  uniform list can include them without importing the GLSL generator. */
 export const PROCEDURAL_UNIFORM_NAMES = [
-  'uProcPoints[0]', 'uProcColors[0]', 'uProcA', 'uProcB', 'uProcC', 'uProcGrade', 'uProcD', 'uProcBase',
+  'uProcPoints[0]', 'uProcColors[0]', 'uProcA', 'uProcB', 'uProcC', 'uProcGrade', 'uProcD', 'uProcBase', 'uProcE',
   'uProcWarpA[0]', 'uProcWarpB[0]', 'uProcWarpC[0]',
 ] as const;

@@ -5,9 +5,11 @@ import { gradientLayerToShader } from '../../interactive/adapter';
 import { useStore } from '../../engine/store';
 import { canProceduralize, proceduralizeSource } from '../../../procedural/convert';
 import {
-  PROCEDURAL_PRESETS, applyPreset, parsePresetFile, randomizeProcedural, reseed, serializePresetFile,
+  applyPreset, parsePresetFile, randomizeProcedural, reseed, serializePresetFile,
   type RandomizeScope,
 } from '../../../procedural/presets';
+import { ALL_PROCEDURAL_PRESETS } from '../../../procedural/presetsMore';
+import MeshRenderControls from './MeshRenderControls';
 import {
   COLOR_SPACES, DEFAULT_PROCEDURAL, DEFAULT_PROCEDURAL_STAGE, DISTORTION_TYPES, FALLOFFS, FIELD_METHODS, FORCE_TYPES, MOTION_TYPES,
   NOISE_KINDS, POINT_DISTRIBUTIONS, PROC_MAX_POINTS, PROC_MODES, PROC_RANGES, newProcedural, normalizeProcedural,
@@ -108,7 +110,7 @@ export default function ProceduralPanel() {
   const startFresh = (presetId?: string) => {
     const values = new Map(targets.map(layer => {
       const base = newProcedural({ enabled: true, mode: 'full', seed: 1337 + layers.indexOf(layer) * 131 });
-      const preset = PROCEDURAL_PRESETS.find(item => item.id === presetId);
+      const preset = ALL_PROCEDURAL_PRESETS.find(item => item.id === presetId);
       return [layer.id, preset ? applyPreset(base, preset) : base] as const;
     }));
     patchLayers(layer => ({ enabled: true, procedural: values.get(layer.id) ?? layer.shader?.procedural }));
@@ -183,7 +185,7 @@ export default function ProceduralPanel() {
       </Section>
       <Section title="Start from a preset">
         <div className="gs-sh-chips">
-          {PROCEDURAL_PRESETS.map(preset => <button key={preset.id} type="button" className="chip" title={preset.description} onClick={() => startFresh(preset.id)} data-testid={`procedural-start-${preset.id}`}>{preset.name}</button>)}
+          {ALL_PROCEDURAL_PRESETS.map(preset => <button key={preset.id} type="button" className="chip" title={preset.description} onClick={() => startFresh(preset.id)} data-testid={`procedural-start-${preset.id}`}>{preset.name}</button>)}
         </div>
       </Section>
     </div>;
@@ -210,6 +212,11 @@ export default function ProceduralPanel() {
         <button type="button" className="btn small" onClick={remove} data-testid="procedural-remove">Remove &amp; restore gradient</button>
       </div>
       {config.origin && <p className="hint" data-testid="procedural-origin">Converted from a {config.origin.from} gradient. {config.origin.note}</p>}
+      {(config.origin?.from === 'mesh' || config.mesh.source === 'layer') && (
+        <Section title="Mesh rendering">
+          <MeshRenderControls value={config} onChange={next => edit(() => next, 'mesh')} pointCount={primary?.mesh?.points.length ?? 0} />
+        </Section>
+      )}
       {cost === 'High' &&       <p className="hint">This combination is heavy. Lower the distortion octaves or point count if it stutters; preview pixel density is automatically shared across visible shader layers.</p>}
     </Section>
 
@@ -299,7 +306,7 @@ export default function ProceduralPanel() {
 
     <Section title="Presets & randomize">
       <div className="gs-sh-chips" data-testid="procedural-presets">
-        {PROCEDURAL_PRESETS.map(preset => <button key={preset.id} type="button" className="chip" title={preset.description} onClick={() => edit(current => applyPreset(current, preset))} data-testid={`procedural-preset-${preset.id}`}>{preset.name}</button>)}
+        {ALL_PROCEDURAL_PRESETS.map(preset => <button key={preset.id} type="button" className="chip" title={preset.description} onClick={() => edit(current => applyPreset(current, preset))} data-testid={`procedural-preset-${preset.id}`}>{preset.name}</button>)}
       </div>
       <p className="hint">Lock what you want to keep. Presets and randomize leave locked groups alone.</p>
       <div className="gs-sh-chips" role="group" aria-label="Locks">

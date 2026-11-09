@@ -1,4 +1,5 @@
 import { PROC_MAX_POINTS, newProcedural, type ProceduralAnchor, type ProceduralConfig, type ProceduralMode } from './types';
+import { meshCssOnlyNotes, meshToAnchors, type MeshLike } from './meshSource';
 
 /* "Proceduralize": turn the gradient a layer already has into a procedural configuration.
  *
@@ -8,18 +9,23 @@ import { PROC_MAX_POINTS, newProcedural, type ProceduralAnchor, type ProceduralC
  * project model directly.
  *
  * What survives the conversion, per source kind (all positions are canvas uv, y up; the adapter's are percent, y down):
- *   mesh     every mesh point becomes an anchor at the same position with the same colour — the closest match.
+ *   mesh     EVERY mesh point (up to 128) becomes an anchor with its position, colour, alpha, size, core and translate / scale
+ *            transform, in the same stacking order. The config is linked to the layer (`mesh.source = 'layer'`), so editing
+ *            the mesh keeps updating the procedural result, and it renders CSS-compatible: the stacked radial gradients of
+ *            the CSS mesh in one shader pass. Switch to the unified field in the panel for a continuous blend.
  *   linear   colour centres placed along the gradient axis at the stop positions (colours and order preserved).
  *   radial   a centre for the first stop, then a ring of centres per later stop at that stop's radius.
  *   conic    centres around the origin at each stop's angle.
  *   curve / repeating / noise: treated as linear (or the fallback palette), because their geometry is CSS-backed.
- * The field blends colours with a Gaussian / soft falloff rather than the CSS interpolator, so the result is the same
- * colour distribution, not a pixel match. `approximation` says so in plain words for the panel. */
+ * `approximation` says in plain words what is (not) an exact match, for the panel. */
 
 export interface ProceduralSource {
   palette: ReadonlyArray<{ color: string; position: number }>;
   geometry: { kind: string; angle: number; originX: number; originY: number; radiusX: number; radiusY: number };
+  /** the legacy, capped list (8 points, no core / transform) */
   meshPoints: ReadonlyArray<{ color: string; x: number; y: number; size: number; alpha?: number }>;
+  /** the layer's full live mesh (every point, with core and transform). When present the conversion links to it. */
+  mesh?: MeshLike | null;
 }
 
 export interface ProceduralizeOptions {
@@ -54,14 +60,12 @@ function thin<T>(items: T[], max: number): T[] {
   return Array.from({ length: max }, (_, index) => items[Math.round(index * (items.length - 1) / (max - 1))]);
 }
 
+/** Every mesh point, nothing dropped. Prefers the full live mesh; falls back to the legacy capped list. */
 function fromMesh(source: ProceduralSource): ProceduralAnchor[] {
-  return source.meshPoints.slice(0, PROC_MAX_POINTS).map(point => ({
-    x: clamp(point.x / 100, -0.5, 1.5),
-    y: clamp(1 - point.y / 100, -0.5, 1.5),
-    color: hexOr(point.color, '#ffffff'),
-    radius: clamp(point.size / 100 * 1.1, 0.08, 1.2),
-    weight: clamp(point.alpha ?? 1, 0.2, 2),
-  }));
+  const mesh: MeshLike = source.mesh ?? {
+    points: source.meshPoints.map(point => ({ x: point.x, y: point.y, color: point.color, alpha: point.alpha ?? 1, size: point.size })),
+  };
+  return meshToAnchors(mesh);
 }
 
 function fromLinear(stops: { color: string; position: number }[], angleDeg: number): ProceduralAnchor[] {
@@ -116,12 +120,19 @@ export function proceduralizeSource(source: ProceduralSource, options: Procedura
   let from = geometry.kind;
   let method: ProceduralConfig['field']['method'] = 'soft';
   let falloff = 0.4;
+  let isMesh = false;
+  let linked = false;
 
-  if (geometry.kind === 'mesh' && source.meshPoints.length) {
+  if (geometry.kind === 'mesh' && (source.mesh?.points.length || source.meshPoints.length)) {
     anchors = fromMesh(source);
+    isMesh = true;
+    linked = !!source.mesh;
     method = 'gaussian';
     falloff = 0.2;
-    approximation = 'Mesh points keep their positions and colours. The field blends them with a Gaussian falloff, which is close to — but not identical to — the CSS mesh.';
+    const notes = source.mesh ? meshCssOnlyNotes(source.mesh) : [];
+    approximation = `All ${anchors.length} mesh points are kept (position, colour, alpha, size, core, stacking order)`
+      + `${linked ? ' and stay linked to the layer\'s mesh' : ''}. Rendered CSS-compatible: the same stacked radial gradients as the CSS mesh, in one shader pass.`
+      + `${notes.length ? ` ${notes.join(' ')}` : ''}`;
   } else if (stops.length >= 2 && geometry.kind === 'radial') {
     const reach = clamp(Math.max(geometry.radiusX, geometry.radiusY) / 100, 0.2, 0.7);
     anchors = fromRadial(stops, cx, cy, reach);
@@ -144,10 +155,16 @@ export function proceduralizeSource(source: ProceduralSource, options: Procedura
     mode,
     seed: options.seed ?? 1337,
     mix: mode === 'hybrid' ? 0.85 : 1,
-    points: count ? { min: count, max: count, density: 1, spread: 1, radius: 0.35, variance: 0.1, spacing: 0 } : {},
+    points: count ? { min: Math.min(count, PROC_MAX_POINTS), max: Math.min(count, PROC_MAX_POINTS), density: 1, spread: 1, radius: 0.35, variance: 0.1, spacing: 0 } : {},
     field: { method, falloff, radius: 1, softness: 0.55, overlap: 0.8 },
     color: { source: 'layer', interpolation: 'oklab', variance: 0 },
-    motion: { type: 'drift', amplitude: 0.05, speed: 0.5, smoothness: 0.7, randomness: 0.35 },
+    // a converted mesh starts still, so the result is the CSS mesh itself; motion is one switch away (or a preset)
+    motion: isMesh
+      ? { type: 'static', amplitude: 0.05, speed: 0.5, smoothness: 0.7, randomness: 0.35 }
+      : { type: 'drift', amplitude: 0.05, speed: 0.5, smoothness: 0.7, randomness: 0.35 },
+    mesh: isMesh
+      ? { source: linked ? 'layer' : 'snapshot', render: 'css-compatible', composite: 'background', base: source.mesh?.base ?? '', core: source.mesh?.core ?? 40, opacity: 1 }
+      : {},
     anchors,
     origin: { from, note: approximation },
   });
@@ -156,5 +173,5 @@ export function proceduralizeSource(source: ProceduralSource, options: Procedura
 
 /** Quick check used by the panel: does this layer have anything meaningful to convert? */
 export function canProceduralize(source: ProceduralSource): boolean {
-  return source.palette.length >= 2 || source.meshPoints.length > 0;
+  return source.palette.length >= 2 || source.meshPoints.length > 0 || (source.mesh?.points.length ?? 0) > 0;
 }

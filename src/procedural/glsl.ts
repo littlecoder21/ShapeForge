@@ -1,5 +1,6 @@
 import { assembleFragmentShader, type ShaderBuildOptions } from '../gradient/interactive/rig/glsl';
-import { PROC_MAX_POINTS, PROC_MAX_STAGES, isProceduralActive, type DistortionType, type ProceduralConfig } from './types';
+import { PROC_MAX_POINTS, PROC_MAX_STAGES, isProceduralActive, proceduralCapacity, type DistortionType, type ProceduralConfig } from './types';
+import { PREMULT_BLEND_COMPENSATION, cssMeshGlsl } from './meshGlsl';
 
 /* Generates the procedural part of the fragment shader and splices it into the template.
  *
@@ -8,8 +9,9 @@ import { PROC_MAX_POINTS, PROC_MAX_STAGES, isProceduralActive, type DistortionTy
  *     1. the uniforms and functions below, right after the interaction rig's functions;
  *     2. `procDistort` just before the surface-gradient block (it moves the sampling position `warped`, and `p`);
  *     3. `procSample` just before the layer-mix block (it recolours the pixel from the animated colour field).
- * Slider values are uniforms, never constants. Only the distortion *types* are compiled in, so a stage costs shader
- * code only when it is present. GLSL ES 1.00 rules apply (constant loop bounds, no `%`, explicit float literals). */
+ * Slider values are uniforms, never constants. Only the distortion *types* and the point-capacity tier are compiled in, so a
+ * stage costs shader code only when it is present, and the centre loops are as long as the config needs (12 … 128), not
+ * always the maximum. GLSL ES 1.00 rules apply (constant loop bounds, no `%`, explicit float literals). */
 
 export { PROCEDURAL_UNIFORM_NAMES } from './types';
 
@@ -20,14 +22,18 @@ export const PROC_ANCHORS = {
   color: '  if (uLayerMixEnabled > 0.5) {',
 } as const;
 
-const DECLARATIONS = `uniform vec4 uProcPoints[${PROC_MAX_POINTS}];
-uniform vec4 uProcColors[${PROC_MAX_POINTS}];
+/** What the generator needs from a config: its distortion stages, and (for the loop size) its points and anchors. */
+export type ProceduralShaderInput = Pick<ProceduralConfig, 'enabled' | 'distortion'> & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh'>>;
+
+const declarations = (capacity: number) => `uniform vec4 uProcPoints[${capacity}];
+uniform vec4 uProcColors[${capacity}];
 uniform vec4 uProcA;
 uniform vec4 uProcB;
 uniform vec4 uProcC;
 uniform vec4 uProcGrade;
 uniform vec4 uProcD;
 uniform vec4 uProcBase;
+uniform vec4 uProcE;
 uniform vec4 uProcWarpA[${PROC_MAX_STAGES}];
 uniform vec4 uProcWarpB[${PROC_MAX_STAGES}];
 uniform vec4 uProcWarpC[${PROC_MAX_STAGES}];
@@ -35,6 +41,8 @@ uniform vec4 uProcWarpC[${PROC_MAX_STAGES}];
  * uProcB: field radius, strength, falloff, softness
  * uProcC: exponent, overlap, colour space (0 srgb, 1 linear, 2 oklab), octave cap
  * uProcD: hue shift in radians, procedural animation time
+ * uProcE: CSS-compatible mesh on (0 = the unified field), layered compositing (0 = background-image), ellipse ratio
+ * uProcPoints[i]: x, y, radius, weight · uProcColors[i]: rgb, CSS hint exponent
  * uProcWarpA[i]: enabled, noise scale, intensity, frequency
  * uProcWarpB[i]: octaves, lacunarity, persistence, turbulence
  * uProcWarpC[i]: flow speed, direction (rad), noise kind (0 gradient, 1 value) */`;
@@ -167,12 +175,12 @@ vec3 procGrade(vec3 c) {
   return clamp(c, 0.0, 1.0);
 }`;
 
-const FIELD_GLSL = `vec4 procSampleSmin(vec2 uv, float count, float radius, float softness) {
+const fieldGlsl = (capacity: number) => `vec4 procSampleSmin(vec2 uv, float count, float radius, float softness) {
   vec2 asp = vec2(uAspect, 1.0);
   float k = 0.02 + softness * 0.35;
   float dmin = 100.0;
   float dsoft = 100.0;
-  for (int i = 0; i < ${PROC_MAX_POINTS}; i++) {
+  for (int i = 0; i < ${capacity}; i++) {
     if (float(i) >= count) break;
     float dist = length((uv - uProcPoints[i].xy) * asp);
     dmin = min(dmin, dist);
@@ -182,7 +190,7 @@ const FIELD_GLSL = `vec4 procSampleSmin(vec2 uv, float count, float radius, floa
   float tau = 0.015 + softness * 0.25;
   vec3 accum = vec3(0.0);
   float wsum = 0.0;
-  for (int i = 0; i < ${PROC_MAX_POINTS}; i++) {
+  for (int i = 0; i < ${capacity}; i++) {
     if (float(i) >= count) break;
     float dist = length((uv - uProcPoints[i].xy) * asp);
     float w = exp(-(dist - dmin) / tau) * uProcPoints[i].w;
@@ -212,7 +220,7 @@ vec4 procSample(vec2 uv) {
     vec3 accum = vec3(0.0);
     float wsum = 0.0;
     float uncovered = 1.0;
-    for (int i = 0; i < ${PROC_MAX_POINTS}; i++) {
+    for (int i = 0; i < ${capacity}; i++) {
       if (float(i) >= count) break;
       vec4 pt = uProcPoints[i];
       float dn = length((uv - pt.xy) * asp) / max(pt.z * radius, 0.005);
@@ -240,13 +248,17 @@ export interface GeneratedProceduralGlsl {
   functions: string;
   /** distortion types compiled in, in stage order; changing it needs a rebuild */
   signature: string;
+  /** the compiled loop size (a tier: 12, 24, 48, 96 or 128) */
+  capacity: number;
 }
 
-export function generateProceduralGlsl(config: Pick<ProceduralConfig, 'distortion'>): GeneratedProceduralGlsl {
+export function generateProceduralGlsl(config: Pick<ProceduralConfig, 'distortion'> & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh'>>, capacity = proceduralCapacity(config)): GeneratedProceduralGlsl {
   const types = config.distortion.slice(0, PROC_MAX_STAGES).map(stage => stage.type);
+  const size = Math.max(PROC_MAX_POINTS, capacity);
   return {
-    functions: [DECLARATIONS, NOISE_GLSL, COLOR_GLSL, stageFunctions(types), distortFunction(types), FIELD_GLSL].filter(Boolean).join('\n'),
+    functions: [declarations(size), NOISE_GLSL, COLOR_GLSL, stageFunctions(types), distortFunction(types), fieldGlsl(size), cssMeshGlsl(size)].filter(Boolean).join('\n'),
     signature: types.join(','),
+    capacity: size,
   };
 }
 
@@ -257,12 +269,32 @@ const WARP_HOOK = `  if (uProcA.x > 0.5) {
   }
 `;
 
+/* CSS-compatible mesh: sampled at `p` (the pointer / ripple / procedural-distortion position), not at `warped`, so the style's own
+ * ambient noise, zoom and rotation cannot bend a mesh that is meant to match the CSS. Full mode REPLACES colour and alpha with the
+ * mesh (straight alpha, the renderer writes it without blending); hybrid mode lays it over the existing colour. */
 const COLOR_HOOK = `  if (uProcA.x > 0.5) {
-    vec4 procField = procSample(warped / vec2(uAspect, 1.0) + 0.5);
-    float procCover = procField.a * (uProcA.x > 1.5 ? 1.0 : uProcA.w);
-    color.rgb = mix(color.rgb, procField.rgb, procCover);
-    color.a = mix(color.a, 1.0, procCover);
-    alpha = mix(alpha, 1.0, procCover);
+    if (uProcE.x > 0.5) {
+      vec4 procMesh = procSampleCss(p);
+      procMesh.rgb = procGrade(procMesh.rgb);
+      if (uProcA.x > 1.5) {
+${PREMULT_BLEND_COMPENSATION
+  ? `        float procRoot = sqrt(max(procMesh.a, 0.0));
+        color = vec4(min(procMesh.rgb / max(procRoot, 0.0001), vec3(1.0)), procRoot);`
+  : '        color = procMesh;'}
+        alpha = 1.0;
+      } else {
+        float procCover = procMesh.a * uProcA.w;
+        color.rgb = mix(color.rgb, procMesh.rgb, procCover);
+        color.a = mix(color.a, 1.0, procCover);
+        alpha = mix(alpha, 1.0, procCover);
+      }
+    } else {
+      vec4 procField = procSample(warped / vec2(uAspect, 1.0) + 0.5);
+      float procCover = procField.a * (uProcA.x > 1.5 ? 1.0 : uProcA.w);
+      color.rgb = mix(color.rgb, procField.rgb, procCover);
+      color.a = mix(color.a, 1.0, procCover);
+      alpha = mix(alpha, 1.0, procCover);
+    }
   }
 `;
 
@@ -277,7 +309,7 @@ function insertOnce(source: string, anchor: string, text: string, where: 'before
 }
 
 /** Returns the template with the procedural hooks added (when the config is active) — otherwise the template unchanged. */
-export function injectProceduralGlsl(template: string, config: Pick<ProceduralConfig, 'enabled' | 'distortion'> | null | undefined): string {
+export function injectProceduralGlsl(template: string, config: ProceduralShaderInput | null | undefined): string {
   if (!config || !isProceduralActive(config)) return template;
   const { functions } = generateProceduralGlsl(config);
   let out = insertOnce(template, PROC_ANCHORS.functions, functions, 'after', 'functions');
@@ -291,7 +323,7 @@ export function assembleProceduralShader(
   template: string,
   rig: Parameters<typeof assembleFragmentShader>[1],
   options: ShaderBuildOptions,
-  procedural: Pick<ProceduralConfig, 'enabled' | 'distortion'> | null | undefined,
+  procedural: ProceduralShaderInput | null | undefined,
 ): string {
   return assembleFragmentShader(injectProceduralGlsl(template, procedural), rig, options);
 }

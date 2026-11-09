@@ -1,6 +1,7 @@
 import { sortedStops, type GradientLayer, type GradientProject } from '../engine/model';
 import { bleedOf, radii } from '../engine/geom';
 import type { ShaderGeometry, ShaderMeshPoint, ShaderStop } from './types';
+import type { MeshLike } from '../../procedural/meshSource';
 
 interface PaletteGroup {
   layer: GradientLayer;
@@ -17,6 +18,8 @@ export interface ShaderLayerAdapter {
   geometry: ShaderGeometry;
   meshPoints: ShaderMeshPoint[];
   meshBase: string;
+  /** the layer's full live mesh (every point, with core / transform) for the procedural engine's live link; null for other layers */
+  mesh: MeshLike | null;
   notes: string[];
 }
 
@@ -88,12 +91,13 @@ export function gradientLayerToShader(layer: GradientLayer, project: GradientPro
     alpha: point.alpha,
   })) : [];
   if (layer.type === 'mesh' && layer.mesh.points.length > 8) {
-    notes.push(`Shader rendering supports up to 8 editable mesh points; the layer retains all ${layer.mesh.points.length} points in CSS and exports.`);
+    notes.push(`The classic shader styles use up to 8 mesh points; the procedural engine draws all ${layer.mesh.points.length} (up to 128), and the layer keeps every point in CSS and exports.`);
   }
   return {
     palette,
     meshPoints,
     meshBase: layer.type === 'mesh' ? layer.mesh.base : '',
+    mesh: layer.type === 'mesh' ? layer.mesh as unknown as MeshLike : null,
     geometry: {
       kind: layer.type,
       angle: layer.angle,

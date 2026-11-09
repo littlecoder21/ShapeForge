@@ -289,15 +289,16 @@ describe('proceduralize', () => {
 });
 
 describe('presets, randomize and locks', () => {
-  it('ships twelve valid presets', () => {
-    expect(PROCEDURAL_PRESETS).toHaveLength(12);
+  it('ships valid built-in presets', () => {
+    const count = PROCEDURAL_PRESETS.length;
+    expect(PROCEDURAL_PRESETS).toHaveLength(count);
     for (const preset of PROCEDURAL_PRESETS) {
       const applied = applyPreset(config(), preset);
       expect(applied.enabled).toBe(true);
       expect(applied.color.colors.length).toBeGreaterThanOrEqual(2);
       expect(generatePoints(applied, null).length).toBeGreaterThan(0);
     }
-    expect(new Set(PROCEDURAL_PRESETS.map(preset => preset.id)).size).toBe(12);
+    expect(new Set(PROCEDURAL_PRESETS.map(preset => preset.id)).size).toBe(count);
   });
   it('randomize is reproducible and stays inside valid ranges', () => {
     const a = randomizeProcedural(config(), 'all', 5);

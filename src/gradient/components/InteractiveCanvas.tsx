@@ -1,16 +1,28 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractiveRenderer } from '../../interactive/core/InteractiveRenderer';
+import { getSharedRenderer } from '../../interactive/core/gpu/SharedRenderer';
 import { gradientLayerToShader, interactionColorsForLayer, supportsDirectShaderGeometry } from '../interactive/adapter';
 import { normalizeInteractiveSettings, type InteractiveLayerState, type InteractiveRendererStatus } from '../interactive/types';
 import { resolveStyleParams } from '../interactive/styles';
 import type { GradientLayer, GradientProject } from '../engine/model';
 import { textMaskDataUri } from '../engine/text';
 import { bleedOf } from '../engine/geom';
+import { resolveProceduralMesh } from '../../procedural/meshSource';
+import { planPointCapacity, proceduralNeed } from '../../procedural/types';
 
 interface Props { project: GradientProject; layer: GradientLayer; interactive?: boolean }
 
 const mixLayerOf = (project: GradientProject, layer: GradientLayer) =>
   project.layers.find(candidate => candidate.id === layer.shader?.mixLayerId && candidate.visible && candidate.id !== layer.id);
+
+/** The GPU's fragment-uniform limit (0 when unknown). Decides how many procedural mesh points this device can draw. */
+function deviceUniformVectors(): number {
+  try {
+    return (getSharedRenderer() as unknown as { gpu?: { maxFragmentUniformVectors?: number } }).gpu?.maxFragmentUniformVectors ?? 0;
+  } catch {
+    return 0;
+  }
+}
 
 /* Performance note
  * This component is re-rendered by the preview on every project edit (every slider tick in any panel).
@@ -56,8 +68,16 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
     styleParams: resolveStyleParams(settings.style, layer.shader?.styleParams),
     reaction: layer.shader?.interact === false ? 0 : layer.shader?.reaction ?? 1,
   }), [settings.style, styleParamsKey, layer.shader?.interact, layer.shader?.reaction]); // eslint-disable-line react-hooks/exhaustive-deps
-  /** the procedural engine config of this layer (null = the manual gradient only) */
-  const procedural = layer.shader?.procedural ?? null;
+  /** The procedural engine config of this layer (null = the manual gradient only). A mesh-linked config is resolved against the
+   *  layer's LIVE mesh here, on every draw: the mesh stays the single source of truth and nothing is copied into the project. */
+  const storedProcedural = layer.shader?.procedural ?? null;
+  const resolvedProcedural = useMemo(() => resolveProceduralMesh(storedProcedural, adapted.mesh), [storedProcedural, adapted.mesh]);
+  /** Does this device have room for that many points? If not, the procedural layer is not drawn (nothing is deleted) and a note says so. */
+  const capacityPlan = useMemo(
+    () => resolvedProcedural && resolvedProcedural.enabled ? planPointCapacity(proceduralNeed(resolvedProcedural), deviceUniformVectors()) : null,
+    [resolvedProcedural],
+  );
+  const procedural = capacityPlan?.overflow ? null : resolvedProcedural;
   const backendRef = useRef(rendererSettings.renderBackend);
   backendRef.current = rendererSettings.renderBackend;
   const textMaskSize = `${100 / (1 + 2 * bleedOf(layer, project.canvas))}%`;
@@ -116,6 +136,9 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
       }}
       data-testid={`gs-shader-canvas-${layer.id}`}
     />
+    {capacityPlan?.overflow && (
+      <div className="gs-shader-status note" role="note" title={capacityPlan.message} data-testid={`gs-shader-capacity-${layer.id}`}>{capacityPlan.message}</div>
+    )}
     {status.value !== 'ready' && status.value !== 'compiling' && (
       <div className={`gs-shader-status ${status.value}`} role="status" data-testid={`gs-shader-status-${layer.id}`}>
         {status.message || (status.value === 'fallback' ? 'WebGL unavailable · showing the CSS gradient' : 'Shader preview unavailable · showing the CSS gradient')}
@@ -124,7 +147,7 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
     {status.value === 'ready' && status.message && (
       <div className="gs-shader-status note" role="note" title={status.message} data-testid={`gs-shader-status-${layer.id}`}>{status.message}</div>
     )}
-    {status.value === 'ready' && !status.message && (adapted.notes.length > 0 || project.shader?.enabled) && (
+    {status.value === 'ready' && !status.message && !capacityPlan?.overflow && (adapted.notes.length > 0 || project.shader?.enabled) && (
       <div className="gs-shader-status note" role="note" title={adapted.notes.join(' ')} data-testid={`gs-shader-status-${layer.id}`}>
         {adapted.notes.length ? adapted.notes.join(' ') : 'Shader layer · base gradient tools remain active'}
       </div>
