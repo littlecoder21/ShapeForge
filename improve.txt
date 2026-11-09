@@ -1,756 +1,644 @@
-# MASTER DEVELOPMENT PROMPT
-## Advanced Interactive Shader Gradient Engine — Integration with Existing CSS Gradient Generator
+# ShapeForge — Unified Mesh Gradient to Procedural WebGL Integration
 
-Act as a senior graphics engineer, WebGL/GLSL shader developer, creative coding specialist, and React + TypeScript architect.
+## Objective
 
-I have an existing, powerful CSS gradient generator. I want to extend it with a professional **Interactive Shader Gradient Background System**.
+Upgrade ShapeForge so the existing Mesh Gradient system can render through the Procedural WebGL engine using the exact same mesh points, controls, and project data.
 
-This is NOT a request to build a new gradient generator from scratch.
+Currently, the CSS mesh renderer generates multiple radial gradients, one for each mesh point, and combines them into a single CSS background.
 
-Your job is to carefully study my existing project and integrate an advanced interactive rendering engine into it while preserving all existing functionality, architecture, UI, and export capabilities.
+I want to add a procedural rendering backend that evaluates all mesh points inside a single WebGL fragment shader and produces the complete mesh gradient as one rendered output.
 
-The new system should allow users to create beautiful, polished, interactive gradient backgrounds for websites, landing pages, hero sections, cards, buttons, and other web design elements.
+**Do not rebuild the mesh editor. Do not replace the existing CSS renderer. Extend the current architecture and reuse existing systems wherever possible.**
 
-The result should feel like a professional creative graphics tool, not a basic shader demo.
-
----
-
-# 1. CRITICAL: PRESERVE THE EXISTING SYSTEM
-
-Before writing code, inspect the entire relevant project architecture.
-
-Understand:
-
-- Existing gradient data models and TypeScript interfaces.
-- GradientProject and GradientLayer structures.
-- Existing color management and color conversion utilities.
-- Existing linear, radial, conic, and curved gradient implementations.
-- Existing gradient stop management.
-- Existing layer transformations and positioning.
-- Existing mesh and atmosphere systems.
-- Existing preview/rendering pipeline.
-- Existing CSS, SVG, and PNG export systems.
-- Existing state management and undo/redo functionality.
-- Existing component architecture and UI styling.
-
-IMPORTANT RULES:
-
-1. Do not rewrite the existing gradient engine.
-2. Do not replace the existing CSS renderer.
-3. Do not remove or simplify existing gradient types.
-4. Do not break existing gradient projects or saved configurations.
-5. Do not unnecessarily rename existing interfaces, components, functions, or files.
-6. Do not duplicate existing functionality.
-7. Preserve the current design language and UI structure.
-8. Keep existing gradient creation and export workflows working exactly as before.
-
-The interactive shader engine must be an additional rendering capability.
-
-All existing CSS gradients must continue working independently, even when WebGL is unavailable.
+The result should allow users to switch between CSS Mesh Rendering and Procedural WebGL Rendering without recreating their mesh.
 
 ---
 
-# 2. CORE ARCHITECTURE
+# 1. Preserve the Existing Mesh System
 
-Build a hybrid gradient rendering architecture.
+First inspect the current implementation, especially:
 
-There should be two rendering systems:
+- `src/gradient/engine/mesh.ts`
+- `src/gradient/engine/css.ts`
+- `src/gradient/engine/model.ts`
+- Existing mesh editor and mesh controls
+- Existing procedural types and configuration
+- `src/procedural/types.ts`
+- `src/procedural/glsl.ts`
+- `src/procedural/proceduralRuntime.js`
+- `src/interactive/core/InteractiveRenderer.ts`
+- Existing shared renderer and GPU resource management
 
-## A. Existing CSS Gradient Renderer
+Understand the current data model before making changes.
 
-Continue using my existing renderer for:
+Reuse the existing `MeshPoint` and mesh layer data.
 
-- Linear gradients.
-- Radial gradients.
-- Conic gradients.
-- Curved gradients.
-- Multiple gradient stops.
-- Gradient layers.
-- Mesh and atmosphere features where currently supported.
-- CSS-compatible effects.
+Preserve all existing mesh properties, including:
 
-Do not migrate these unnecessarily to WebGL.
+- Point ID
+- X/Y position
+- Color
+- Alpha
+- Size/radius
+- Core
+- Locked state
+- Group
+- Transform
+- Effects
+- Mesh base color
+- Mesh seed
+- Layer opacity
+- Layer visibility
+- Existing animation properties, if present
 
-## B. New Interactive Shader Renderer
+The mesh editor must continue working exactly as it currently does.
 
-Create a separate WebGL-powered renderer using GLSL shaders.
+Do not create a separate mesh editor for procedural rendering.
 
-Use it for effects that genuinely benefit from GPU rendering:
+Do not duplicate mesh-point data into an unrelated data model unless an internal adapter is necessary.
 
-- Dynamic color movement.
-- Mouse-reactive distortion.
-- Fluid-like movement.
-- Interactive ripples.
-- Light scattering.
-- Organic wave distortion.
-- Procedural animation.
-
-Use a lightweight WebGL implementation. Three.js is optional, not mandatory. Avoid unnecessary dependencies.
-
-Prefer WebGL2 when available, with a considered fallback strategy.
-
-The architecture should allow both rendering systems to coexist in the same gradient project.
-
----
-
-# 3. EXISTING GRADIENT DATA INTEGRATION
-
-This is one of the most important requirements.
-
-The shader engine should reuse existing gradient data whenever technically possible.
-
-It should understand:
-
-- Existing gradient colors.
-- Gradient stops.
-- Layer positions.
-- Layer dimensions.
-- Opacity.
-- Blend modes.
-- Gradient direction.
-- Radial positions.
-- Conic angles.
-- Curved gradient parameters.
-- Existing project dimensions.
-
-Create a clean adapter that converts supported existing gradient data into shader uniforms, textures, or GPU representations.
-
-Do not create a completely separate color-management system.
-
-If a particular existing gradient type cannot be represented accurately in the shader engine, preserve it as a CSS-rendered layer and composite it with the interactive shader output where practical.
-
-Never silently approximate or discard existing settings.
-
-Support multiple gradient layers and define predictable compositing behavior.
+If an adapter is necessary, it must be reversible and must not lose any existing properties.
 
 ---
 
-# 4. INTERACTIVE EFFECT ENGINE
+# 2. Add Two Mesh Rendering Modes
 
-Create an extensible effect system.
+Create two rendering modes using the same mesh data.
 
-Each effect should be modular and independently configurable.
+### Mode A: CSS-Compatible Mesh
 
-Implement the following effects.
+Keep the current CSS implementation unchanged as the default rendering mode.
 
-## 4.1 Mouse-Reactive Gradient
+It should continue generating radial-gradient background images as it currently does.
 
-- Gradient colors react to pointer position.
-- Existing gradient points can move smoothly.
-- Multiple color regions can respond independently.
-- Support adjustable interaction radius.
-- Support adjustable influence strength.
-- Support smooth easing.
-- Support configurable falloff curves.
-- Avoid sudden jumps when the pointer moves.
+### Mode B: Procedural WebGL Mesh
 
-## 4.2 Mouse Attraction and Repulsion
+Add a procedural rendering backend that converts the existing mesh points into shader uniforms and renders the complete mesh in one WebGL rendering pass.
 
-Allow users to select:
+The output should be one rendered surface rather than multiple independently rendered CSS gradient images.
 
-- Attraction.
-- Repulsion.
-- Soft displacement.
-- Elastic displacement.
+The user should be able to switch between both modes without losing settings.
 
-Controls:
+Suggested architecture:
 
-- Force strength.
-- Influence radius.
-- Damping.
-- Recovery speed.
-- Falloff.
-- Maximum displacement.
+Mesh Editor
+    |
+    v
+Shared Mesh Data
+    |
+    +---- CSS Mesh Renderer
+    |
+    +---- Procedural WebGL Mesh Renderer
+                 |
+                 v
+          Fragment Shader
+                 |
+                 v
+          Single Mesh Output
 
-Movement must feel smooth and natural.
-
-## 4.3 Interactive Light Sources
-
-Create a light interaction system.
-
-Features:
-
-- Multiple light sources.
-- Mouse-following light.
-- Independently positioned lights.
-- Adjustable light radius.
-- Light intensity.
-- Glow softness.
-- Light color.
-- Light blending.
-- Light movement speed.
-- Light responsiveness.
-
-Allow light sources to interact with the existing gradient colors without destroying their original appearance.
-
-## 4.4 Fluid-Like Gradient Distortion
-
-Create a shader-based distortion system.
-
-Features:
-
-- Organic fluid displacement.
-- Multi-directional distortion.
-- Noise-based displacement.
-- Smooth flowing movement.
-- Cursor velocity influence.
-- Configurable distortion frequency.
-- Distortion intensity.
-- Distortion scale.
-- Flow direction.
-- Turbulence.
-- Damping.
-
-The effect should create polished fluid-like backgrounds, not chaotic noise.
-
-## 4.5 Interactive Ripple System
-
-Features:
-
-- Click-generated ripples.
-- Touch-generated ripples.
-- Multiple simultaneous ripples.
-- Expanding wave rings.
-- Adjustable ripple speed.
-- Ripple frequency.
-- Ripple strength.
-- Ripple radius.
-- Ripple decay.
-- Color displacement.
-- Optional glow.
-
-Use a reusable ripple event system with a configurable maximum number of active ripples.
-
-## 4.6 Animated Aurora
-
-Create a procedural aurora effect.
-
-Features:
-
-- Flowing color bands.
-- Organic wave movement.
-- Noise-based deformation.
-- Multiple color bands.
-- Adjustable speed.
-- Band width.
-- Glow.
-- Color blending.
-- Mouse-reactive deformation.
-- Configurable movement direction.
-
-## 4.7 Holographic and Iridescent Effects
-
-Create shader-based color effects.
-
-Features:
-
-- Angle-dependent color transitions.
-- Rainbow-like color shifting.
-- Iridescent color movement.
-- Adjustable color spectrum.
-- Smooth reflections.
-- Mouse-controlled color changes.
-- Optional animated movement.
-
-Keep these effects suitable for elegant website backgrounds rather than excessive visual noise.
+Keep the rendering backend separate from the editor and data model.
 
 ---
 
-# 5. POINTER AND TOUCH INTERACTION SYSTEM
+# 3. Implement CSS-Compatible Shader Rendering
 
-Create a shared input system.
+This is the most important requirement.
 
-Support:
+The current CSS implementation uses multiple transparent radial gradients.
 
-- Mouse movement.
-- Mouse position.
-- Pointer velocity.
-- Pointer direction.
-- Pointer down/up.
-- Click events.
-- Touch interaction.
-- Multiple touch points where supported.
-- Pointer exit.
-- Scroll position when enabled.
+The procedural renderer must have a mode that closely reproduces the existing CSS output.
 
-Normalize pointer coordinates so the effects work at every canvas size and aspect ratio.
+Inspect the actual implementation in `mesh.ts` and reproduce its behavior, including:
+
+- Radial gradient dimensions
+- Elliptical radius calculations
+- Aspect-ratio correction
+- Point positions
+- Point colors
+- Point alpha
+- Core/middle stop behavior
+- Transparent outer falloff
+- Layer opacity
+- Mesh base color
+- Gradient stop interpolation
+- Point compositing order
+
+Do not replace this with a completely different interpolation algorithm and call it equivalent.
+
+### Alpha compositing
+
+Implement the equivalent of CSS background-image compositing inside the fragment shader.
+
+Each point should calculate its radial color and alpha contribution.
+
+Then combine the contributions using source-over alpha compositing in the correct order.
 
 Important:
 
-- Use smooth interpolation.
-- Avoid jitter.
-- Use delta-time-based animation.
-- Make interaction independent of frame rate.
-- Avoid unnecessary React renders during pointer movement.
-- Use refs or an equivalent high-performance state mechanism for real-time pointer data.
+CSS background images have a stacking order. Verify the actual order used by the current CSS renderer and reproduce it correctly in the shader.
 
-For mobile devices, support touch interaction without interfering unnecessarily with normal page scrolling.
+Use correct premultiplied-alpha mathematics where necessary.
 
-Provide an option to disable interaction on mobile or change its behavior.
+Do not simply average the colors of all points.
 
----
+### Radial falloff
 
-# 6. ADVANCED INTERACTION CONTROLS
+Reproduce the current CSS radial-gradient behavior as closely as possible.
 
-Create an approachable UI.
+Use the existing point radius calculations and core-stop logic rather than inventing new values.
 
-Do not expose raw GLSL code or complicated mathematical parameters to ordinary users.
+For example, the current mesh implementation derives the middle stop from the point's core value. Preserve the same mapping.
 
-Organize controls into understandable groups.
+Make the radial evaluation support elliptical gradients, not just circular distance.
 
-## Interaction
+### Color accuracy
 
-- Enable interaction.
-- Interaction mode.
-- Mouse follow.
-- Attraction.
-- Repulsion.
-- Light follow.
-- Distortion.
-- Click ripple.
-- Touch interaction.
-- Scroll interaction.
+Pay special attention to:
 
-## Physics
+- sRGB versus linear color space
+- Premultiplied versus straight alpha
+- Color interpolation
+- Alpha interpolation
+- Browser CSS gradient behavior
 
-- Interaction strength.
-- Radius.
-- Velocity sensitivity.
-- Damping.
-- Recovery speed.
-- Smoothness.
-- Falloff type.
+The goal is to make the WebGL output visually as close as possible to the existing CSS output.
 
-## Animation
-
-- Enable animation.
-- Animation speed.
-- Idle movement.
-- Movement intensity.
-- Flow direction.
-- Animation amplitude.
-- Pause/resume.
-- Reduced-motion support.
-
-## Appearance
-
-- Distortion intensity.
-- Distortion frequency.
-- Glow intensity.
-- Color influence.
-- Blend intensity.
-- Light softness.
-- Wave amplitude.
-
-## Advanced
-
-- Shader quality.
-- Resolution scale.
-- Maximum active interactions.
-- Noise scale.
-- Noise octaves.
-- Performance mode.
-- WebGL diagnostics.
-
-Use sensible defaults and collapsible advanced controls.
-
-Each effect should only show controls relevant to that effect.
+Do not claim pixel-perfect equivalence unless it has been verified through actual comparisons.
 
 ---
 
-# 7. INTERACTION PRESETS
+# 4. Add Unified Mesh Field Rendering
 
-Create professional presets.
+In addition to CSS-compatible rendering, implement a second shader algorithm called Unified Mesh Field.
 
-Examples:
+This should not be confused with CSS-compatible rendering.
 
-- Soft Mouse Glow.
-- Liquid Mesh.
-- Aurora Motion.
-- Fluid Color Field.
-- Interactive Light.
-- Magnetic Gradient.
-- Liquid Ripple.
-- Dreamy Motion.
-- Holographic Flow.
-- Ambient Color Drift.
-- Neon Waves.
-- Soft Organic Distortion.
+It should create a mathematically unified color field where all mesh points influence one continuous surface.
 
-Presets must be configurations of the actual engine, not static preview images.
+The goal is to produce smoother, more organic and more continuous color transitions than stacked radial gradients.
 
-Users should be able to modify every preset.
+Support multiple field algorithms:
 
-Support saving custom interaction configurations.
+- Gaussian
+- Inverse Distance Weighting (IDW)
+- Smooth interpolation
+- Radial influence
+- Soft field
+- Smooth minimum where appropriate
 
----
+Each algorithm should use the same mesh point positions, colors, alpha, and size values.
 
-# 8. RENDERING AND PERFORMANCE
+Add appropriate falloff and normalization to prevent unwanted dark areas, washed-out colors, and unstable transitions.
 
-Performance is a core requirement.
+The field should account for the mesh canvas aspect ratio.
 
-The engine must be suitable for real websites and not just desktop demonstrations.
+Do not remove or alter the CSS-compatible mode when introducing these algorithms.
 
-Implement:
+### Recommended initial Gaussian model
 
-- WebGL2 rendering where available.
-- Efficient shader programs.
-- Reusable GPU buffers and textures.
-- Avoid unnecessary GPU allocations.
-- Avoid creating shaders every frame.
-- Responsive canvas resizing.
-- Device pixel ratio control.
-- Adjustable render resolution.
-- Delta-time animation.
-- Frame-rate-independent movement.
-- Efficient uniform updates.
-- Proper resource cleanup.
-- Context-loss handling.
-- Pause when the preview is not visible.
-- IntersectionObserver for visibility-based rendering.
-- Reduced-motion support.
-- Static fallback rendering.
+Use this as a starting point, not as a fixed final implementation:
 
-Do not use CPU-heavy pixel manipulation for effects that should run on the GPU.
+```glsl
+vec3 colorSum = vec3(0.0);
+float weightSum = 0.0;
 
-Do not create an unnecessarily complex physics simulation when a shader-based approximation is sufficient.
+for (int i = 0; i < POINT_COUNT; i++) {
+    vec2 delta = uv - uPointPosition[i];
 
-Provide quality levels:
+    float distanceFromPoint = length(
+        delta * uAspectCorrection
+    );
 
-- Low.
-- Medium.
-- High.
-- Ultra.
+    float radius = max(uPointRadius[i], 0.0001);
 
-Quality settings should adjust resolution, shader complexity, and other relevant rendering costs.
+    float normalizedDistance = distanceFromPoint / radius;
 
-Avoid unnecessary battery consumption on mobile devices.
+    float weight = exp(
+        -normalizedDistance * normalizedDistance * 3.0
+    );
+
+    weight *= uPointAlpha[i];
+
+    colorSum += uPointColor[i] * weight;
+    weightSum += weight;
+}
+
+vec3 finalColor = colorSum / max(weightSum, 0.0001);
+```
+
+Improve the formula where needed.
+
+The final algorithm must preserve the intended influence of each point and avoid numerical instability.
 
 ---
 
-# 9. REAL-TIME PREVIEW
+# 5. Integrate With the Existing Procedural Shader Engine
 
-Integrate the shader renderer into the existing gradient preview.
+Do not build a completely separate procedural engine.
 
-Requirements:
+Integrate mesh rendering with the existing procedural infrastructure.
 
-- Live updates when controls change.
-- Accurate preview dimensions.
-- Responsive preview.
-- Adjustable preview resolution.
-- Interaction directly inside the preview.
-- Preview background transparency where supported.
-- Pause/resume animation.
-- Reset interaction.
-- Fullscreen preview if compatible with the existing UI.
+Reuse existing systems where appropriate:
 
-Users should be able to create a gradient using existing tools and immediately test its interactive behavior.
+- Shader generation
+- GLSL helpers
+- Uniform management
+- Shared WebGL context
+- Shared renderer
+- Resource management
+- Animation scheduler
+- Interaction system
+- Distortion pipeline
+- Color processing
+- Quality settings
 
-The preview must not become a separate disconnected application.
+The mesh should become another supported procedural input/source type.
 
----
+Suggested internal structure:
 
-# 10. EXPORT SYSTEM
+```ts
+type MeshRenderMode =
+  | "css-compatible"
+  | "unified-field";
 
-This feature must be treated as a major part of the implementation.
+type MeshProceduralConfig = {
+  enabled: boolean;
+  renderMode: MeshRenderMode;
+  fieldMethod: string;
 
-Create two separate export categories.
+  points: MeshPoint[];
 
-## A. Static Exports
+  quality: number;
+  resolutionScale: number;
 
-Preserve existing exports:
+  distortion?: DistortionConfig;
+  animation?: AnimationConfig;
+  interaction?: InteractionConfig;
+};
+```
 
-- CSS.
-- SVG.
-- PNG.
-- Other currently supported formats.
+Adapt this to the existing types instead of introducing unnecessary duplicate types.
 
-Static export must not depend on WebGL.
-
-## B. Interactive Background Export
-
-Create a reusable, production-ready website background.
-
-Provide:
-
-### HTML + CSS + JavaScript
-
-Export a complete implementation containing:
-
-- Canvas element.
-- Renderer initialization.
-- Required shader sources.
-- Pointer handling.
-- Touch handling.
-- Animation loop.
-- Responsive resizing.
-- Cleanup.
-- Configuration.
-- Static fallback.
-- Required styles.
-
-### GLSL Shader Export
-
-Allow users to export the shader sources separately.
-
-Include necessary uniform documentation and usage information.
-
-### React Component Export
-
-Where practical, provide a self-contained React + TypeScript component.
-
-The component should:
-
-- Accept gradient configuration.
-- Accept interaction settings.
-- Support responsive sizing.
-- Clean up event listeners.
-- Clean up WebGL resources.
-- Handle WebGL context loss.
-- Support reduced motion.
-- Support a static fallback.
-
-Do not export code that depends on private application modules unless those dependencies are also included or clearly documented.
-
-### Configuration Export
-
-Allow exporting and importing interactive gradient settings as JSON.
-
-### Animated Export
-
-Design the architecture to support future WebM and MP4 recording.
-
-Do not claim that a format is supported until a working export implementation exists.
+The existing mesh project data must remain the source of truth.
 
 ---
 
-# 11. FALLBACK AND COMPATIBILITY
+# 6. Handle the Point Count Limit Correctly
 
-The existing CSS renderer must always remain usable.
+Inspect the existing procedural engine before implementing the mesh adapter.
 
-If WebGL is unavailable:
+The current procedural system has a `PROC_MAX_POINTS` limit of 12, while the mesh system may support significantly more points.
 
-- Keep static CSS gradients working.
-- Show a graceful fallback.
-- Disable unsupported interactive controls.
-- Never crash the editor.
-- Never lose project data.
+Do not silently truncate mesh points.
 
-Support browser resizing and mobile layouts.
+Design a proper point-capacity strategy.
 
-Handle WebGL context loss and restoration safely.
+Consider:
 
----
+1. Dynamically generated shader loop sizes.
+2. Uniform arrays with an appropriate capacity.
+3. Texture-based point data when supported and useful.
+4. WebGL2 uniform buffers or other suitable data storage.
+5. Batching only as a fallback when necessary.
 
-# 12. PROJECT ARCHITECTURE
+The system must respect hardware limits.
 
-Do not put the entire implementation inside one giant component or shader file.
+Query the relevant GPU capabilities and select a supported strategy.
 
-Design modular files that fit my existing architecture.
+Do not assume every device supports the same maximum number of points.
 
-Possible organization (adapt to my actual project):
+If the user exceeds the supported capacity:
 
-src/
-  gradient/
-    interactive/
-      core/
-        InteractiveRenderer.ts
-        ShaderManager.ts
-        UniformManager.ts
-        AnimationLoop.ts
-        ResizeManager.ts
+- Provide a clear warning.
+- Preserve all mesh data.
+- Never silently delete or overwrite points.
+- Offer a quality/performance fallback.
+- Make sure the CSS renderer still supports the full mesh.
 
-      input/
-        PointerManager.ts
-        TouchManager.ts
-        InteractionState.ts
-
-      shaders/
-        vertex.glsl
-        gradient.frag.glsl
-        fluid.frag.glsl
-        ripple.frag.glsl
-        aurora.frag.glsl
-        holographic.frag.glsl
-
-      effects/
-        MouseReactive.ts
-        Attraction.ts
-        Repulsion.ts
-        LightSources.ts
-        FluidDistortion.ts
-        RippleEffect.ts
-        AuroraEffect.ts
-        HolographicEffect.ts
-
-      presets/
-        index.ts
-
-      adapters/
-        GradientToShader.ts
-
-      export/
-        InteractiveExporter.ts
-        ShaderExporter.ts
-        ReactExporter.ts
-
-      types/
-        interactive.types.ts
-
-    components/
-      InteractivePanel.tsx
-      InteractionControls.tsx
-      ShaderQualityControl.tsx
-
-Adapt this structure to the existing project. Do not blindly create duplicate directories or move existing files unnecessarily.
+The procedural renderer should support the largest practical point count without causing unnecessary shader recompilation.
 
 ---
 
-# 13. CODE QUALITY AND DEVELOPMENT RULES
+# 7. Reuse Existing Distortion and Effects
 
-- Use TypeScript strictly.
-- Keep effect logic separate from rendering logic.
-- Avoid `any` unless absolutely necessary.
-- Use reusable interfaces and types.
-- Use deterministic configuration where appropriate.
-- Keep shader code readable and documented.
-- Avoid unnecessary dependencies.
-- Preserve existing naming conventions.
-- Follow existing styling conventions.
-- Do not use fake preview images instead of actual shader rendering.
-- Do not implement controls that have no functional connection to the engine.
-- Do not use placeholder export functions.
-- Do not silently ignore unsupported features.
+Once the basic mesh shader works, allow it to use the existing procedural distortion pipeline.
 
-Every visible control must genuinely affect the preview.
+Integrate supported effects such as:
+
+- FBM
+- Domain warp
+- Multi-warp
+- Turbulence
+- Curl distortion
+- Polar distortion
+- Radial distortion
+- Wave distortion
+- Flow distortion
+- Rotation
+- Scale
+
+These effects should operate on the mesh field without destroying the original mesh data.
+
+The original mesh point positions and settings must remain unchanged unless the user explicitly edits them.
+
+Use shader-space transformations wherever possible.
+
+Allow effects to be enabled independently and combined in stages.
+
+Avoid unnecessary shader complexity when effects are disabled.
 
 ---
 
-# 14. IMPLEMENTATION PHASES
+# 8. Add Animation Support
 
-Do not attempt to implement everything in one uncontrolled change.
+Reuse the existing procedural motion and animation systems.
 
-Work in phases.
+Support:
 
-## Phase 1 — Project Analysis and Architecture
+- Static
+- Orbit
+- Circle
+- Figure-eight
+- Sine
+- Drift
+- Noise
+- Flow
+- Wander
+- Follow
 
-Inspect the project and report:
+Animation should be optional.
 
-- Existing architecture.
-- Relevant files.
-- Existing data models.
-- Rendering pipeline.
-- Export pipeline.
-- Integration opportunities.
-- Potential compatibility issues.
-- Recommended implementation plan.
+Preserve the original mesh positions as the base state.
 
-Do not modify files during this analysis phase.
+Use uniforms for time-dependent values instead of rebuilding shader source every frame.
 
-## Phase 2 — Core WebGL Infrastructure
+Allow point-specific animation settings where the current architecture supports them.
 
-Implement:
+The CSS renderer must remain unaffected.
 
-- WebGL initialization.
-- Shader compilation.
-- Shader error handling.
-- Canvas resizing.
-- Uniform management.
-- Animation loop.
-- Pointer input.
-- Static fallback.
+---
 
-Verify that the renderer works independently.
+# 9. Add Mouse and Touch Interaction
 
-## Phase 3 — Existing Gradient Integration
+Connect the procedural mesh to the existing interaction engine.
 
-Connect existing gradient configurations to the shader renderer.
+Reuse the current interaction architecture rather than creating another pointer system.
 
-Preserve color information, supported layer properties, and existing project data.
+Support the existing interaction capabilities where compatible, including:
 
-Verify that the CSS renderer continues working normally.
+- Mouse influence
+- Touch influence
+- Pointer position
+- Pointer velocity
+- Pressure
+- Swirl
+- Warp
+- Ripples
+- Trails
+- Attraction
+- Repulsion
+- Distortion
+- Color influence
+- Interaction radius
+- Interaction strength
 
-## Phase 4 — Interactive Effects
+The interaction should affect the rendered mesh field without permanently modifying the saved mesh data.
 
-Implement in this order:
+Support mobile touch input.
 
-1. Mouse-reactive gradient.
-2. Interactive light sources.
-3. Attraction and repulsion.
-4. Fluid distortion.
-5. Click and touch ripples.
-6. Aurora.
-7. Holographic effects.
+Do not introduce additional WebGL contexts or independent animation loops.
 
-Test each effect before moving to the next.
+---
 
-## Phase 5 — UI Integration
+# 10. Shared WebGL Renderer and Performance
 
-Add the interactive panel and connect every control to actual renderer settings.
+The procedural mesh renderer must use the existing shared WebGL renderer.
 
-Follow the existing UI design.
+Do not create one WebGL context per mesh point.
 
-## Phase 6 — Presets and Configuration
+Do not create one renderer per gradient point.
 
-Add editable presets, JSON configuration export/import, and reset functionality.
+Do not create an independent animation loop for every mesh layer.
 
-## Phase 7 — Interactive Export
+Use the existing shared renderer and resource management architecture.
 
-Implement working HTML, CSS, JavaScript, GLSL, and React exports.
+Optimize the mesh renderer for multiple procedural mesh layers.
 
-## Phase 8 — Optimization and Testing
+Important performance requirements:
+
+- Reuse shader programs.
+- Reuse buffers and textures.
+- Avoid unnecessary shader recompilation.
+- Update only changed uniforms.
+- Avoid rebuilding point arrays when only one point changes.
+- Avoid unnecessary GPU uploads.
+- Skip invisible or disabled layers.
+- Pause animation when appropriate.
+- Avoid rendering when nothing changes and animation is disabled.
+- Use adaptive resolution where appropriate.
+- Support quality settings.
+- Clean up resources correctly when layers are removed.
+
+Make sure adding multiple procedural mesh layers does not create a separate WebGL context or separate animation scheduler for every layer.
+
+Preserve independent settings and state for each layer.
+
+---
+
+# 11. Add User Controls Without Duplicating the Mesh Editor
+
+Add a rendering-mode selector to the existing mesh/gradient interface.
+
+Suggested controls:
+
+### Rendering Backend
+- CSS Mesh
+- Procedural WebGL
+
+### Procedural Rendering Mode
+- CSS-Compatible
+- Unified Field
+
+### Field Algorithm
+- Gaussian
+- IDW
+- Smooth
+- Radial
+- Soft
+
+### Advanced Options
+- Color interpolation
+- Falloff
+- Field strength
+- Smoothness
+- Quality
+- Resolution scale
+- Distortion
+- Animation
+- Interaction
+
+Only show relevant controls when Procedural WebGL is selected.
+
+Do not clutter the existing mesh editor.
+
+Reuse existing UI components and control patterns.
+
+When switching rendering modes, preserve all mesh settings.
+
+---
+
+# 12. Live Switching and State Synchronization
+
+The CSS and procedural renderers must always read from the same mesh data.
+
+When the user:
+
+- Adds a point
+- Removes a point
+- Moves a point
+- Changes its color
+- Changes its size
+- Changes its alpha
+- Changes its core
+- Changes the base color
+- Changes layer opacity
+- Changes canvas dimensions
+
+Both renderers must receive the updated data.
+
+Do not maintain two independently editable mesh configurations.
+
+Switching from CSS to WebGL and back must not reset the mesh.
+
+Ensure undo/redo continues to work correctly.
+
+Ensure project save/load preserves all existing mesh information and any new procedural rendering settings.
+
+Existing projects must remain backward-compatible.
+
+If an old project does not contain procedural settings, use safe defaults.
+
+---
+
+# 13. Testing and Visual Verification
+
+Do not consider this implementation complete just because the shader compiles.
+
+Create controlled test cases and compare CSS output against procedural CSS-compatible output.
 
 Test:
 
-- Desktop.
-- Mobile.
-- Different canvas sizes.
-- Different device pixel ratios.
-- Multiple interaction points.
-- Multiple gradient layers.
-- WebGL unavailable.
-- WebGL context loss.
-- Reduced motion.
-- Animation pause/resume.
-- Project save/load.
-- Existing CSS exports.
-- Interactive exports.
+1. One point.
+2. Two overlapping points.
+3. Multiple points with different colors.
+4. Different point alpha values.
+5. Different point sizes.
+6. Different core values.
+7. Elliptical canvas dimensions.
+8. Different canvas aspect ratios.
+9. Transparent and opaque mesh bases.
+10. Different layer opacity values.
+11. Overlapping points with different stacking orders.
+12. Maximum supported point count.
 
-Fix issues before declaring the system complete.
+Compare screenshots at identical dimensions.
+
+Measure visual differences where possible.
+
+Check:
+
+- Gradient position
+- Radius
+- Falloff
+- Core behavior
+- Color transitions
+- Alpha
+- Edge behavior
+- Compositing order
+
+Also test the unified field mode independently. It does not need to look identical to CSS because it is intentionally a different rendering algorithm.
+
+Test on mobile-sized viewports and lower-capability GPUs.
 
 ---
 
-# 15. FINAL ACCEPTANCE CRITERIA
+# 14. Architecture and Code Quality Requirements
+
+Follow these rules throughout implementation:
+
+- Inspect the existing architecture before changing anything.
+- Reuse existing systems rather than duplicating them.
+- Preserve current CSS mesh behavior.
+- Preserve existing project compatibility.
+- Keep the mesh editor independent from rendering backends.
+- Keep CSS and WebGL renderers modular.
+- Keep GLSL code maintainable.
+- Avoid hardcoded assumptions about GPU limits.
+- Avoid unnecessary new dependencies.
+- Avoid introducing another WebGL context.
+- Avoid introducing another animation scheduler.
+- Do not break existing procedural shader features.
+- Do not change unrelated gradient generators.
+- Do not remove existing functionality.
+- Do not rewrite large sections of the application without a clear technical reason.
+
+Use TypeScript types consistently.
+
+Add tests for data conversion, point capacity, shader configuration, and rendering-mode switching.
+
+---
+
+# 15. Implementation Phases
+
+Implement this incrementally.
+
+### Phase 1 — Architecture Inspection
+Inspect the existing mesh renderer, procedural engine, shared renderer, data model, and GPU limits.
+
+Report the integration plan before making major architectural changes.
+
+### Phase 2 — Mesh Data Adapter
+Connect existing mesh data to the procedural shader input.
+
+Do not change the editor or CSS renderer.
+
+### Phase 3 — CSS-Compatible Shader
+Implement radial gradient evaluation and alpha compositing that closely matches the current CSS output.
+
+Verify visually before continuing.
+
+### Phase 4 — Unified Field
+Add Gaussian, IDW, Smooth, Radial, and Soft field algorithms.
+
+### Phase 5 — Procedural Effects
+Integrate distortion, animation, and interaction systems.
+
+### Phase 6 — Performance
+Optimize point data uploads, uniform updates, shader compilation, shared rendering, and adaptive quality.
+
+### Phase 7 — UI and Project Persistence
+Add rendering controls, state synchronization, save/load support, and backward compatibility.
+
+### Phase 8 — Verification
+Run tests, compare CSS and shader screenshots, and test multiple layers and mobile performance.
+
+---
+
+# Final Acceptance Criteria
 
 The implementation is complete only when:
 
-1. All existing gradient features still work.
-2. Existing CSS exports remain correct.
-3. Interactive gradients use actual WebGL rendering.
-4. Existing gradient data can be reused by the interactive engine.
-5. Mouse and touch interactions work.
-6. Animation is smooth and frame-rate independent.
-7. The UI controls genuinely affect rendering.
-8. Multiple effects can be configured without breaking one another.
-9. Mobile performance is considered.
-10. Static fallback works.
-11. Interactive HTML/JS export works independently of the editor.
-12. Shader exports contain the actual working GLSL.
-13. React export works independently of private editor modules.
-14. No major placeholders or fake functionality remain.
+1. Existing CSS mesh gradients work exactly as before.
+2. The same mesh editor controls both renderers.
+3. CSS and procedural rendering use the same source mesh data.
+4. Procedural CSS-Compatible mode closely reproduces the current CSS appearance.
+5. All points are composited inside one fragment shader output.
+6. Unified Field mode provides a genuinely continuous procedural color field.
+7. Existing procedural distortion, animation, and interaction systems can be reused.
+8. Multiple procedural mesh layers use the existing shared WebGL renderer.
+9. Point limits are handled safely without silently losing mesh data.
+10. Switching rendering modes does not destroy or reset mesh settings.
+11. Save/load and undo/redo continue working.
+12. Existing projects and unrelated gradient features remain functional.
 
----
-
-# FINAL INSTRUCTION
-
-Start with Phase 1 only.
-
-First inspect my existing source code and understand how the current CSS gradient generator works.
-
-Do not immediately start rewriting components or creating shader files.
-
-Give me a detailed integration report identifying exactly which existing files should be reused, which new files should be created, and how the new interactive shader engine will connect to my current gradient project.
-
-Wait for approval before beginning Phase 2.
-
-My priority is to build a professional, extensible, high-performance interactive gradient background generator while keeping my existing CSS gradient generator powerful and fully functional.
+**Final instruction:** Prioritize visual correctness and architectural integration over adding many new controls. First make the existing mesh render correctly in one WebGL output. Then progressively enable the advanced procedural capabilities. Do not sacrifice the current CSS implementation to achieve this.
