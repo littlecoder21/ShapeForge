@@ -13,7 +13,10 @@ import { PROC_MAX_STAGES, type ProceduralStage } from '../../../procedural/types
  *   2. the allocator spends the same total GPU work the old per-layer rule did, but gives cheap layers more pixels and heavy
  *      layers fewer (scale ∝ weight^-0.25, so the change is gentle and a lone layer is never reduced);
  *   3. ONE AdaptiveResolution watches the real frame time and applies one global factor on top;
- *   4. results are quantised, so resolution cannot flicker from frame to frame.
+ *   4. results are quantised, so resolution cannot flicker from frame to frame;
+ *   5. touch-first devices also get a ceiling on the pixels ALL layers together may draw (`maxTotalPixels`), because a phone
+ *      GPU is fill-rate bound and several full-size shader layers were the main reason the preview made devices lag.
+ * Layer sizes are the ON-SCREEN sizes (see InteractiveRenderer.displaySize): a layer shown at 24 % zoom asks for 24 %.
  * Everything here is pure (no DOM, no GL) so it is unit-tested. */
 
 /** Quality presets: the existing `settings.quality` levels, now defined in one place. */
@@ -32,6 +35,8 @@ export const MIN_RENDER_SCALE = 0.35;
 export const MIN_ADAPTIVE_RENDER_SCALE = 0.5;
 /** resolution is quantised to 1/64 steps so tiny allocation changes never resize canvases */
 export const SCALE_QUANTUM = 64;
+/** the most device pixels all layers may draw together on a touch-first device (desktops are not capped) */
+export const COARSE_TOTAL_PIXEL_BUDGET = 900_000;
 const WEIGHT_EXPONENT = 0.25;
 const MAX_WEIGHT = 6;
 
@@ -79,6 +84,8 @@ export function layerWeight(
 export interface AllocationOptions {
   /** one global factor from the frame-time controller (0…1) */
   globalScale?: number;
+  /** ceiling for the device pixels of all layers together (Infinity / undefined = none) */
+  maxTotalPixels?: number;
 }
 
 /** The render scale of the layers as the old per-layer rule would have set them: sqrt(count) shared equally. */
@@ -113,6 +120,20 @@ export function allocateScales(loads: readonly LayerLoad[], options: AllocationO
     const floor = Math.min(base, MIN_ADAPTIVE_RENDER_SCALE);
     result.set(load.id, quantize(Math.max(floor, base * factor)));
   });
+
+  // a ceiling on everything drawn together: shrink all layers by the same factor until the total fits
+  const limit = options.maxTotalPixels;
+  if (limit !== undefined && Number.isFinite(limit) && limit > 0) {
+    let total = 0;
+    loads.forEach((load, i) => { const s = result.get(load.id) ?? 0; total += area[i] * s * s; });
+    if (total > limit) {
+      const shrink = Math.sqrt(limit / total);
+      loads.forEach(load => {
+        const s = result.get(load.id) ?? MIN_RENDER_SCALE;
+        result.set(load.id, quantize(Math.max(MIN_RENDER_SCALE, s * shrink)));
+      });
+    }
+  }
   return result;
 }
 
@@ -124,10 +145,23 @@ export function renderSize(cssWidth: number, cssHeight: number, scale: number): 
   };
 }
 
+/** Touch-first devices are capped, everything else is not. Pure apart from reading the media query. */
+export function detectTotalPixelBudget(): number {
+  try {
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return COARSE_TOTAL_PIXEL_BUDGET;
+  } catch { /* no media queries: treat as a desktop */ }
+  return Infinity;
+}
+
 /** One frame-time controller for the whole composition, plus the allocator above. */
 export class GlobalRenderBudget {
   readonly adaptive = new AdaptiveResolution();
+  readonly maxTotalPixels: number;
   private lastFloor = 1;
+
+  constructor(maxTotalPixels: number = detectTotalPixelBudget()) {
+    this.maxTotalPixels = maxTotalPixels;
+  }
 
   /** 1 = full budget */
   get globalScale() { return this.adaptive.scale; }
@@ -135,7 +169,7 @@ export class GlobalRenderBudget {
   get effort() { return this.adaptive.effort; }
 
   allocate(loads: readonly LayerLoad[]): Map<number, number> {
-    const result = allocateScales(loads, { globalScale: this.adaptive.scale });
+    const result = allocateScales(loads, { globalScale: this.adaptive.scale, maxTotalPixels: this.maxTotalPixels });
     // the controller's floor is relative to the biggest layer so the absolute floor holds for every layer
     const biggest = Math.max(MIN_RENDER_SCALE, ...[...result.values()]);
     this.lastFloor = clamp(MIN_ADAPTIVE_RENDER_SCALE / biggest, 0.25, 1);

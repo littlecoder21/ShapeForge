@@ -8,6 +8,8 @@ import { UNIFORM_NAMES } from './uniforms';
 import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from '../gradient/interactive/styles';
 import { assembleProceduralShader } from '../procedural/glsl';
 import { isProceduralActive, type ProceduralConfig } from '../procedural/types';
+import { ruleTextureAtlasDataUri } from '../gradient/interactive/rig/textureAtlas';
+import { shapeCellsBase64 } from '../gradient/interactive/rig/shapeField';
 import fragmentShaderTemplate from '../gradient/interactive/shaders/gradient.frag.glsl?raw';
 import vertexShaderSource from '../gradient/interactive/shaders/gradient.vert.glsl?raw';
 import rigRuntimeSource from '../gradient/interactive/rigRuntime.js?raw';
@@ -79,7 +81,11 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
   if (!gl) gl = canvas.getContext('webgl', glOptions);
   if (!gl) { canvas.dataset.shaderStatus = 'fallback'; return; }
   let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
+  let ruleAtlasTexture = null, shapeAtlasTexture = null;
+  const ruleAtlasSource = settings.ruleAtlas || '';
+  const shapeCells = settings.shapeCells || null;
   let frameId = 0, lastFrame = 0, clock = 0, shaderTime = 0, visible = true, lost = false;
+  const activeInputs = new Set();
   let frameEma = 0, slowFrameCount = 0, adaptiveScale = 1;
   const engine = RigRuntime.createPointerEngine({
     touchEnabled: settings.touchEnabled, ripplesEnabled: settings.ripplesEnabled, maximumRipples: settings.maximumRipples, delay: settings.interactionDelay,
@@ -233,6 +239,53 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
         if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(layerMixTexture); layerMixTexture = null; }
       }
     }
+    // custom interaction shapes: one 64 x 64 distance field per rule, side by side in a 512 x 64 atlas
+    shapeAtlasTexture = null;
+    if (shapeCells) {
+      const atlas = new Uint8Array(512 * 64 * 4);
+      Object.keys(shapeCells).forEach(key => {
+        const cellIndex = parseInt(key, 10);
+        if (!(cellIndex >= 0 && cellIndex < 8)) return;
+        const cell = atob(shapeCells[key]);
+        for (let i = 0; i < 4096 && i < cell.length; i++) {
+          const at = (Math.floor(i / 64) * 512 + cellIndex * 64 + (i % 64)) * 4, value = cell.charCodeAt(i);
+          atlas[at] = value; atlas[at + 1] = value; atlas[at + 2] = value; atlas[at + 3] = 255;
+        }
+      });
+      shapeAtlasTexture = gl.createTexture();
+      if (shapeAtlasTexture) {
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, shapeAtlasTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 512, 64, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+        if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(shapeAtlasTexture); shapeAtlasTexture = null; }
+      }
+    }
+    // CSS textures of the rules: the atlas image is decoded asynchronously, the rules that use it appear once it is ready
+    ruleAtlasTexture = null;
+    if (ruleAtlasSource) {
+      const atlasImage = new Image();
+      atlasImage.onload = () => {
+        if (lost || !gl || !program) return;
+        const texture = gl.createTexture();
+        if (!texture) return;
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasImage);
+        if (gl.getError() !== gl.NO_ERROR) { gl.deleteTexture(texture); return; }
+        if (ruleAtlasTexture) gl.deleteTexture(ruleAtlasTexture);
+        ruleAtlasTexture = texture;
+        schedule();
+      };
+      atlasImage.src = ruleAtlasSource;
+    }
     gl.uniform1i(locations.uPaletteLut, 0);
     gl.uniform1i(locations.uLayerMixLut, 1);
     canvas.dataset.shaderStatus = 'ready';
@@ -269,6 +322,7 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     gl.uniform2f(locations.uPointer, pointerX, pointerY);
     gl.uniform2f(locations.uVelocity, pointer.vx, pointer.vy);
     gl.uniform1f(locations.uPointerActive, reacts || idlePointer ? pointerActive : 0);
+    gl.uniform1f(locations.uInputActive, reacts && activeInputs.size ? 1 : 0);
     gl.uniform1f(locations.uPointerDown, reacts ? pointer.down : 0);
     const animated = settings.animate && !reducedMotion.matches;
     if (animated) shaderTime += delta * settings.speed;
@@ -332,6 +386,12 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, layerMixTexture);
     gl.uniform1i(locations.uLayerMixLut, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, ruleAtlasTexture);
+    gl.uniform1i(locations.uRuleTextureAtlas, 2);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, shapeAtlasTexture);
+    gl.uniform1i(locations.uRuleShapeAtlas, 3);
     gl.uniform1f(locations.uStopCount, maxStops);
     gl.uniform4fv(locations['uPalette[0]'], colors);
     gl.uniform1fv(locations['uPaletteAlpha[0]'], alphas);
@@ -372,13 +432,18 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
       rigFrame.clock = clock;
       rigFrame.trailLife = physics.trailLife || 0.9;
       if (idle) { rigFrame.x = idle.x; rigFrame.y = idle.y; rigFrame.active = pointerActive; }
-      RigRuntime.evaluateRig(rig, rigFrame, rigBuffers, { radiusScale: settings.interactionRadius, reaction: reaction, enabled: reacts || idlePointer });
+      RigRuntime.evaluateRig(rig, rigFrame, rigBuffers, { radiusScale: settings.interactionRadius, reaction: reaction, enabled: reacts || idlePointer, canvasHeight: canvas.clientHeight || 800 });
       RigRuntime.packTrail(engine, rigFrame, rigBuffers, reacts);
       gl.uniform4fv(locations['uRuleB[0]'], rigBuffers.b);
       gl.uniform4fv(locations['uRuleC[0]'], rigBuffers.c);
       gl.uniform4fv(locations['uRuleD[0]'], rigBuffers.d);
       gl.uniform4fv(locations['uRuleE[0]'], rigBuffers.e);
       gl.uniform4fv(locations['uRuleF[0]'], rigBuffers.f);
+      gl.uniform4fv(locations['uRuleG[0]'], rigBuffers.g);
+      gl.uniform4fv(locations['uRuleH[0]'], rigBuffers.h);
+      gl.uniform4fv(locations['uRuleI[0]'], rigBuffers.i);
+      gl.uniform4fv(locations['uRuleJ[0]'], rigBuffers.j);
+      gl.uniform4fv(locations['uRuleK[0]'], rigBuffers.k);
       gl.uniform4fv(locations['uTrail[0]'], rigBuffers.trail);
       gl.uniform3f(locations.uTouch2, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
@@ -414,13 +479,29 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
   const position = event => {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    return { x: clamp((event.clientX - rect.left) / rect.width, 0, 1), y: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1) };
+    const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y: 1 - y };
   };
-  const onMove = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.move(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
-  const onDown = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.down(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
-  const onUp = event => { engine.up(event.pointerId); schedule(); };
-  const onCancel = event => { engine.up(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
-  const onLeave = event => { engine.leave(event.pointerId, event.pointerType); schedule(); };
+  const onMove = event => {
+    if (!settings.interactionEnabled || (event.pointerType === 'touch' && !settings.touchEnabled)) return;
+    const at = position(event);
+    if (!at) { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); return; }
+    activeInputs.add(event.pointerId); engine.move(event.pointerId, at.x, at.y, event.pointerType); schedule();
+  };
+  const onDown = event => {
+    if (!settings.interactionEnabled || (event.pointerType === 'touch' && !settings.touchEnabled)) return;
+    const at = position(event);
+    if (!at) return;
+    activeInputs.add(event.pointerId); engine.down(event.pointerId, at.x, at.y, event.pointerType); schedule();
+  };
+  const onUp = event => {
+    engine.up(event.pointerId);
+    if (event.pointerType === 'touch') { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); }
+    schedule();
+  };
+  const onCancel = event => { activeInputs.delete(event.pointerId); engine.up(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
+  const onLeave = event => { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
   const onLost = event => { event.preventDefault(); lost = true; cancelAnimationFrame(frameId); frameId = 0; canvas.parentElement && canvas.parentElement.classList.remove('gs-webgl-ready'); canvas.dataset.shaderStatus = 'context-lost'; };
   const onRestored = () => {
     try { gl = canvas.getContext(isWebGL2 ? 'webgl2' : 'webgl', glOptions); lost = false; initialize(); resize(); schedule(); }
@@ -461,6 +542,8 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     if (program) gl.deleteProgram(program);
     if (paletteTexture) gl.deleteTexture(paletteTexture);
     if (layerMixTexture) gl.deleteTexture(layerMixTexture);
+    if (ruleAtlasTexture) gl.deleteTexture(ruleAtlasTexture);
+    if (shapeAtlasTexture) gl.deleteTexture(shapeAtlasTexture);
   };
   });
 })(${rootExpression});
@@ -473,9 +556,17 @@ function proceduralOf(layer: GradientLayer | null): ProceduralConfig | null {
   return config && isProceduralActive(config) ? config : null;
 }
 
-/** Settings as the runtime reads them: the layer's shader settings plus its procedural config (when it has one). */
+/** Settings as the runtime reads them: the layer's shader settings plus its procedural config (when it has one), the CSS
+ *  texture atlas of the interaction rules and the distance fields of their custom shapes (both only when a rule uses them). */
 function exportedSettings(entry: { settings: InteractiveSettings; procedural: ProceduralConfig | null }) {
-  return entry.procedural ? { ...entry.settings, procedural: entry.procedural } : entry.settings;
+  const atlas = ruleTextureAtlasDataUri(entry.settings.rig);
+  const cells = shapeCellsBase64(entry.settings.rig);
+  return {
+    ...entry.settings,
+    ...(entry.procedural ? { procedural: entry.procedural } : {}),
+    ...(atlas ? { ruleAtlas: atlas } : {}),
+    ...(Object.keys(cells).length ? { shapeCells: cells } : {}),
+  };
 }
 
 function makeDocument(project: GradientProject, useMarkers = false) {
@@ -645,7 +736,8 @@ export function interactiveGlslExport(project?: GradientProject) {
     `// Fragment shader uniforms: ${UNIFORM_NAMES.join(', ')}`,
     `// Styles (uStyle): ${SHADER_STYLE_IDS.map(id => `${SHADER_STYLE_INDEX[id]} ${id}`).join(', ')}. uStyleP carries the four style parameters.`,
     '// The interaction (pointer / touch reaction) is generated from the interaction builder: only the rules in use are compiled.',
-    '// uRuleB / uRuleC / uRuleD / uRuleE / uRuleF hold the packed numbers of each rule, uTrail the pointer trail, uTouch2 the second finger.',
+    '// uRuleB .. uRuleK hold the packed numbers of each rule (fade, texture motion, CSS FX …), uTrail the pointer trail, uTouch2 the second finger.',
+    '// uRuleTextureAtlas (unit 2) holds the CSS textures of the rules, uRuleShapeAtlas (unit 3) the distance fields of custom shapes.',
     '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
@@ -687,7 +779,8 @@ import type { CSSProperties } from 'react';
 /* The interaction rules (settings.rig) are compiled into the shader when the export is made.
  * You can change their numbers at runtime (amounts, radii, parameters, drives); adding or removing rules,
  * or changing an effect / shape / falloff / source, needs a new export. The same goes for the procedural
- * engine (settings.procedural): its numbers can change at runtime, the distortion stage types cannot. */
+ * engine (settings.procedural): its numbers can change at runtime, the distortion stage types cannot.
+ * ruleAtlas and shapeCells carry the CSS textures and custom shapes of the rules; they are generated, leave them as they are. */
 export interface ShaderSettings {
   enabled: boolean;
   style: ${styleType};
@@ -714,6 +807,10 @@ export interface ShaderSettings {
   rig?: unknown;
   /** the layer's procedural gradient engine config, when it uses one */
   procedural?: unknown;
+  /** CSS textures of the interaction rules (an SVG data URI) */
+  ruleAtlas?: string;
+  /** distance fields of custom interaction shapes (rule index → base64) */
+  shapeCells?: Record<string, string>;
   interactionColorSource?: 'layer' | 'custom';
   interactionColor: string;
   interactionColors?: string[];

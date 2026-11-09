@@ -60,6 +60,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
   if (!gl) { canvas.dataset.shaderStatus = 'fallback'; return; }
   let program = null, buffer = null, paletteTexture = null, layerMixTexture = null, ruleTextureAtlas = null, locations = {}, positionAttribute = -1, uvAttribute = -1;
   let frameId = 0, lastFrame = 0, clock = 0, shaderTime = 0, visible = true, lost = false;
+  const activeInputs = new Set();
   let frameEma = 0, slowFrameCount = 0, adaptiveScale = 1;
   const engine = RigRuntime.createPointerEngine({
     touchEnabled: settings.touchEnabled, ripplesEnabled: settings.ripplesEnabled, maximumRipples: settings.maximumRipples, delay: settings.interactionDelay,
@@ -271,6 +272,7 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     gl.uniform2f(locations.uPointer, pointerX, pointerY);
     gl.uniform2f(locations.uVelocity, pointer.vx, pointer.vy);
     gl.uniform1f(locations.uPointerActive, reacts || idlePointer ? pointerActive : 0);
+    gl.uniform1f(locations.uInputActive, reacts && activeInputs.size ? 1 : 0);
     gl.uniform1f(locations.uPointerDown, reacts ? pointer.down : 0);
     const animated = settings.animate && !reducedMotion.matches;
     if (animated) shaderTime += delta * settings.speed;
@@ -414,13 +416,29 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
   const position = event => {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    return { x: clamp((event.clientX - rect.left) / rect.width, 0, 1), y: clamp(1 - (event.clientY - rect.top) / rect.height, 0, 1) };
+    const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    return { x, y: 1 - y };
   };
-  const onMove = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.move(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
-  const onDown = event => { if (!settings.interactionEnabled) return; const at = position(event); if (!at) return; engine.down(event.pointerId, at.x, at.y, event.pointerType); schedule(); };
-  const onUp = event => { engine.up(event.pointerId); schedule(); };
-  const onCancel = event => { engine.up(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
-  const onLeave = event => { engine.leave(event.pointerId, event.pointerType); schedule(); };
+  const onMove = event => {
+    if (!settings.interactionEnabled || (event.pointerType === 'touch' && !settings.touchEnabled)) return;
+    const at = position(event);
+    if (!at) { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); return; }
+    activeInputs.add(event.pointerId); engine.move(event.pointerId, at.x, at.y, event.pointerType); schedule();
+  };
+  const onDown = event => {
+    if (!settings.interactionEnabled || (event.pointerType === 'touch' && !settings.touchEnabled)) return;
+    const at = position(event);
+    if (!at) return;
+    activeInputs.add(event.pointerId); engine.down(event.pointerId, at.x, at.y, event.pointerType); schedule();
+  };
+  const onUp = event => {
+    engine.up(event.pointerId);
+    if (event.pointerType === 'touch') { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); }
+    schedule();
+  };
+  const onCancel = event => { activeInputs.delete(event.pointerId); engine.up(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
+  const onLeave = event => { activeInputs.delete(event.pointerId); engine.leave(event.pointerId, event.pointerType); schedule(); };
   const onLost = event => { event.preventDefault(); lost = true; cancelAnimationFrame(frameId); frameId = 0; canvas.parentElement && canvas.parentElement.classList.remove('gs-webgl-ready'); canvas.dataset.shaderStatus = 'context-lost'; };
   const onRestored = () => {
     try { gl = canvas.getContext(isWebGL2 ? 'webgl2' : 'webgl', glOptions); lost = false; initialize(); resize(); schedule(); }

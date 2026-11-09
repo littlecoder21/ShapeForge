@@ -9,6 +9,13 @@ import { activeRules, RIG_EFFECT_MAP, type InteractionRig, type RigBlend, type R
  * This file writes those three functions for exactly the rules that are enabled, so an interaction that uses
  * "swirl + glow" compiles (and costs) only swirl and glow. Slider values are uniforms, never constants.
  *
+ * Every rule block starts with `abs(amount) > 0.0005`: while the pointer is away (or a drive holds the amount at 0) the
+ * block costs one uniform comparison per pixel instead of a shape, a falloff and the effect. That is what keeps stacks of
+ * interactive layers cheap when nothing is being touched.
+ *
+ * Uniforms the template does not declare (the texture-motion arrays and the custom-shape atlas) are declared here, and
+ * only when a rule needs them.
+ *
  * GLSL ES 1.00 rules apply: explicit float literals, no `%`, constant loop bounds, no reserved words. */
 
 export const RIG_FUNCTIONS_MARKER = '/*@RIG_FUNCTIONS*/';
@@ -169,6 +176,8 @@ col = RG_BLEND(col, rgCol, clamp(rgA * rgCk, 0.0, 1.0));`,
 float rgHx = 1.0 - smoothstep(rgP2, rgP2 + 0.08, abs(fract(rgHp.x + rgHp.y) - 0.5));
 float rgHy = 1.0 - smoothstep(rgP2, rgP2 + 0.08, abs(fract(rgHp.x - rgHp.y) - 0.5));
 col = RG_BLEND(col, rgCol, clamp(rgA * max(rgHx, rgHy), 0.0, 1.0));`,
+  // the brush paints nothing itself: its whole look is the texture block (see `textureRuleBlock`)
+  texture: '',
   scanlines: 'col *= 1.0 - rgW * clamp(abs(rgAmt), 0.0, 1.0) * rgP2 * (0.5 + 0.5 * sin(p.y * rgP1 * 3.14159265));',
   halftone: `vec2 rgHg = rigRot(p * vec2(uAspect, 1.0), rgP2 * 0.0174533) * rgP1;
 float rgHd = length(fract(rgHg) - 0.5);
@@ -196,6 +205,12 @@ vec3 rigCssHue(vec3 c, float h) {
     (0.213 - 0.213 * ch + 0.143 * sh) * c.r + (0.715 + 0.285 * ch + 0.140 * sh) * c.g + (0.072 - 0.072 * ch - 0.283 * sh) * c.b,
     (0.213 - 0.213 * ch - 0.787 * sh) * c.r + (0.715 - 0.715 * ch + 0.715 * sh) * c.g + (0.072 + 0.928 * ch + 0.072 * sh) * c.b
   );
+}
+float rigHash(vec2 c) {
+  return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453);
+}
+vec4 rigAtlas(vec2 tc, vec2 origin) {
+  return texture2D(uRuleTextureAtlas, (origin + vec2(0.5) + fract(tc) * 63.0) / vec2(256.0, 128.0));
 }`;
 
 function blendFunctions(blends: Set<RigBlend>): string {
@@ -263,52 +278,36 @@ function rewriteMacros(body: string, rule: RigRule): string {
     .replace(/RG_BLEND\(/g, `rigBlend${cap(rule.blend)}(`);
 }
 
-function glslFloat(value: number): string {
-  const fixed = value.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
-  return fixed.includes('.') ? fixed : `${fixed}.0`;
-}
-
-function customShapeFunction(index: number, rule: RigRule): string {
-  const points = rule.customPoints.length >= 3 ? rule.customPoints : [
-    { x: 0, y: -0.5 }, { x: 0.5, y: 0 }, { x: 0, y: 0.5 }, { x: -0.5, y: 0 },
-  ];
-  const edges = points.map((point, pointIndex) => {
-    const next = points[(pointIndex + 1) % points.length];
-    const ax = glslFloat(point.x), ay = glslFloat(point.y);
-    const bx = glslFloat(next.x), by = glslFloat(next.y);
-    return `  vec2 a${pointIndex} = vec2(${ax}, ${ay});
-  vec2 b${pointIndex} = vec2(${bx}, ${by});
-  vec2 e${pointIndex} = b${pointIndex} - a${pointIndex};
-  float h${pointIndex} = clamp(dot(p - a${pointIndex}, e${pointIndex}) / max(dot(e${pointIndex}, e${pointIndex}), 0.000001), 0.0, 1.0);
-  edgeDistance = min(edgeDistance, length(p - a${pointIndex} - h${pointIndex} * e${pointIndex}));
-  if ((a${pointIndex}.y > p.y) != (b${pointIndex}.y > p.y) && p.x < (b${pointIndex}.x - a${pointIndex}.x) * (p.y - a${pointIndex}.y) / (b${pointIndex}.y - a${pointIndex}.y) + a${pointIndex}.x) inside = 1.0 - inside;`;
-  }).join('\n');
+/** A custom outline is a texture lookup, so it costs the same for 3 points or 32 and never changes the shader source. */
+function customShapeFunction(index: number): string {
   return `float rigDistCustom${index}(vec2 d, float ang, vec4 rc, float R) {
   vec2 p = rigRot(d, -ang) / max(R, 0.005);
   p.x /= max(rc.x, 0.05);
-  float inside = 0.0;
-  float edgeDistance = 1.0e6;
-${edges}
-  return inside > 0.5 ? clamp(1.0 - edgeDistance * 2.0, 0.0, 1.0) : 1.0 + edgeDistance * 2.0;
+  vec2 pc = clamp(p, -0.5, 0.5);
+  vec2 suv = vec2((${index}.0 * 64.0 + 0.5 + (pc.x + 0.5) * 63.0) / 512.0, (0.5 + (0.5 - pc.y) * 63.0) / 64.0);
+  float sd = (texture2D(uRuleShapeAtlas, suv).r - 0.5) * 2.0 + length(p - pc);
+  return max(1.0 + 2.0 * sd, 0.0);
 }`;
 }
 
+/** The fade direction (g.w = mode + 4 · invert) is read at run time: turning the fade around does not recompile. */
 function weightFunction(index: number, rule: RigRule): string {
   const shape = rule.shape;
   const shapeQ = shape === 'custom'
     ? `rigDistCustom${index}(d, ang, rc, R)`
     : `rigDist${cap(shape)}(d, ang, rc) / R`;
-  const directionQ = rule.fadeMode === 'horizontal' ? 'clamp(0.5 + fd.x * 0.5, 0.0, 1.0)'
-    : rule.fadeMode === 'vertical' ? 'clamp(0.5 + fd.y * 0.5, 0.0, 1.0)'
-      : rule.fadeMode === 'angle' ? 'clamp(0.5 + dot(fd, vec2(cos(ang), sin(ang))) * 0.5, 0.0, 1.0)'
-        : '';
   const falloff = `rigFall${cap(rule.falloff)}(q)`;
   return `float rigWRule${index}(vec2 d, float ang, vec4 rc, float R, vec2 fade, vec4 extra, out float q) {
   float shapeQ = ${shapeQ};
   q = shapeQ;
-${directionQ ? `  vec2 fd = rigRot(d, -ang) / max(R, 0.005);
-  fd.x /= max(rc.x, 0.05);
-  q = max(shapeQ, ${directionQ});` : ''}
+  float fm = extra.w - 4.0 * floor(extra.w * 0.25);
+  if (fm > 0.5) {
+    vec2 fd = rigRot(d, -ang) / max(R, 0.005);
+    fd.x /= max(rc.x, 0.05);
+    if (fm < 1.5) q = max(shapeQ, clamp(0.5 + fd.x * 0.5, 0.0, 1.0));
+    else if (fm < 2.5) q = max(shapeQ, clamp(0.5 + fd.y * 0.5, 0.0, 1.0));
+    else q = max(shapeQ, clamp(0.5 + dot(fd, vec2(cos(ang), sin(ang))) * 0.5, 0.0, 1.0));
+  }
   q = clamp((q - extra.x) / max(fade.y - extra.x, 0.05), 0.0, 1.0);
   q = pow(q, max(fade.x, 0.1));
   q = mix(q, q * q * (3.0 - 2.0 * q), extra.y);
@@ -326,11 +325,12 @@ function ruleBlock(index: number, rule: RigRule, stage: 'warp' | 'pre' | 'post')
   const motion = rule.follow ? ' + atan(uVelocity.y, uVelocity.x)' : '';
   return `  {
     vec4 rgB = uRuleB[${index}];
+    float rgAmt = rgB.x;
+    if (abs(rgAmt) > 0.0005) {
     vec4 rgCc = uRuleC[${index}];
     vec4 rgDd = uRuleD[${index}];
     vec4 rgF = uRuleF[${index}];
     vec4 rgG = uRuleG[${index}];
-    float rgAmt = rgB.x;
     float rgR = max(rgB.y, 0.005);
     float rgP1 = rgB.z;
     float rgP2 = rgB.w;
@@ -351,34 +351,58 @@ function ruleBlock(index: number, rule: RigRule, stage: 'warp' | 'pre' | 'post')
       float rgA = rgAmt * rgW;${color}
       ${rewriteMacros(RIG_EFFECT_GLSL[rule.effect], rule).split('\n').join('\n      ')}
     }
+    }
   }`;
 }
 
+/** The CSS texture of a rule, with motion and shading (see textureFx.ts). Anchored to the pointer or to the canvas. */
 function textureRuleBlock(index: number, rule: RigRule): string {
   const weightFn = `rigWRule${index}`;
   const source = sourceCode(rule, weightFn);
-  const cellX = index % 4;
-  const cellY = Math.floor(index / 4);
+  const origin = `vec2(${index % 4}.0, ${Math.floor(index / 4)}.0) * 64.0`;
   return `  {
     vec4 rgB = uRuleB[${index}];
-    vec4 rgCc = uRuleC[${index}];
-    vec4 rgDd = uRuleD[${index}];
-    vec4 rgF = uRuleF[${index}];
-    vec4 rgG = uRuleG[${index}];
     vec4 rgH = uRuleH[${index}];
-    float rgR = max(rgB.y, 0.005);
-    float rgAng = rgCc.y${rule.follow ? ' + atan(uVelocity.y, uVelocity.x)' : ''};
-    vec2 rgC = uPointer;
-    float rgW = 0.0;
-    float rgQ = 1.0;
-    float rgT = uClock;
-    ${source}
-    if (rgH.w > 0.5 && abs(rgB.x) > 0.0005 && rgW > 0.0005) {
-      vec2 texCoord = (uvIn - rgC) * uResolution / max(rgH.x, 1.0) + rgH.yz;
-      vec2 tile = fract(texCoord);
-      vec2 atlasUv = (vec2(${cellX}.0, ${cellY}.0) * 64.0 + vec2(0.5) + tile * 63.0) / vec2(256.0, 128.0);
-      vec4 texel = texture2D(uRuleTextureAtlas, atlasUv);
-      col = rigBlend${cap(rule.blend)}(col, texel.rgb, rgW * min(abs(rgB.x), 1.0) * texel.a);
+    if (rgH.w > 0.5 && abs(rgB.x) > 0.0005) {
+      vec4 rgCc = uRuleC[${index}];
+      vec4 rgDd = uRuleD[${index}];
+      vec4 rgE = uRuleE[${index}];
+      vec4 rgF = uRuleF[${index}];
+      vec4 rgG = uRuleG[${index}];
+      vec4 rgI = uRuleI[${index}];
+      vec4 rgJ = uRuleJ[${index}];
+      vec4 rgK = uRuleK[${index}];
+      float rgR = max(rgB.y, 0.005);
+      float rgAng = rgCc.y${rule.follow ? ' + atan(uVelocity.y, uVelocity.x)' : ''};
+      vec2 rgC = uPointer;
+      float rgW = 0.0;
+      float rgQ = 1.0;
+      float rgT = uClock;
+      ${source}
+      rgW *= uInputActive;
+      if (rgW > 0.0005) {
+        vec2 rgBase = rgJ.w > 0.5 ? uvIn - vec2(0.5) : uvIn - rgC;
+        vec2 texCoord0 = rigRot(rgBase * vec2(uAspect, 1.0) / max(rgH.x, 0.001), rgJ.z * uClock);
+        vec2 rgFlow = rgJ.xy * uClock;
+        vec2 texCoord = texCoord0 + rgH.yz - rgFlow;
+        texCoord.x += rgK.z * sin(texCoord.y * 1.3 + uClock * rgK.w);
+        vec2 rgCell = floor(texCoord);
+        float rgKeep = step(rgF.z, rigHash(rgCell));
+        float rgTw = 1.0 - rgK.x * (0.5 + 0.5 * sin(uClock * rgK.y + rigHash(floor(texCoord * 6.0) + rgCell) * 6.2831853));
+        vec4 rgTex = rigAtlas(texCoord, ${origin});
+        float rgTa = rgTex.a * rgKeep;
+        vec3 rgTcol = min(rgTex.rgb / max(rgTex.a, 0.05), vec3(1.0));
+        if (rgE.w > 0.001) {
+          vec2 texCoord2 = texCoord0 * 0.62 + vec2(3.7, 1.9) + rgH.yz - rgFlow * 0.55;
+          float rgBack = rigAtlas(texCoord2, ${origin}).a * rgE.w * 0.75 * step(rgF.z * 0.6, rigHash(floor(texCoord2) + vec2(7.0, 3.0)));
+          rgTa = max(rgTa, rgBack);
+        }
+        if (rgI.w > 0.001) rgTcol = mix(rgTcol, ${colorExpression(rule, index, 'post')}, rgI.w);
+        rgTcol *= rgF.w;
+        float rgTf = clamp(rgTa * rgTw * rgW * min(abs(rgB.x), 1.0), 0.0, 1.0);
+        col = rigBlend${cap(rule.blend)}(col, rgTcol, rgTf);
+        rgAlpha = max(rgAlpha, clamp(rgTf * 0.85, 0.0, 0.85));
+      }
     }
   }`;
 }
@@ -398,22 +422,24 @@ function cssFxRuleBlock(index: number, rule: RigRule): string {
   const source = sourceCode(rule, weightFn);
   return `  {
     vec4 rgB = uRuleB[${index}];
-    vec4 rgCc = uRuleC[${index}];
-    vec4 rgDd = uRuleD[${index}];
-    vec4 rgF = uRuleF[${index}];
-    vec4 rgG = uRuleG[${index}];
-    vec4 rgI = uRuleI[${index}];
-    float rgR = max(rgB.y, 0.005);
-    float rgAng = rgCc.y${rule.follow ? ' + atan(uVelocity.y, uVelocity.x)' : ''};
-    vec2 rgC = uPointer;
-    float rgW = 0.0;
-    float rgQ = 1.0;
-    float rgT = uClock;
-    ${source}
-    if (abs(rgB.x) > 0.0005 && rgW > 0.0005) {
-      vec3 rgFxCol = col;
-      ${operation[fx.type]}
-      col = mix(col, rgFxCol, rgW * min(abs(rgB.x), 1.0));
+    if (abs(rgB.x) > 0.0005) {
+      vec4 rgCc = uRuleC[${index}];
+      vec4 rgDd = uRuleD[${index}];
+      vec4 rgF = uRuleF[${index}];
+      vec4 rgG = uRuleG[${index}];
+      vec4 rgI = uRuleI[${index}];
+      float rgR = max(rgB.y, 0.005);
+      float rgAng = rgCc.y${rule.follow ? ' + atan(uVelocity.y, uVelocity.x)' : ''};
+      vec2 rgC = uPointer;
+      float rgW = 0.0;
+      float rgQ = 1.0;
+      float rgT = uClock;
+      ${source}
+      if (rgW > 0.0005) {
+        vec3 rgFxCol = col;
+        ${operation[fx.type]}
+        col = mix(col, rgFxCol, rgW * min(abs(rgB.x), 1.0));
+      }
     }
   }`;
 }
@@ -434,13 +460,19 @@ export function generateRigGlsl(rig: Pick<InteractionRig, 'rules'> | null): Gene
     falloffs.add(rule.falloff);
     if (def.usesBlend) blends.add(rule.blend);
     if (rule.texture.enabled) blends.add(rule.blend);
-    if (rule.shape === 'custom') customShapes.push(customShapeFunction(index, rule));
+    if (rule.shape === 'custom') customShapes.push(customShapeFunction(index));
     weights.push(weightFunction(index, rule));
-    stages[def.stage].push(ruleBlock(index, rule, def.stage));
+    if (RIG_EFFECT_GLSL[rule.effect]) stages[def.stage].push(ruleBlock(index, rule, def.stage));
     if (rule.texture.enabled) stages.post.push(textureRuleBlock(index, rule));
     if (rule.cssFx?.enabled) stages.post.push(cssFxRuleBlock(index, rule));
   });
-  const parts: string[] = [COMMON_GLSL];
+  const parts: string[] = [];
+  // uniforms that only exist when a rule needs them (the template never declares them)
+  const declarations: string[] = [];
+  if (rules.some(rule => rule.texture.enabled)) declarations.push('uniform vec4 uRuleJ[8];', 'uniform vec4 uRuleK[8];');
+  if (rules.some(rule => rule.shape === 'custom')) declarations.push('uniform sampler2D uRuleShapeAtlas;');
+  if (declarations.length) parts.push(declarations.join('\n'));
+  parts.push(COMMON_GLSL);
   if (blends.size) parts.push(blendFunctions(blends));
   shapes.forEach(shape => parts.push(`float rigDist${cap(shape)}(vec2 d, float ang, vec4 rc) { ${SHAPE_GLSL[shape]} }`));
   falloffs.forEach(falloff => parts.push(`float rigFall${cap(falloff)}(float q) { return ${FALLOFF_GLSL[falloff]}; }`));

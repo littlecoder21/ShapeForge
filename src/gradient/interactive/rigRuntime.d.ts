@@ -43,7 +43,12 @@ export interface PointerEngine {
 }
 
 export interface RigBuffers {
-  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; f: Float32Array; g: Float32Array; h: Float32Array; i: Float32Array; trail: Float32Array; count: number;
+  b: Float32Array; c: Float32Array; d: Float32Array; e: Float32Array; f: Float32Array; g: Float32Array; h: Float32Array; i: Float32Array;
+  /** texture drift / spin / anchor */
+  j: Float32Array;
+  /** texture twinkle / flutter */
+  k: Float32Array;
+  trail: Float32Array; count: number;
 }
 
 export interface RigEvalRule {
@@ -63,6 +68,10 @@ export interface RigEvalRule {
   fadeOpacity?: number;
   fadeInvert?: boolean;
   texture?: { enabled: boolean; scale?: number; offsetX?: number; offsetY?: number };
+  texFx?: {
+    anchor?: string; scrollSpeed?: number; scrollAngle?: number; spin?: number; twinkle?: number; twinkleRate?: number;
+    flutter?: number; flutterRate?: number; dropout?: number; gain?: number; tint?: number; depth?: number;
+  };
   cssFx?: { enabled: boolean; params: Readonly<Record<string, number>> } | null;
   shapeN: number;
   sp1: number;
@@ -77,5 +86,5 @@ export function pointerSmoothingFactor(deltaSeconds: number, delayMs: number): n
 export function idleMotionPoint(path: string, clock: number, speed: number, size: number): { x: number; y: number };
 export function createPointerEngine(initial?: Partial<PointerEngineOptions>): PointerEngine;
 export function createRigBuffers(): RigBuffers;
-export function evaluateRig(rig: RigEvalInput, frame: PointerFrame, buffers: RigBuffers, options?: { radiusScale?: number; reaction?: number; enabled?: boolean }): RigBuffers;
+export function evaluateRig(rig: RigEvalInput, frame: PointerFrame, buffers: RigBuffers, options?: { radiusScale?: number; reaction?: number; enabled?: boolean; canvasHeight?: number }): RigBuffers;
 export function packTrail(engine: PointerEngine, frame: PointerFrame, buffers: RigBuffers, enabled: boolean): number;

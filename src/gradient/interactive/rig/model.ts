@@ -1,15 +1,16 @@
 import { TEXTURE_DEFAULTS, normalizeTexture } from '../../engine/textureControls';
 import type { TextureData } from '../../engine/model';
+import { defaultTexFx, normalizeTexFx, type RigTextureFx } from './textureFx';
 
 /* ═══════════════════════ Interaction rig — data model ═══════════════════════
  * An interaction is a short stack of rules. Each rule combines:
- *   • an EFFECT   what happens (pull, swirl, glow, hue shift, glass bump…)
+ *   • an EFFECT   what happens (pull, swirl, glow, hue shift, glass bump, texture brush…)
  *   • a SOURCE    where it comes from (pointer, motion trail, click anchors, second finger, fixed / orbiting point, symmetric copies)
  *   • a SHAPE     the silhouette of its influence, plus an organic edge
  *   • a FALLOFF   how the influence fades with distance
  *   • DRIVES      what controls its numbers live (press, hold, speed, pointer X / Y, LFOs, pinch, twist …)
- * Only the structural fields (effect, shape, falloff, source, colour mode, blend, follow) change the generated shader;
- * everything else is a uniform, so sliders never trigger a recompile.
+ * Only the structural fields (effect, shape id, falloff, source, colour mode, blend, follow) change the generated shader;
+ * everything else is a uniform or a texture upload, so sliders, the fade builder and the custom-shape editor never recompile.
  */
 
 export const RIG_MAX_RULES = 8;
@@ -21,7 +22,7 @@ export type RigEffectId =
   | 'lens' | 'bump' | 'mosaic' | 'mirror' | 'kaleido'
   | 'palette' | 'prism' | 'timewarp' | 'hue' | 'saturate' | 'tone' | 'invert' | 'posterize' | 'tint' | 'thinfilm'
   | 'glow' | 'light' | 'spotlight' | 'sparkle' | 'lightning' | 'rings'
-  | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch';
+  | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch' | 'texture';
 export type RigStage = 'warp' | 'pre' | 'post';
 export type RigShapeId = 'circle' | 'ellipse' | 'box' | 'diamond' | 'line' | 'cross' | 'star' | 'poly'
   | 'capsule' | 'roundBox' | 'triangle' | 'hexagon' | 'ringShape' | 'heart' | 'clover' | 'custom';
@@ -88,6 +89,8 @@ export interface RigRule {
   fadeOpacity: number;
   fadeInvert: boolean;
   texture: TextureData;
+  /** Motion and shading for the texture (drift, spin, twinkle, tint …). Only used while `texture.enabled`. */
+  texFx: RigTextureFx;
   /** One CSS FX with a fragment-shader equivalent, applied within this rule's influence. */
   cssFx: RigCssFx | null;
   source: RigSourceId;
@@ -170,6 +173,7 @@ export const RIG_EFFECTS: RigEffectDef[] = [
   { id: 'stripes', label: 'Tinted stripes', stage: 'post', group: 'Texture', icon: '▤', blurb: 'Overlays adjustable diagonal stripes.', amount: amt('Strength', 0, 1.5, 0.8), params: [par('Density', 4, 120, 32, 1), par('Width', 0.05, 0.95, 0.35), par('Angle', -180, 180, 35, 1, '°')], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
   { id: 'checker', label: 'Colour checker', stage: 'post', group: 'Texture', icon: '▦', blurb: 'Adds a two-tone checker texture with adjustable scale and rotation.', amount: amt('Strength', 0, 1.5, 0.7), params: [par('Cells', 2, 100, 18, 1), par('Angle', -180, 180, 0, 1, '°')], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
   { id: 'crosshatch', label: 'Crosshatch', stage: 'post', group: 'Texture', icon: '▧', blurb: 'Draws a hand-printed crosshatch pattern in the selected colour.', amount: amt('Strength', 0, 1.5, 0.8), params: [par('Density', 4, 100, 28, 1), par('Line width', 0.03, 0.45, 0.12)], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth' } },
+  { id: 'texture', label: 'Texture brush', stage: 'post', group: 'Texture', icon: '❋', blurb: 'Paints one of the CSS textures wherever the pointer reaches. Let it drift, spin and twinkle to build starfall, embers, snow, rain or fireflies.', amount: amt('Strength', 0, 1.5, 1), params: [], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth', radius: 1.3 } },
 
   { id: 'lens', label: 'Lens', stage: 'warp', group: 'Lens', icon: '◍', blurb: 'A magnifying glass; negative values pinch.', amount: amt('Magnify', -1, 1, 0.9), params: [par('Profile', 0.3, 4, 1.5)], defaults: { falloff: 'dome', radius: 1.1 } },
   { id: 'bump', label: 'Glossy bump (3D)', stage: 'warp', group: 'Lens', icon: '◉', blurb: 'Embosses a glossy dome with specular light and colour fringes.', amount: amt('Height', -2, 2, 1.2), params: [par('Depth', 0, 2, 1), par('Shine', 2, 60, 24, 1), par('Light angle', -180, 180, 45, 1, '°'), par('Colour fringe', 0, 1, 0.3)], defaults: { falloff: 'dome', radius: 1.2 } },
@@ -327,6 +331,8 @@ export function makeRule(effect: RigEffectId, over: Partial<Omit<RigRule, 'id' |
   const defaultParams = def.params.map(param => param.def);
   const source = over.source ?? def.defaults?.source ?? 'pointer';
   const sourceDefaults = RIG_SOURCE_MAP[source].params.map(param => param.def);
+  // the texture brush IS a texture: it starts with one switched on, bright enough to read as particles
+  const brush = effect === 'texture';
   const rule: RigRule = {
     id: newRuleId(),
     enabled: true,
@@ -339,12 +345,13 @@ export function makeRule(effect: RigEffectId, over: Partial<Omit<RigRule, 'id' |
     fadeSoftness: 0,
     fadeOpacity: 1,
     fadeInvert: false,
-    texture: normalizeTexture({ ...TEXTURE_DEFAULTS, enabled: false }),
+    texture: normalizeTexture({ ...TEXTURE_DEFAULTS, enabled: brush, ...(brush ? { pattern: 'geometric-star-field', opacity: 100, scale: 80 } : {}) }),
+    texFx: defaultTexFx(),
     cssFx: null,
     source,
     colorMode: 'palette',
     color: '#ffffff',
-    blend: effect === 'glow' ? 'add' : 'mix',
+    blend: effect === 'glow' || brush ? 'add' : 'mix',
     follow: false,
     amount: def.amount.def,
     radius: def.defaults?.radius ?? 1,
@@ -395,13 +402,15 @@ export function normalizeShapePoints(raw: unknown): RigShapePoint[] {
   });
 }
 
-/** Everything that changes the generated GLSL. Slider values are deliberately absent. */
+/** Everything that changes the generated GLSL. Slider values are deliberately absent, and so are the points of a custom
+ *  shape (they live in a distance-field texture) and the fade direction (a runtime branch): drawing a shape, dragging its
+ *  points or turning the fade around never recompiles the shader. */
 export function rigSignature(rig: Pick<InteractionRig, 'rules'>): string {
   return activeRules(rig)
     .map(rule => [
-      rule.effect, rule.shape, rule.shape === 'custom' ? JSON.stringify(rule.customPoints) : '-',
-      rule.falloff, rule.fadeMode, rule.source,
-      rule.texture.enabled ? 'texture' : '-',
+      rule.effect, rule.shape, rule.falloff, rule.source,
+      // the texture block reads the colour and the blend even when the effect itself does not
+      rule.texture.enabled ? `texture-${rule.blend}-${rule.colorMode}` : '-',
       rule.cssFx?.enabled ? rule.cssFx.type : '-',
       RIG_EFFECT_MAP[rule.effect].usesColor ? rule.colorMode : '-',
       RIG_EFFECT_MAP[rule.effect].usesBlend ? rule.blend : '-',
@@ -443,6 +452,7 @@ export function normalizeRule(raw: unknown): RigRule | null {
   }) as RigRule['p'];
   const source = pick(value.source, RIG_SOURCES.map(item => item.id), 'pointer');
   const sourceParams = RIG_SOURCE_MAP[source].params;
+  const texture = normalizeTexture(value.texture);
   return {
     id: typeof value.id === 'string' && value.id ? value.id : base.id,
     enabled: value.enabled !== false,
@@ -455,7 +465,9 @@ export function normalizeRule(raw: unknown): RigRule | null {
     fadeSoftness: num(value.fadeSoftness, 0, 1, 0),
     fadeOpacity: num(value.fadeOpacity, 0, 1, 1),
     fadeInvert: value.fadeInvert === true,
-    texture: normalizeTexture(value.texture),
+    // a texture brush without its texture would draw nothing, so the brush keeps its texture switched on
+    texture: effect === 'texture' ? { ...texture, enabled: true } : texture,
+    texFx: normalizeTexFx(value.texFx),
     cssFx: normalizeCssFx(value.cssFx),
     source,
     colorMode: pick(value.colorMode, RIG_COLOR_MODES.map(item => item.id), 'palette'),

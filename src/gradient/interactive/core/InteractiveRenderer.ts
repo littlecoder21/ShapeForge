@@ -652,6 +652,7 @@ export class InteractiveRenderer {
     set2f('uPointer', pointerX, pointerY);
     set2f('uVelocity', pointer.vx, pointer.vy);
     set1f('uPointerActive', reacts || idlePointer ? pointerActive : 0);
+    set1f('uInputActive', reacts && this.pointer.hasPointer() ? 1 : 0);
     set1f('uPointerDown', reacts ? pointer.down : 0);
     set1f('uTime', settings.animate ? this.shaderTime : 0);
     set1f('uClock', this.clock);

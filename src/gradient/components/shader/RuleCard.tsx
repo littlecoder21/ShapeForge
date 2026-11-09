@@ -8,6 +8,7 @@ import {
 } from '../../interactive/rig/model';
 import { FalloffChart, Num, Select } from './parts';
 import CustomShapeEditor from './CustomShapeEditor';
+import FadeChart from './FadeChart';
 import RuleTextureEditor from './RuleTextureEditor';
 
 interface Props {
@@ -49,7 +50,16 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
   const cssFx = rule.cssFx?.enabled ? rule.cssFx : null;
   const changeEffect = (effect: RigRule['effect']) => {
     const fresh = makeRule(effect);
-    onChange({ ...rule, effect, amount: fresh.amount, p: fresh.p, drives: rule.drives.filter(drive => drive.target === 'amount' || drive.target === 'radius') });
+    // the texture brush is its texture: switching to it from an effect without one brings the brush defaults along
+    const toBrush = effect === 'texture' && !rule.texture.enabled;
+    onChange({
+      ...rule,
+      effect,
+      amount: fresh.amount,
+      p: fresh.p,
+      ...(toBrush ? { texture: fresh.texture, blend: fresh.blend } : {}),
+      drives: rule.drives.filter(drive => drive.target === 'amount' || drive.target === 'radius'),
+    });
   };
   const changeSource = (next: RigRule['source']) => {
     const fresh = makeRule(def.id, { source: next });
@@ -64,6 +74,7 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
     ...def.params.map((param, slot) => ({ id: (['p1', 'p2', 'p3', 'p4'] as const)[slot], label: param.label })),
   ];
   const summary = `${source.label} · ${RIG_SHAPES.find(item => item.id === rule.shape)?.label ?? ''}${rule.drives.length ? ` · ${rule.drives.length} drive${rule.drives.length > 1 ? 's' : ''}` : ''}`;
+  const isBrush = rule.effect === 'texture';
 
   return <article className={`gs-rule ${rule.enabled ? '' : 'off'} ${open ? 'open' : ''}`} data-testid={`rig-rule-${index}`}>
     <header className="gs-rule-head">
@@ -97,12 +108,14 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
       <div className="gs-rule-group">
         <h4>Shape & fade</h4>
         <Select id={`rig-shape-${index}`} label="Shape" value={rule.shape} options={RIG_SHAPES.map(item => ({ id: item.id, label: item.label }))} onChange={shape => patch({ shape })} />
-        {rule.shape === 'custom' && <CustomShapeEditor points={rule.customPoints} onChange={customPoints => patch({ customPoints })} />}
+        {/* one undo step per drawing / drag, and no shader recompile: the outline is a texture */}
+        {rule.shape === 'custom' && <CustomShapeEditor points={rule.customPoints} onChange={customPoints => patch({ customPoints }, 'shape')} />}
         {SHAPES_WITH_ASPECT.includes(rule.shape) && <Num label="Aspect" value={rule.aspect} min={0.2} max={5} def={1} onChange={aspect => patch({ aspect }, 'aspect')} />}
         {rule.shape !== 'circle' && <Num label="Rotation" value={rule.rotation} min={-180} max={180} step={1} def={0} unit="°" onChange={rotation => patch({ rotation }, 'rotation')} />}
-        {(rule.shape === 'star' || rule.shape === 'poly') && <Num label={rule.shape === 'star' ? 'Points' : 'Sides'} value={rule.shapeN} min={rule.shape === 'star' ? 2 : 3} max={12} step={1} def={5} onChange={shapeN => patch({ shapeN })} />}
+        {(rule.shape === 'star' || rule.shape === 'poly') && <Num label={rule.shape === 'star' ? 'Points' : 'Sides'} value={rule.shapeN} min={rule.shape === 'star' ? 2 : 3} max={12} step={1} def={5} onChange={shapeN => patch({ shapeN }, 'shapeN')} />}
         {rule.shape !== 'circle' && <Switch label="Face the direction of motion" checked={rule.follow} onChange={follow => patch({ follow })} />}
         <Num label="Organic edge" value={rule.edge} min={0} max={1} def={0} onChange={edge => patch({ edge }, 'edge')} />
+        <FadeChart rule={rule} />
         <Select id={`rig-fade-direction-${index}`} label="Fade direction" value={rule.fadeMode} options={RIG_FADE_MODES} onChange={fadeMode => patch({ fadeMode })} />
         <Num label="Fade start" value={rule.fadeStart} min={0} max={0.95} step={0.01} def={0} onChange={fadeStart => patch({ fadeStart }, 'fade-start')} testId={`rig-fade-start-${index}`} />
         <Num label="Fade extent" value={rule.fadeWidth} min={0.25} max={2} step={0.01} def={1} unit="×" onChange={fadeWidth => patch({ fadeWidth }, 'fade-width')} testId={`rig-fade-width-${index}`} />
@@ -121,6 +134,7 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
         {def.usesColor && <Select id={`rig-color-mode-${index}`} label="Colour from" value={rule.colorMode} options={RIG_COLOR_MODES} onChange={colorMode => patch({ colorMode })} />}
         {def.usesColor && rule.colorMode === 'custom' && <input type="color" className="gs-interaction-color" value={rule.color} onChange={event => patch({ color: event.target.value }, 'color')} aria-label="Custom colour" />}
         {def.usesBlend && <Select id={`rig-blend-${index}`} label="Blend" value={rule.blend} options={RIG_BLENDS} onChange={blend => patch({ blend })} />}
+        {isBrush && <p className="hint">The rule colour tints the texture when “Colour from rule” (under CSS texture → Motion & shading) is above 0.</p>}
       </div>}
 
       <div className="gs-rule-group">
@@ -161,15 +175,21 @@ export default function RuleCard({ rule, index, total, initiallyOpen = false, on
 
       <div className="gs-rule-group">
         <h4>CSS texture</h4>
-        <Switch
-          label="Apply texture inside this interaction"
-          checked={rule.texture.enabled}
-          onChange={enabled => patch({ texture: { ...rule.texture, enabled } })}
-          testId={`rig-texture-on-${index}`}
-        />
+        {isBrush
+          ? <p className="hint">This effect paints its texture inside the shape. Pick a recipe or any CSS texture, then let it drift, spin and twinkle.</p>
+          : <Switch
+            label="Apply texture inside this interaction"
+            checked={rule.texture.enabled}
+            onChange={enabled => patch({ texture: { ...rule.texture, enabled } })}
+            testId={`rig-texture-on-${index}`}
+          />}
         {rule.texture.enabled && <>
-          <Select id={`rig-texture-blend-${index}`} label="Texture blend" value={rule.blend} options={RIG_BLENDS} onChange={blend => patch({ blend })} />
-          <RuleTextureEditor texture={rule.texture} onChange={texture => patch({ texture })} />
+          {!def.usesBlend && <Select id={`rig-texture-blend-${index}`} label="Texture blend" value={rule.blend} options={RIG_BLENDS} onChange={blend => patch({ blend })} />}
+          {!def.usesColor && <>
+            <Select id={`rig-texture-color-mode-${index}`} label="Tint colour from" value={rule.colorMode} options={RIG_COLOR_MODES} onChange={colorMode => patch({ colorMode })} />
+            {rule.colorMode === 'custom' && <input type="color" className="gs-interaction-color" value={rule.color} onChange={event => patch({ color: event.target.value }, 'color')} aria-label="Texture tint colour" />}
+          </>}
+          <RuleTextureEditor rule={rule} onChange={(next, coalesce) => onChange(next, coalesce ? `${key}-${coalesce}` : undefined)} />
         </>}
       </div>
 

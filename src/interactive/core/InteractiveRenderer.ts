@@ -12,6 +12,7 @@ import { assembleProceduralShader } from '../../procedural/glsl';
 import { createProceduralState, uploadProceduralUniforms, type ProceduralState } from '../../procedural/proceduralRuntime';
 import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../../procedural/types';
 import { ruleTextureAtlasDataUri } from '../../gradient/interactive/rig/textureAtlas';
+import { bakeShapeAtlas, shapeAtlasKey, SHAPE_ATLAS_HEIGHT, SHAPE_ATLAS_WIDTH } from '../../gradient/interactive/rig/shapeField';
 import { getFrameScheduler } from './FrameScheduler';
 import { QUALITY_PRESETS, layerWeight, requestedScale, renderSize, type LayerLoad } from './gpu/GlobalRenderBudget';
 import type { LutHandle } from './gpu/GpuResourceManager';
@@ -24,6 +25,10 @@ const MAX_STOPS = 8;
 const MAX_RIPPLES = 8;
 const MAX_MESH_POINTS = 8;
 const LUT_SIZE = 512;
+/** texture edits are applied after the slider has paused this long, so dragging never decodes an atlas per tick */
+const TEXTURE_DEBOUNCE_MS = 90;
+/** a zoom / pan of the preview re-measures the layer once it has settled */
+const VIEW_SETTLE_MS = 160;
 const GEOMETRY_ID = { linear: 0, radial: 1, conic: 2, curve: 3, mesh: 4, noise: 5 } as const;
 const LAYER_BLEND_ID: Record<ShaderLayerColorBlend, number> = { mix: 0, multiply: 1, screen: 2, overlay: 3, add: 4 };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -94,6 +99,23 @@ function bakeLutCached(key: string, palette: ShaderStop[], space: ShaderGeometry
   return baked;
 }
 
+/** The rule textures are the same for every layer (the rig is project-wide), so the atlas image is decoded once and shared. */
+const atlasImageCache = new Map<string, Promise<HTMLImageElement>>();
+function loadAtlasImage(uri: string): Promise<HTMLImageElement> {
+  const hit = atlasImageCache.get(uri);
+  if (hit) return hit;
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('The interaction texture atlas could not be decoded.'));
+    image.src = uri;
+  });
+  atlasImageCache.set(uri, promise);
+  promise.catch(() => { atlasImageCache.delete(uri); });
+  if (atlasImageCache.size > 4) atlasImageCache.delete(atlasImageCache.keys().next().value as string);
+  return promise;
+}
+
 export interface InteractiveRendererOptions {
   palette?: ShaderStop[];
   settings?: Partial<InteractiveSettings>;
@@ -123,7 +145,10 @@ interface PendingBuild {
  * It keeps everything that belongs to the layer — palette, geometry, mesh points, style, motion settings, interaction state,
  * its own pointer engine and procedural simulation — and draws through the SHARED renderer: the WebGL context, the compiled
  * programs, the palette textures, the frame loop, the pointer input and the resolution budget are all shared infrastructure.
- * The public interface (constructor, update, setPaused, resetInteraction, getStatus, destroy) is unchanged. */
+ * The public interface (constructor, update, setPaused, resetInteraction, getStatus, destroy) is unchanged.
+ *
+ * Resolution follows what is VISIBLE: the preview scales the artboard with a CSS transform, so a 1200 × 800 layer shown at
+ * 24 % on a phone only needs about a quarter of the pixels. The layer measures its on-screen size and renders for that. */
 export class InteractiveRenderer implements RenderClient {
   id = 0;
   private readonly canvas: HTMLCanvasElement;
@@ -145,10 +170,14 @@ export class InteractiveRenderer implements RenderClient {
   private readonly failedKeys = new Set<string>();
   private paletteHandle: LutHandle | null = null;
   private layerMixHandle: LutHandle | null = null;
+  /** CSS textures of the rules (unit 2); only exists while a rule uses a texture */
   private ruleTextureAtlas: WebGLTexture | null = null;
   private ruleTextureKey = '';
   private ruleTextureRequest = 0;
-  private ruleTextureImage: HTMLImageElement | null = null;
+  private ruleTextureTimer: ReturnType<typeof setTimeout> | null = null;
+  /** distance fields of custom shapes (unit 3); only exists while a rule uses a custom shape */
+  private shapeAtlas: WebGLTexture | null = null;
+  private shapeKey = '';
   private readonly paletteColors = new Float32Array(MAX_STOPS * 4);
   private readonly paletteAlphas = new Float32Array(MAX_STOPS);
   private readonly meshPointData = new Float32Array(MAX_MESH_POINTS * 4);
@@ -158,6 +187,7 @@ export class InteractiveRenderer implements RenderClient {
   private interactionColor: [number, number, number] = [1, 1, 1];
   private meshBaseRgb: [number, number, number] = [0, 0, 0];
   private readonly rigBuffers = createRigBuffers();
+  private suppressRigWhileBuilding = false;
   private readonly rigFrame: PointerFrame = {
     x: 0.5, y: 0.5, vx: 0, vy: 0, active: 0, down: 0, press: 0, speed: 0, hold: 0, sinceClick: 1e6, clock: 0, trailLife: 0.9,
     t2x: 0.5, t2y: 0.5, t2active: 0, pinch: 0, twist: 0,
@@ -181,6 +211,10 @@ export class InteractiveRenderer implements RenderClient {
   private staticDirty = true;
   private resizeObserver: ResizeObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
+  private viewObserver: MutationObserver | null = null;
+  private viewTimer: ReturnType<typeof setTimeout> | null = null;
+  /** the on-screen width the canvas was last sized for */
+  private measuredWidth = 0;
   private mediaQuery: MediaQueryList | null = null;
   private previousFrame = 0;
   private clock = 0;
@@ -225,7 +259,8 @@ export class InteractiveRenderer implements RenderClient {
       this.hub.register(this);
       this.registered = true;
       try {
-        this.refreshRuleTextureAtlas();
+        this.refreshRuleTextureAtlas(true);
+        this.refreshShapeAtlas();
         this.observe();
         this.resize();
         this.acquireTextures();
@@ -248,6 +283,7 @@ export class InteractiveRenderer implements RenderClient {
       const next = normalizeInteractiveSettings({ ...this.settings, ...update.settings });
       if (!sameValue(next, this.settings)) {
         const previous = this.settings;
+        if (rigSignature(previous.rig) !== rigSignature(next.rig)) this.suppressRigWhileBuilding = true;
         this.settings = next;
         this.staticDirty = true;
         // Only a change of quality / resolution should restart adaptive resolution; slider drags must not.
@@ -256,7 +292,10 @@ export class InteractiveRenderer implements RenderClient {
           needsResize = true;
         }
         if (!sameValue(previous.interactionColors, next.interactionColors) || previous.interactionColor !== next.interactionColor) this.refreshInteractionColors();
-        if (!sameValue(previous.rig, next.rig)) this.refreshRuleTextureAtlas();
+        if (!sameValue(previous.rig, next.rig)) {
+          this.refreshRuleTextureAtlas();
+          this.refreshShapeAtlas();
+        }
         if (previous.style !== next.style) this.layerState = { ...this.layerState, styleParams: resolveStyleParams(next.style, this.layerState.styleParams) };
         this.pointer.updateOptions(this.pointerOptions());
         this.refreshRigFlags();
@@ -333,6 +372,12 @@ export class InteractiveRenderer implements RenderClient {
     this.hub.cancelFrame(this);
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
+    this.viewObserver?.disconnect();
+    this.viewObserver = null;
+    if (this.viewTimer !== null) clearTimeout(this.viewTimer);
+    this.viewTimer = null;
+    if (this.ruleTextureTimer !== null) clearTimeout(this.ruleTextureTimer);
+    this.ruleTextureTimer = null;
     this.mediaQuery?.removeEventListener('change', this.handleMotionChange);
     window.removeEventListener('resize', this.handleWindowResize);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
@@ -342,15 +387,13 @@ export class InteractiveRenderer implements RenderClient {
     this.hub.programs.release(this.entry);
     this.hub.resources.releaseLut(this.paletteHandle);
     this.hub.resources.releaseLut(this.layerMixHandle);
-    if (this.ruleTextureAtlas) this.hub.gpu.gl?.deleteTexture(this.ruleTextureAtlas);
-    this.ruleTextureAtlas = null;
-    this.ruleTextureImage = null;
+    this.freeRuleTexture();
+    this.freeShapeTexture();
     this.entry = null;
     this.paletteHandle = null;
     this.layerMixHandle = null;
-    this.ruleTextureAtlas = null;
     this.ruleTextureKey = '';
-    this.ruleTextureImage = null;
+    this.shapeKey = '';
     this.proceduralState = null;
     if (this.registered) this.hub.unregister(this);
     this.registered = false;
@@ -360,8 +403,7 @@ export class InteractiveRenderer implements RenderClient {
 
   getLoad(): LayerLoad | null {
     if (this.disposed) return null;
-    const cssWidth = this.canvas.clientWidth;
-    const cssHeight = this.canvas.clientHeight;
+    const { width: cssWidth, height: cssHeight } = this.displaySize();
     if (!cssWidth || !cssHeight) return null;
     const preset = QUALITY_PRESETS[this.settings.quality];
     return {
@@ -389,6 +431,10 @@ export class InteractiveRenderer implements RenderClient {
     this.pending = null;
     this.paletteHandle = null;
     this.layerMixHandle = null;
+    this.ruleTextureAtlas = null;
+    this.shapeAtlas = null;
+    this.ruleTextureKey = '';
+    this.shapeKey = '';
     this.builtKey = '';
     this.proceduralBuilt = false;
     this.setStatus('context-lost', 'WebGL context lost. Waiting for the browser to restore it.');
@@ -400,7 +446,9 @@ export class InteractiveRenderer implements RenderClient {
       this.staticDirty = true;
       this.proceduralDirty = true;
       this.ruleTextureKey = '';
-      this.refreshRuleTextureAtlas();
+      this.shapeKey = '';
+      this.refreshRuleTextureAtlas(true);
+      this.refreshShapeAtlas();
       this.acquireTextures();
       this.resize();
       this.beginBuild(true);
@@ -431,51 +479,97 @@ export class InteractiveRenderer implements RenderClient {
     };
   }
 
-  private refreshRuleTextureAtlas() {
-    const key = JSON.stringify(this.settings.rig.rules.map(rule => rule.texture));
+  /* ───────────── rule textures and custom shapes ───────────── */
+
+  private freeRuleTexture() {
+    if (this.ruleTextureAtlas) this.hub.gpu.gl?.deleteTexture(this.ruleTextureAtlas);
+    this.ruleTextureAtlas = null;
+  }
+
+  private freeShapeTexture() {
+    if (this.shapeAtlas) this.hub.gpu.gl?.deleteTexture(this.shapeAtlas);
+    this.shapeAtlas = null;
+  }
+
+  /** Builds the CSS texture atlas of the rules. The texture exists only while a rule uses one, and edits are applied once
+   *  the slider has paused, so dragging a texture control never decodes an atlas per tick. */
+  private refreshRuleTextureAtlas(immediate = false) {
+    const rules = activeRules(this.settings.rig);
+    const key = JSON.stringify(rules.map(rule => rule.texture.enabled ? rule.texture : 0));
     if (key === this.ruleTextureKey) return;
     this.ruleTextureKey = key;
     const request = ++this.ruleTextureRequest;
-    const uri = ruleTextureAtlasDataUri(this.settings.rig);
-    const upload = (image?: HTMLImageElement) => {
-      const gl = this.hub.gpu.gl;
-      if (!gl || !this.registered || this.disposed || request !== this.ruleTextureRequest) return;
-      if (!this.ruleTextureAtlas) this.ruleTextureAtlas = gl.createTexture();
-      if (!this.ruleTextureAtlas) {
-        this.setStatus('ready', 'Could not allocate the interaction texture atlas.');
-        return;
-      }
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this.ruleTextureAtlas);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      if (image) {
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-      } else {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
-      }
-      if (gl.getError() !== gl.NO_ERROR) {
-        this.setStatus('ready', 'Could not upload an interaction texture; other shader effects remain available.');
-        return;
-      }
+    if (this.ruleTextureTimer !== null) { clearTimeout(this.ruleTextureTimer); this.ruleTextureTimer = null; }
+    if (!rules.some(rule => rule.texture.enabled)) {
+      this.freeRuleTexture();
       this.schedule();
-    };
-    if (!uri) {
-      this.ruleTextureImage = null;
-      upload();
       return;
     }
-    const image = new Image();
-    this.ruleTextureImage = image;
-    image.onload = () => upload(image);
-    image.onerror = () => {
-      if (request === this.ruleTextureRequest) this.setStatus('ready', 'Could not load an interaction texture; check the selected texture preset.');
+    const run = () => {
+      this.ruleTextureTimer = null;
+      if (request !== this.ruleTextureRequest || this.disposed) return;
+      const uri = ruleTextureAtlasDataUri(this.settings.rig);
+      if (!uri) { this.freeRuleTexture(); this.schedule(); return; }
+      loadAtlasImage(uri).then(
+        image => this.uploadRuleTexture(image, request),
+        () => { if (request === this.ruleTextureRequest) this.setStatus('ready', 'Could not load an interaction texture; check the selected texture preset.'); },
+      );
     };
-    image.src = uri;
+    if (immediate) run();
+    else this.ruleTextureTimer = setTimeout(run, TEXTURE_DEBOUNCE_MS);
+  }
+
+  private uploadRuleTexture(image: HTMLImageElement, request: number) {
+    const gl = this.hub.gpu.gl;
+    if (!gl || !this.registered || this.disposed || request !== this.ruleTextureRequest) return;
+    if (!this.ruleTextureAtlas) this.ruleTextureAtlas = gl.createTexture();
+    if (!this.ruleTextureAtlas) {
+      this.setStatus('ready', 'Could not allocate the interaction texture atlas.');
+      return;
+    }
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.ruleTextureAtlas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // the shader reads the atlas in image order (row 0 = top), so it must NOT be flipped on upload
+    gl.pixelStorei?.(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    if (gl.getError() !== gl.NO_ERROR) {
+      this.setStatus('ready', 'Could not upload an interaction texture; other shader effects remain available.');
+      return;
+    }
+    this.schedule();
+  }
+
+  /** Bakes custom outlines into the distance-field atlas. Cheap (a few kB), synchronous and never recompiles the shader. */
+  private refreshShapeAtlas() {
+    const key = shapeAtlasKey(this.settings.rig);
+    if (key === this.shapeKey) return;
+    this.shapeKey = key;
+    const gl = this.hub.gpu.gl;
+    if (!gl || !this.registered || this.disposed) return;
+    const data = key ? bakeShapeAtlas(this.settings.rig) : null;
+    if (!data) { this.freeShapeTexture(); this.schedule(); return; }
+    if (!this.shapeAtlas) this.shapeAtlas = gl.createTexture();
+    if (!this.shapeAtlas) {
+      this.setStatus('ready', 'Could not allocate the custom shape texture.');
+      return;
+    }
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.shapeAtlas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei?.(gl.UNPACK_FLIP_Y_WEBGL, 0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHAPE_ATLAS_WIDTH, SHAPE_ATLAS_HEIGHT, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    if (gl.getError() !== gl.NO_ERROR) {
+      this.setStatus('ready', 'Could not upload the custom shape; other shader effects remain available.');
+      return;
+    }
+    this.schedule();
   }
 
   /** What the shader is built from: interaction rules, quality, and which procedural distortion types exist. */
@@ -489,7 +583,12 @@ export class InteractiveRenderer implements RenderClient {
   private ensureBuild() {
     if (!this.registered || this.disposed || !this.hub.available) return;
     const key = this.desiredKey(true);
-    if (key === this.builtKey || key === this.pending?.key || this.failedKeys.has(key)) return;
+    if (this.pending && this.pending.key !== key) this.discardPending();
+    if (key === this.builtKey) {
+      this.suppressRigWhileBuilding = false;
+      return;
+    }
+    if (key === this.pending?.key || this.failedKeys.has(key)) return;
     this.beginBuild(true);
   }
 
@@ -545,6 +644,7 @@ export class InteractiveRenderer implements RenderClient {
     this.builtKey = pending.key;
     this.proceduralBuilt = pending.withProcedural;
     this.pending = null;
+    this.suppressRigWhileBuilding = false;
     this.hub.programs.release(previous);
     this.hub.programs.locate(pending.entry);
     this.proceduralDirty = true;
@@ -618,16 +718,53 @@ export class InteractiveRenderer implements RenderClient {
       });
       this.intersectionObserver.observe(this.canvas);
     }
+    // The studio preview zooms and pans with a CSS transform on `.gs-world`, which no resize observer reports. Watching its
+    // style lets a layer re-measure after a zoom has settled, so a layer shown small renders small and one zoomed in sharpens.
+    const world = typeof this.canvas.closest === 'function' ? this.canvas.closest('.gs-world') : null;
+    if (world && typeof MutationObserver !== 'undefined') {
+      this.viewObserver = new MutationObserver(() => this.scheduleViewCheck());
+      this.viewObserver.observe(world, { attributes: true, attributeFilter: ['style'] });
+    }
   }
 
   private readonly handleWindowResize = () => this.resize();
+
+  private scheduleViewCheck() {
+    if (this.viewTimer !== null) clearTimeout(this.viewTimer);
+    this.viewTimer = setTimeout(() => { this.viewTimer = null; this.checkView(); }, VIEW_SETTLE_MS);
+  }
+
+  private checkView() {
+    if (this.disposed || !this.registered) return;
+    const { width } = this.displaySize();
+    if (!width || Math.abs(width - this.measuredWidth) < Math.max(24, this.measuredWidth * 0.1)) return;
+    this.resize();
+    this.schedule();
+  }
+
+  /** The canvas as the person sees it: its layout size scaled by whatever CSS transform the preview applies. Never larger
+   *  than the layout size, so zooming in cannot raise the cost of a layer. */
+  private displaySize(): { width: number; height: number } {
+    const canvas = this.canvas;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height || typeof canvas.getBoundingClientRect !== 'function') return { width, height };
+    const rect = canvas.getBoundingClientRect();
+    if (!(rect.width > 0) || !(rect.height > 0)) return { width, height };
+    return {
+      width: Math.max(1, Math.round(width * clamp(rect.width / width, 0.08, 1))),
+      height: Math.max(1, Math.round(height * clamp(rect.height / height, 0.08, 1))),
+    };
+  }
 
   /** `measure` = the CSS size (or quality) may have changed, so the shared budget must be recomputed. */
   private resize(measure = true) {
     if (!this.registered || this.disposed || !this.hub.available) return;
     if (measure) this.hub.invalidateBudget();
     const scale = this.hub.scaleFor(this);
-    const { width, height } = renderSize(this.canvas.clientWidth, this.canvas.clientHeight, scale);
+    const display = this.displaySize();
+    this.measuredWidth = display.width;
+    const { width, height } = renderSize(display.width, display.height, scale);
     this.pointer.invalidateRect();
     this.proceduralDirty = true;
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -686,6 +823,7 @@ export class InteractiveRenderer implements RenderClient {
   }
 
   private refreshRigFlags() {
+    // texture rules that drift, spin or twinkle need a frame every tick even while the pointer is away
     this.rigAmbient = activeRules(this.settings.rig).some(rule => rule.source === 'orbit' || rule.source === 'fixed'
       || (rule.source === 'symmetry' && rule.sp2 !== 0) || rule.drives.some(item => item.source.startsWith('lfo')));
   }
@@ -722,6 +860,7 @@ export class InteractiveRenderer implements RenderClient {
     set2f('uPointer', pointerX, pointerY);
     set2f('uVelocity', pointer.vx, pointer.vy);
     set1f('uPointerActive', reacts || idlePointer ? pointerActive : 0);
+    set1f('uInputActive', reacts && this.pointer.hasPointer() ? 1 : 0);
     set1f('uPointerDown', reacts ? pointer.down : 0);
     set1f('uTime', settings.animate ? this.shaderTime : 0);
     set1f('uClock', this.clock);
@@ -734,6 +873,9 @@ export class InteractiveRenderer implements RenderClient {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.ruleTextureAtlas);
     gl.uniform1i(loc.uRuleTextureAtlas ?? null, 2);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.shapeAtlas);
+    gl.uniform1i(loc.uRuleShapeAtlas ?? null, 3);
 
     const rippleCount = this.refreshRippleData();
     set1f('uRippleCount', rippleCount);
@@ -773,17 +915,25 @@ export class InteractiveRenderer implements RenderClient {
       frame.clock = this.clock;
       frame.trailLife = settings.rig.physics.trailLife;
       if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
-      evaluateRig(settings.rig, frame, this.rigBuffers, { radiusScale: settings.interactionRadius, reaction, enabled: reacts || idlePointer });
+      evaluateRig(settings.rig, frame, this.rigBuffers, {
+        radiusScale: settings.interactionRadius,
+        reaction,
+        enabled: !this.suppressRigWhileBuilding && (reacts || idlePointer),
+        canvasHeight: this.canvas.clientHeight || 800,
+      });
       packTrail(this.pointer.getEngine(), frame, this.rigBuffers, reacts);
-      gl.uniform4fv(loc['uRuleB[0]'] ?? null, this.rigBuffers.b);
-      gl.uniform4fv(loc['uRuleC[0]'] ?? null, this.rigBuffers.c);
-      gl.uniform4fv(loc['uRuleD[0]'] ?? null, this.rigBuffers.d);
-      gl.uniform4fv(loc['uRuleE[0]'] ?? null, this.rigBuffers.e);
-      gl.uniform4fv(loc['uRuleF[0]'] ?? null, this.rigBuffers.f);
-      gl.uniform4fv(loc['uRuleG[0]'] ?? null, this.rigBuffers.g);
-      gl.uniform4fv(loc['uRuleH[0]'] ?? null, this.rigBuffers.h);
-      gl.uniform4fv(loc['uRuleI[0]'] ?? null, this.rigBuffers.i);
-      gl.uniform4fv(loc['uTrail[0]'] ?? null, this.rigBuffers.trail);
+      const rig = this.rigBuffers;
+      gl.uniform4fv(loc['uRuleB[0]'] ?? null, rig.b);
+      gl.uniform4fv(loc['uRuleC[0]'] ?? null, rig.c);
+      gl.uniform4fv(loc['uRuleD[0]'] ?? null, rig.d);
+      gl.uniform4fv(loc['uRuleE[0]'] ?? null, rig.e);
+      gl.uniform4fv(loc['uRuleF[0]'] ?? null, rig.f);
+      gl.uniform4fv(loc['uRuleG[0]'] ?? null, rig.g);
+      gl.uniform4fv(loc['uRuleH[0]'] ?? null, rig.h);
+      gl.uniform4fv(loc['uRuleI[0]'] ?? null, rig.i);
+      gl.uniform4fv(loc['uRuleJ[0]'] ?? null, rig.j);
+      gl.uniform4fv(loc['uRuleK[0]'] ?? null, rig.k);
+      gl.uniform4fv(loc['uTrail[0]'] ?? null, rig.trail);
       gl.uniform3f(loc.uTouch2 ?? null, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
     }
     gl.drawArrays(gl.TRIANGLES, 0, 6);

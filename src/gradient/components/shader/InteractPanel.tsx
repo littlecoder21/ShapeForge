@@ -5,7 +5,7 @@ import { DEFAULT_INTERACTIVE_SETTINGS, type InteractiveSettings } from '../../in
 import {
   RIG_EFFECTS, RIG_EFFECT_GROUPS, RIG_MAX_RULES, describeRig, instantiateRig, makeDrive, makeRule, newRuleId, normalizeRig, type InteractionRig, type RigEffectDef, type RigRule,
 } from '../../interactive/rig/model';
-import { RIG_PRESETS, RIG_PRESET_GROUPS, RIG_PRESET_MAP } from '../../interactive/rig/presets';
+import { ALL_RIG_PRESETS, ALL_RIG_PRESET_GROUPS, ALL_RIG_PRESET_MAP } from '../../interactive/rig/presetCatalog';
 import { useStudio } from '../ui';
 import { Num, Section, Select } from './parts';
 import RuleCard from './RuleCard';
@@ -32,7 +32,7 @@ export default function InteractPanel() {
   const { announce } = useStudio();
   const { settings, update, updateRig, targets, patchLayers, primary } = useShader();
   const rig = settings.rig;
-  const [group, setGroup] = useState<string>(RIG_PRESET_MAP[rig.presetId]?.group ?? RIG_PRESET_GROUPS[0]);
+  const [group, setGroup] = useState<string>(ALL_RIG_PRESET_MAP[rig.presetId]?.group ?? ALL_RIG_PRESET_GROUPS[0]);
   const [saved, setSaved] = useState<SavedRig[]>([]);
   const [saveName, setSaveName] = useState('');
   const [jsonText, setJsonText] = useState('');
@@ -52,9 +52,9 @@ export default function InteractPanel() {
     } catch { /* ignore a corrupt list */ }
   }, []);
 
-  const presets = useMemo(() => RIG_PRESETS.filter(item => item.group === group), [group]);
-  const activePreset = RIG_PRESET_MAP[rig.presetId];
-  const setRules = (rules: RigRule[], coalesce?: string) => updateRig(current => ({ ...current, presetId: '', name: current.presetId ? `${RIG_PRESET_MAP[current.presetId]?.label ?? 'Custom'} (edited)` : current.name, rules }), coalesce);
+  const presets = useMemo(() => ALL_RIG_PRESETS.filter(item => item.group === group), [group]);
+  const activePreset = ALL_RIG_PRESET_MAP[rig.presetId];
+  const setRules = (rules: RigRule[], coalesce?: string) => updateRig(current => ({ ...current, presetId: '', name: current.presetId ? `${ALL_RIG_PRESET_MAP[current.presetId]?.label ?? 'Custom'} (edited)` : current.name, rules }), coalesce);
   const changeRule = (index: number, next: RigRule, coalesce?: string) => setRules(rig.rules.map((rule, i) => i === index ? next : rule), coalesce ? `rule-${coalesce}` : undefined);
   const moveRule = (index: number, direction: -1 | 1) => {
     const rules = [...rig.rules];
@@ -70,10 +70,12 @@ export default function InteractPanel() {
     setOpenRule(rule.id);
   };
   const choosePreset = (id: string) => {
-    const preset = RIG_PRESET_MAP[id];
+    const preset = ALL_RIG_PRESET_MAP[id];
     if (!preset) return;
     const next = preset.build();
-    update({ rig: next, interactionEnabled: true });
+    // The always-on base response (gradient warp + colour displacement) shows the same bulge around the pointer whatever the
+    // preset is, which made every style look alike. A chosen style now starts as itself; the base sliders stay available below.
+    update({ rig: next, interactionEnabled: true, interactionDistortion: 0, interactionDisplacement: 0 });
     setOpenRule(next.rules[0]?.id ?? null);
   };
   const persist = (list: SavedRig[], message?: string) => {
@@ -114,7 +116,7 @@ export default function InteractPanel() {
 
     <Section title="Interaction style" aside={describeRig(rig)}>
       <div className="gs-chip-row" role="tablist" aria-label="Interaction groups">
-        {RIG_PRESET_GROUPS.map(item => <button key={item} type="button" role="tab" aria-selected={group === item} className={`chip ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)}>{item}</button>)}
+        {ALL_RIG_PRESET_GROUPS.map(item => <button key={item} type="button" role="tab" aria-selected={group === item} className={`chip ${group === item ? 'active' : ''}`} onClick={() => setGroup(item)}>{item}</button>)}
       </div>
       <div className="gs-preset-grid" data-testid="shader-rig-presets">
         {presets.map(preset => <button key={preset.id} type="button" className={`gs-preset-card ${rig.presetId === preset.id ? 'active' : ''}`} onClick={() => choosePreset(preset.id)} title={preset.description} aria-pressed={rig.presetId === preset.id} data-testid={`shader-rig-preset-${preset.id}`}>
@@ -183,7 +185,7 @@ export default function InteractPanel() {
     </Section>
 
     <Section title="Base response" open={false}>
-      <p className="hint">Always-on reactions underneath the builder: gradient warp, colour displacement and glitch.</p>
+      <p className="hint">Always-on reactions underneath the builder: gradient warp, colour displacement and glitch. Choosing an interaction style switches the warp and displacement off so the style shows as itself; raise them here to blend the base reaction back in.</p>
       <Num label="Interaction strength" value={settings.interactionStrength} min={0} max={1} def={DEFAULT_INTERACTIVE_SETTINGS.interactionStrength} onChange={interactionStrength => update({ interactionStrength }, 'interaction')} testId="shader-interaction-strength" />
       <Num label="Gradient distortion" value={settings.interactionDistortion} min={0} max={1} def={DEFAULT_INTERACTIVE_SETTINGS.interactionDistortion} onChange={interactionDistortion => update({ interactionDistortion }, 'distortion')} testId="shader-interaction-distortion" />
       <Select id="shader-displacement-mode" label="Colour displacement direction" value={settings.interactionDisplacementMode} options={[{ id: 'push', label: 'Push colours away' }, { id: 'pull', label: 'Pull colours toward cursor' }]} onChange={interactionDisplacementMode => update({ interactionDisplacementMode })} />

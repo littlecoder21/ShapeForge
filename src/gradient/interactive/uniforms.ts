@@ -1,7 +1,7 @@
 /** Every uniform the fragment shader declares. `uOctaves`, `uWarpDepth` and the old `uPointerMode` are gone:
  *  quality is a compile-time constant now and the pointer reaction is generated from the interaction rig. */
 export const UNIFORM_NAMES = [
-  'uResolution', 'uPointer', 'uVelocity', 'uPointerActive', 'uPointerDown', 'uTime', 'uClock', 'uAspect',
+  'uResolution', 'uPointer', 'uVelocity', 'uPointerActive', 'uInputActive', 'uPointerDown', 'uTime', 'uClock', 'uAspect',
   'uStyle', 'uStyleP', 'uGradientKind', 'uGradientAngle', 'uGradientOrigin', 'uGradientRadius', 'uShaderMix',
   'uInteractionColor', 'uInteractionColors[0]', 'uInteractionColorCount', 'uInteractionColorMix',
   'uInteractionColorSpeed', 'uInteractionFalloff', 'uInteractionDistortion', 'uInteractionDisplacement',
@@ -13,5 +13,6 @@ export const UNIFORM_NAMES = [
   'uPaletteAlpha[0]', 'uRipples[0]', 'uWrapMode', 'uToneMap', 'uVignette',
   'uSheen', 'uGrain', 'uLutEnabled', 'uPaletteLut', 'uProjectOutput',
   'uLayerMixEnabled', 'uLayerMixMode', 'uLayerMixStrength', 'uLayerMixSpeed', 'uLayerMixLut',
-  'uRuleB[0]', 'uRuleC[0]', 'uRuleD[0]', 'uRuleE[0]', 'uRuleF[0]', 'uRuleG[0]', 'uRuleH[0]', 'uRuleI[0]', 'uRuleTextureAtlas', 'uTrail[0]', 'uTouch2',
+  'uRuleB[0]', 'uRuleC[0]', 'uRuleD[0]', 'uRuleE[0]', 'uRuleF[0]', 'uRuleG[0]', 'uRuleH[0]', 'uRuleI[0]', 'uRuleJ[0]', 'uRuleK[0]',
+  'uRuleTextureAtlas', 'uRuleShapeAtlas', 'uTrail[0]', 'uTouch2',
 ] as const;

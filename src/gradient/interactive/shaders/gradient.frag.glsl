@@ -8,6 +8,7 @@ uniform vec2 uResolution;
 uniform vec2 uPointer;
 uniform vec2 uVelocity;
 uniform float uPointerActive;
+uniform float uInputActive;
 uniform float uPointerDown;
 uniform float uTime;
 uniform float uClock;

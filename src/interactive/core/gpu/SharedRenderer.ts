@@ -28,6 +28,18 @@ export interface SharedRendererOptions {
   canvasFactory?: CanvasFactory;
   /** how long the context is kept after the last layer left (ms) */
   disposeDelay?: number;
+  /** force the phone-class frame cap on or off (default: on for touch-first devices) */
+  coarsePointer?: boolean;
+}
+
+/** Touch-first devices (phones, tablets) get a frame cap: shader layers there are fill-rate bound, and 90 / 120 Hz
+ *  displays would otherwise ask the GPU for twice the work for motion nobody can tell apart. */
+function detectCoarsePointer(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
 }
 
 /* The shared rendering engine of the preview.
@@ -54,6 +66,7 @@ export class SharedRenderer {
   private readonly overlay: PerfOverlay | null;
   private readonly scheduler: FrameScheduler;
   private readonly disposeDelay: number;
+  private readonly coarse: boolean;
   private readonly clients = new Map<number, RenderClient>();
   private readonly dirty = new Set<RenderClient>();
   private allocation = new Map<number, number>();
@@ -61,6 +74,8 @@ export class SharedRenderer {
   private nextId = 1;
   private frameId = 0;
   private lastTick = 0;
+  /** when the last frame was actually drawn (for the frame cap); 0 while idle */
+  private lastRenderAt = 0;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private lastDrawnPixels = 0;
@@ -70,6 +85,7 @@ export class SharedRenderer {
   constructor(options: SharedRendererOptions = {}) {
     this.scheduler = options.scheduler ?? getFrameScheduler();
     this.disposeDelay = options.disposeDelay ?? 2000;
+    this.coarse = options.coarsePointer ?? detectCoarsePointer();
     this.gpu = new SharedGpuContext(options.canvasFactory);
     this.programs = new ShaderProgramManager(this.gpu);
     this.resources = new GpuResourceManager(this.gpu);
@@ -182,10 +198,24 @@ export class SharedRenderer {
 
   /* ───────────── frame loop ───────────── */
 
+  /** Shortest time between two drawn frames (ms); 0 = every display frame. Phones draw at most 45 fps, and at most 30 fps once
+   *  three or more shader layers are on screen, so a stack of layers cannot saturate the GPU or heat the device. */
+  private frameInterval(): number {
+    if (!this.coarse) return 0;
+    return this.clients.size >= 3 ? 1000 / 30 : 1000 / 45;
+  }
+
   private readonly tick = (now: number) => {
     this.frameId = 0;
     const gl = this.gpu.gl;
     if (this.disposed || !gl || this.gpu.lost) { this.dirty.clear(); return; }
+    const interval = this.frameInterval();
+    if (interval > 0 && this.lastRenderAt > 0 && now - this.lastRenderAt < interval - 2) {
+      // too soon for the cap: keep every waiting layer queued and try again on the next display frame
+      if (this.dirty.size && !this.frameId) this.frameId = this.scheduler.request(this.tick);
+      return;
+    }
+    this.lastRenderAt = interval > 0 ? now : 0;
     this.diagnostics.beginFrame(now, gl);
     // ONE controller judges the real frame interval for every layer (never across an idle gap)
     if (this.lastTick) {
@@ -212,13 +242,14 @@ export class SharedRenderer {
     this.programs.sweep();
     // a layer may have asked for a frame while rendering (frameId is already set then): never queue a second callback
     if (this.dirty.size) { if (!this.frameId) this.frameId = this.scheduler.request(this.tick); }
-    else { this.lastTick = 0; this.diagnostics.idle(); }
+    else { this.lastTick = 0; this.lastRenderAt = 0; this.diagnostics.idle(); }
   };
 
   private stopLoop() {
     if (this.frameId) this.scheduler.cancel(this.frameId);
     this.frameId = 0;
     this.lastTick = 0;
+    this.lastRenderAt = 0;
     this.diagnostics.idle();
   }
 
