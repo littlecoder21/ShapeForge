@@ -53,6 +53,9 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
     ...layer.shader?.controls,
     style: layer.shader?.style ?? config.style,
   }), [config, layer.shader?.controls, layer.shader?.style]);
+  const singlePassProceduralMesh = !!layer.shader?.procedural?.enabled
+    && layer.shader.procedural.mode === 'full'
+    && layer.shader.procedural.mesh.render === 'unified-field';
   const rendererSettings = useMemo(() => ({
     ...settings,
     interactionColor: settings.interactionColorSource === 'layer'
@@ -61,8 +64,10 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
     interactionColors: settings.interactionColorSource === 'layer'
       ? interactionColorsForLayer(adapted.palette)
       : settings.interactionColors,
-    renderBackend: settings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' as const : settings.renderBackend,
-  }), [settings, layer, adapted.palette]);
+    renderBackend: singlePassProceduralMesh
+      ? 'webgl' as const
+      : settings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' as const : settings.renderBackend,
+  }), [settings, layer, adapted.palette, singlePassProceduralMesh]);
   const styleParamsKey = (layer.shader?.styleParams ?? []).join(',');
   const layerState = useMemo<InteractiveLayerState>(() => ({
     styleParams: resolveStyleParams(settings.style, layer.shader?.styleParams),

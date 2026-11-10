@@ -587,13 +587,15 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     fragmentIndex: number;
   }[] = targets.map(layer => {
     const adapter = gradientLayerToShader(layer, project);
+    const procedural = proceduralOf(layer);
+    const unifiedProceduralMesh = procedural?.mode === 'full' && procedural.mesh.render === 'unified-field';
     const layerInteractionColors = interactionColorsForLayer(adapter.palette);
     const mixSource = project.layers.find(candidate => candidate.id === layer.shader?.mixLayerId && candidate.visible && candidate.id !== layer.id);
     const mixAdapter = mixSource ? gradientLayerToShader(mixSource, project) : null;
     const style = layer.shader?.style ?? defaultSettings.style;
     return {
       layer,
-      procedural: proceduralOf(layer),
+      procedural,
       fragmentIndex: 0,
       layerState: {
         styleParams: resolveStyleParams(style, layer.shader?.styleParams),
@@ -614,7 +616,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
       } : {}),
       style,
       ...(layer.shader?.controls ?? {}),
-      renderBackend: defaultSettings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' : defaultSettings.renderBackend,
+      renderBackend: unifiedProceduralMesh ? 'webgl' : defaultSettings.renderBackend === 'webgl' && !supportsDirectShaderGeometry(layer) ? 'overlay' : defaultSettings.renderBackend,
       },
       adapter,
     };
@@ -668,7 +670,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
   });
   const stylesheet = [
     layers.css,
-    'html,body{margin:0;min-height:100%;}body{min-height:100vh;}canvas[data-shader-canvas]{display:block;} .gs-shader-export-layer::after{z-index:2;} .gs-shader-export-layer.gs-webgl-ready{background-image:none!important;background-color:transparent!important;} .gs-shader-export-layer.gs-webgl-ready>.mesh-point-0,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-1,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-2,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-3,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-4,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-5,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-6,.gs-shader-export-layer.gs-webgl-ready>.mesh-point-7{display:none!important;}',
+    'html,body{margin:0;min-height:100%;}body{min-height:100vh;}canvas[data-shader-canvas]{display:block;} .gs-shader-export-layer::after{z-index:2;} .gs-shader-export-layer.gs-webgl-ready{background-image:none!important;background-color:transparent!important;} .gs-shader-export-layer.gs-webgl-ready>[class^="mesh-point-"]{display:none!important;}',
   ].join('\n');
   const markup = html;
   const body = [

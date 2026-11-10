@@ -3,7 +3,7 @@ import { proceduralizeSource, type ProceduralSource } from './convert';
 import { PROCEDURAL_PRESETS, applyPreset, isLocked, parsePresetFile, randomizeProcedural, reseed, serializePresetFile } from './presets';
 import { bakeColorLut, createProceduralState, forceDisplacement, generatePoints, motionPosition, pointCount, PROC_MAX_POINTS } from './proceduralRuntime';
 import {
-  DEFAULT_PROCEDURAL, MOTION_TYPES, POINT_DISTRIBUTIONS, newProcedural, normalizeProcedural, parseProcedural, proceduralSignature, serializeProcedural,
+  DEFAULT_PROCEDURAL, FIELD_METHODS, MOTION_TYPES, POINT_DISTRIBUTIONS, newProcedural, normalizeProcedural, parseProcedural, proceduralSignature, serializeProcedural,
   type ProceduralConfig,
 } from './types';
 
@@ -39,6 +39,20 @@ describe('procedural model', () => {
     expect(proceduralSignature(moved)).toBe(proceduralSignature(base));
     expect(proceduralSignature({ ...base, enabled: false })).toBe('off');
     expect(proceduralSignature(normalizeProcedural({ ...base, distortion: [{ type: 'wave' }, {}, {}] }))).toBe('on:wave,none,none');
+  });
+  it('accepts and serializes the added radial kernels without changing existing defaults', () => {
+    for (const method of ['inverse-multiquadric', 'wendland-c2'] as const) {
+      const current = config({ field: { method } });
+      expect(current.field.method).toBe(method);
+      expect(parseProcedural(serializeProcedural(current))?.field.method).toBe(method);
+    }
+    expect(newProcedural().field.method).toBe('gaussian');
+  });
+  it('packs every field method into its matching shader index', () => {
+    FIELD_METHODS.forEach((method, index) => {
+      const state = createProceduralState(config({ field: { method } }));
+      expect(state.buffers.a[2]).toBe(index);
+    });
   });
 });
 
@@ -233,6 +247,25 @@ describe('packing for the shader', () => {
     const f1 = Array.from(fixed.buffers.colors.slice(0, 3));
     for (let i = 0; i < 120; i++) fixed.step(1 / 60, PLAY, 1, 1);
     expect(Array.from(fixed.buffers.colors.slice(0, 3))).toEqual(f1);
+  });
+  it('palette cycling animates pinned mesh anchors in the unified field', () => {
+    const anchors = [
+      { x: 0.2, y: 0.8, color: '#ff0000', radius: 0.3, weight: 1, size: 50 },
+      { x: 0.8, y: 0.2, color: '#0000ff', radius: 0.3, weight: 1, size: 50 },
+    ];
+    const cycling = createProceduralState(
+      config({
+        points: { min: 2, max: 2 },
+        anchors,
+        mesh: { source: 'layer', render: 'unified-field' },
+        color: { source: 'layer', cycleSpeed: 2, variance: 0 },
+      }),
+      { lut: bakeColorLut(['#ff0000', '#0000ff']) },
+    );
+    cycling.step(1 / 60, PLAY, 1, 1);
+    const initial = Array.from(cycling.buffers.colors.slice(0, 8));
+    for (let i = 0; i < 120; i++) cycling.step(1 / 60, PLAY, 1, 1);
+    expect(Array.from(cycling.buffers.colors.slice(0, 8))).not.toEqual(initial);
   });
   it('lowers the octave cap without rebuilding', () => {
     const state = createProceduralState(config());

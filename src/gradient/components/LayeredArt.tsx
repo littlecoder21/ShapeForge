@@ -26,7 +26,8 @@ function LayeredArt({ project: source, rootClass, playing = false, interactiveSh
   return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId} data-single-layer={project !== source ? 'on' : undefined}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} scope={rootClass} />)}
     {[...visible].reverse().map(l => <i key={l.id} className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}>
-      {project.shader?.enabled && l.shader?.enabled && project.shader.renderBackend !== 'css'
+      {project.shader?.enabled && l.shader?.enabled && (project.shader.renderBackend !== 'css'
+        || (l.shader.procedural?.enabled && l.shader.procedural.mode === 'full' && l.shader.procedural.mesh.render === 'unified-field'))
         && (!singleLayer.active || l.id === singleLayer.hostId)
         && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
       {l.text

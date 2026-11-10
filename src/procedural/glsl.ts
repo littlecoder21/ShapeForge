@@ -229,14 +229,21 @@ vec4 procSample(vec2 uv) {
       else if (method < 1.5) w = exp(-dn * dn * mix(1.5, 9.0, falloff));
       else if (method < 2.5) w = pow(1.0 - smoothstep(0.0, 1.0, dn), mix(0.6, 3.0, falloff));
       else if (method < 3.5) w = pow(max(1.0 - dn, 0.0), expo);
-      else w = exp(-dn * dn * mix(0.8, 6.0, falloff));
+      else if (method < 5.5) w = exp(-dn * dn * mix(0.8, 6.0, falloff));
+      else if (method < 6.5) {
+        float scaled = dn * mix(1.0, 4.0, falloff);
+        w = inversesqrt(1.0 + scaled * scaled);
+      } else {
+        float support = max(1.0 - dn, 0.0);
+        w = support * support * support * support * (4.0 * dn + 1.0);
+      }
       w = pow(max(w, 0.0), overlapPow) * pt.w * strength;
       accum += uProcColors[i].rgb * w;
       wsum += w;
       uncovered *= 1.0 - clamp(w, 0.0, 1.0);
     }
     encoded = wsum > 0.00001 ? accum / wsum : uProcBase.rgb;
-    cover = (method < 0.5 || method > 4.5) ? 1.0 : 1.0 - uncovered;
+    cover = (method < 0.5 || (method > 4.5 && method < 6.5)) ? 1.0 : 1.0 - uncovered;
   }
   if (uProcA.x > 1.5) {
     return vec4(procGrade(procDecode(mix(uProcBase.rgb, encoded, cover), uProcC.z)), 1.0);

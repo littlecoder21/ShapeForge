@@ -29,6 +29,8 @@ const METHOD_INDEX = {
   radial: 3,
   smin: 4,
   soft: 5,
+  "inverse-multiquadric": 6,
+  "wendland-c2": 7,
 };
 const SPACE_INDEX = { srgb: 0, linear: 1, oklab: 2 };
 const MODE_INDEX = { hybrid: 1, full: 2 };
@@ -591,6 +593,7 @@ export function createProceduralState(initial, options = {}) {
   let octaveCap = options.octaveCap || 6;
   let points = [];
   let time = 0;
+  let paletteTime = 0;
   let clock = 0;
   let acc = 0;
   let settling = false;
@@ -716,8 +719,13 @@ export function createProceduralState(initial, options = {}) {
         const p = points[i];
         const at = positions[i] || [p.x, p.y];
         let rgb = p.color;
-        if (p.t >= 0 && cycle !== 0)
-          rgb = lutAt(sourceLut, mirror(p.t + cycle));
+        const palettePosition = p.t >= 0
+          ? p.t
+          : cycle !== 0 && p.size !== undefined
+            ? (points.length === 1 ? 0.5 : i / (points.length - 1))
+            : -1;
+        if (palettePosition >= 0 && cycle !== 0)
+          rgb = lutAt(sourceLut, mirror(palettePosition + cycle));
         encodeColor(rgb[0], rgb[1], rgb[2], 0, buffers.colors, j * 4);
         const core = p.core !== undefined ? p.core : num(mesh.core, 40);
         buffers.colors[j * 4 + 3] = layered ? 0 : cssHintExponent(core);
@@ -752,7 +760,13 @@ export function createProceduralState(initial, options = {}) {
       const p = points[i];
       const at = positions[i] || [p.x, p.y];
       let rgb = p.color;
-      if (p.t >= 0 && cycle !== 0) rgb = lutAt(sourceLut, mirror(p.t + cycle));
+      const palettePosition = p.t >= 0
+        ? p.t
+        : cycle !== 0 && p.size !== undefined
+          ? (points.length === 1 ? 0.5 : i / (points.length - 1))
+          : -1;
+      if (palettePosition >= 0 && cycle !== 0)
+        rgb = lutAt(sourceLut, mirror(palettePosition + cycle));
       encodeColor(rgb[0], rgb[1], rgb[2], space, buffers.colors, i * 4);
       buffers.points[i * 4] = at[0];
       buffers.points[i * 4 + 1] = at[1];
@@ -838,6 +852,7 @@ export function createProceduralState(initial, options = {}) {
       buffers.e[0] = isCss() ? 1 : 0;
       const dtMotion = Math.max(0, dt) * Math.max(0, motionScale);
       time += dtMotion * (config.motion.speed > 0 ? 1 : 0);
+      paletteTime += dtMotion;
       buffers.d[1] = time;
       clock += Math.max(0, dt);
       const m = config.motion;
@@ -969,7 +984,7 @@ export function createProceduralState(initial, options = {}) {
       }
       pack(
         config.color.cycleSpeed !== 0
-          ? time * config.color.cycleSpeed * 0.05
+          ? paletteTime * config.color.cycleSpeed * 0.05
           : 0,
         asp,
       );

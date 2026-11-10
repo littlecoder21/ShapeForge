@@ -49,6 +49,14 @@ describe('procedural GLSL injection', () => {
     for (const bound of loops) expect(/^\d+$/.test(bound)).toBe(true);
     expect(all).not.toMatch(/\d\s%\s\d|\bwhile\b/);
   });
+  it('generates distinct inverse-multiquadric and compact-support kernels', () => {
+    const inverse = generateProceduralGlsl(cfg({ field: { method: 'inverse-multiquadric' } })).functions;
+    const compact = generateProceduralGlsl(cfg({ field: { method: 'wendland-c2' } })).functions;
+    expect(inverse).toContain('inversesqrt(1.0 + scaled * scaled)');
+    expect(inverse).not.toContain('support * support * support * support');
+    expect(compact).toContain('support * support * support * support * (4.0 * dn + 1.0)');
+    expect(compact).not.toContain('inversesqrt(1.0 + scaled * scaled)');
+  });
   it('fails loudly if the template changes and an anchor disappears or repeats', () => {
     expect(() => injectProceduralGlsl(TEMPLATE.replace(PROC_ANCHORS.warp, ''), cfg())).toThrow(/warp/);
     expect(() => injectProceduralGlsl(TEMPLATE.replace(PROC_ANCHORS.color, `${PROC_ANCHORS.color}\n${PROC_ANCHORS.color}`), cfg())).toThrow(/color/);

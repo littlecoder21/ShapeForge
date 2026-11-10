@@ -7,6 +7,8 @@ import { generateMesh, meshLayout, MESH_PATTERNS, newMeshPoint, type MeshPattern
 import { IDENTITY, uid, type GradientLayer, type MeshPoint } from '../engine/model';
 import { mulberry } from '../engine/rng';
 import { useStore } from '../engine/store';
+import { newProcedural, normalizeProcedural } from '../../procedural/types';
+import { normalizeInteractiveSettings, normalizeShaderLayer } from '../interactive/types';
 import { ColorInput, useStudio } from './ui';
 
 const PALETTES: [string, string[]][] = [
@@ -58,6 +60,33 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
   const pts = layer.mesh.points, sel = pts.find(p => p.id === selId) ?? null, seed = layer.mesh.seed ?? 7;
 
   const setMesh = (fn: (m: GradientLayer['mesh']) => GradientLayer['mesh'], key?: string) => store.updateLayer(layerId, l => ({ ...l, mesh: fn(l.mesh) }), { coalesce: key });
+  const proceduralEnabled = layer.shader?.procedural?.enabled === true;
+  const setProceduralEnabled = (enabled: boolean) => {
+    store.update(project => ({
+      ...project,
+      shader: enabled ? normalizeInteractiveSettings({ ...project.shader, enabled: true }) : project.shader,
+      layers: project.layers.map(current => {
+        if (current.id !== layerId) return current;
+        const procedural = normalizeProcedural({
+          ...(current.shader?.procedural ?? newProcedural()),
+          enabled,
+          mode: 'full',
+          mesh: {
+            ...(current.shader?.procedural?.mesh ?? newProcedural().mesh),
+            source: 'layer',
+            render: 'unified-field',
+          },
+        });
+        return {
+          ...current,
+          shader: normalizeShaderLayer({ ...current.shader, enabled, procedural }),
+        };
+      }),
+    }), { coalesce: 'mesh-procedural-render' });
+    announce(enabled
+      ? 'Mesh is using a single-pass procedural WebGL field. CSS remains the fallback and import source.'
+      : 'Procedural mesh rendering is off. The original CSS mesh is visible again.');
+  };
   const sliderGesture = { onBegin: () => store.begin(), onCommit: () => store.end() };
   const setPt = (id: string, p: Partial<MeshPoint>, key?: string) => setMesh(m => ({ ...m, points: m.points.map(x => (x.id === id ? { ...x, ...p } : x)) }), key);
   const add = () => {
@@ -145,6 +174,15 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
   const pointTransform = { ...IDENTITY, ...(sel?.transform ?? {}) };
 
   return <div data-testid="mesh-panel">
+    <Section title="Procedural WebGL">
+      <Switch
+        label="Render this mesh as one WebGL field"
+        checked={proceduralEnabled}
+        onChange={setProceduralEnabled}
+        testId="mesh-procedural-webgl"
+      />
+      <p className="hint">Combines the mesh colors in one shader pass. The original layered CSS mesh stays saved and is used for CSS output and as a WebGL fallback.</p>
+    </Section>
     <Section title="Colour points" hint={`${pts.length} points`}>
       <p className="hint">Drag points on the canvas. Drag the square handle to resize. Double-tap empty canvas to add a point.</p>
       <div className="gs-chips" role="listbox" aria-label="Mesh points">

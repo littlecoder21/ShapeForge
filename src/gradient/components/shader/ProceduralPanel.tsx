@@ -24,7 +24,16 @@ const LABEL = (id: string) => id.replace(/([a-z])([A-Z0-9])/g, '$1 $2').replace(
 const options = <T extends string>(ids: readonly T[], overrides: Partial<Record<T, string>> = {}) => ids.map(id => ({ id, label: overrides[id] ?? LABEL(id) }));
 
 const MODE_LABEL = { hybrid: 'Hybrid · over the manual gradient', full: 'Full · replaces the gradient colours' } as const;
-const FIELD_LABEL = { idw: 'Inverse distance', gaussian: 'Gaussian', smooth: 'Smooth falloff', radial: 'Radial', smin: 'Smooth-min (metaballs)', soft: 'Soft blend (softmax)' } as const;
+const FIELD_LABEL = {
+  idw: 'Inverse distance',
+  gaussian: 'Gaussian',
+  smooth: 'Smooth falloff',
+  radial: 'Radial',
+  smin: 'Smooth-min (metaballs)',
+  soft: 'Wide Gaussian',
+  'inverse-multiquadric': 'Inverse multiquadric',
+  'wendland-c2': 'Compact support (Wendland C2)',
+} as const;
 const MOTION_LABEL = { static: 'Static', orbit: 'Orbit the centre', circle: 'Circular', figure8: 'Figure eight', sine: 'Sine wave', drift: 'Organic drift', noise: 'Noise-driven', flow: 'Flow field', wander: 'Random wander', follow: 'Follow the pointer' } as const;
 const DIST_LABEL = { none: 'None', fbm: 'FBM noise', warp: 'Domain warp', multiwarp: 'Multi-level warp', turbulence: 'Turbulence', curl: 'Curl-noise flow', polar: 'Polar twist', radial: 'Radial ripple', wave: 'Waves', flow: 'Directional flow', rotate: 'Rotate', scale: 'Scale' } as const;
 const FORCE_LABEL = { none: 'No reaction', attract: 'Attract', repel: 'Repel', swirl: 'Swirl', vortex: 'Vortex', push: 'Push with motion', pull: 'Pull against motion', ripple: 'Ripple', wave: 'Wave', fluid: 'Fluid drag' } as const;
@@ -285,7 +294,8 @@ export default function ProceduralPanel() {
       <Select id="procedural-space" label="Blend in" value={config.color.interpolation} options={options(COLOR_SPACES, { srgb: 'sRGB', linear: 'Linear light', oklab: 'OKLab (perceptual)' })} onChange={value => setField('color', 'interpolation', value)} />
       <Switch label="Shuffle colour order" checked={config.color.shuffle} onChange={value => setField('color', 'shuffle', value)} testId="procedural-shuffle" />
       <Num label="Colour variance" value={config.color.variance} min={0} max={1} def={def.color.variance} onChange={value => setField('color', 'variance', value)} />
-      <Num label="Palette cycling" value={config.color.cycleSpeed} min={R.color.cycleSpeed.min} max={R.color.cycleSpeed.max} def={def.color.cycleSpeed} onChange={value => setField('color', 'cycleSpeed', value)} />
+      <Switch label="Animate between colour stops" checked={config.color.cycleSpeed !== 0} onChange={enabled => setField('color', 'cycleSpeed', enabled ? (def.color.cycleSpeed || 0.5) : 0)} testId="procedural-palette-animation" />
+      {config.color.cycleSpeed !== 0 && <Num label="Animation speed" value={config.color.cycleSpeed} min={R.color.cycleSpeed.min} max={R.color.cycleSpeed.max} def={def.color.cycleSpeed} onChange={value => setField('color', 'cycleSpeed', value)} testId="procedural-palette-speed" />}
       <Num label="Hue shift" value={config.color.hue} min={-180} max={180} step={1} unit="°" def={def.color.hue} onChange={value => setField('color', 'hue', value)} />
       <Num label="Saturation" value={config.color.saturation} min={R.color.saturation.min} max={R.color.saturation.max} def={def.color.saturation} onChange={value => setField('color', 'saturation', value)} />
       <Num label="Exposure" value={config.color.exposure} min={R.color.exposure.min} max={R.color.exposure.max} def={def.color.exposure} onChange={value => setField('color', 'exposure', value)} />

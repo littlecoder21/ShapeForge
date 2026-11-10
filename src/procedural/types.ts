@@ -25,7 +25,7 @@ export type PointDistribution = typeof POINT_DISTRIBUTIONS[number];
 export const MOTION_TYPES = ['static', 'orbit', 'circle', 'figure8', 'sine', 'drift', 'noise', 'flow', 'wander', 'follow'] as const;
 export type MotionType = typeof MOTION_TYPES[number];
 
-export const FIELD_METHODS = ['idw', 'gaussian', 'smooth', 'radial', 'smin', 'soft'] as const;
+export const FIELD_METHODS = ['idw', 'gaussian', 'smooth', 'radial', 'smin', 'soft', 'inverse-multiquadric', 'wendland-c2'] as const;
 export type FieldMethod = typeof FIELD_METHODS[number];
 
 export const DISTORTION_TYPES = ['none', 'fbm', 'warp', 'multiwarp', 'turbulence', 'curl', 'polar', 'radial', 'wave', 'flow', 'rotate', 'scale'] as const;
@@ -143,7 +143,7 @@ export interface ProceduralConfig {
     strength: number;
     /** curve shape: 0 wide & soft, 1 tight & sharp */
     falloff: number;
-    /** blend softness (smooth-min width, softmax temperature) */
+    /** smooth-min blend width */
     softness: number;
     /** influence exponent (inverse-distance power, radial power) */
     exponent: number;

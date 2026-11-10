@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Switch } from '../../shared/controls';
+import { normalizeInteractiveSettings } from '../interactive/types';
 import { freshIds } from '../engine/model';
 import { CATEGORIES, getPresets, type Preset } from '../engine/presets';
 import PresetCard from './PresetCard';
@@ -25,7 +26,18 @@ export default function PresetsPanel({ onApplied }: { onApplied?: () => void }) 
 
   const apply = (p: Preset) => {
     const project = freshIds(p.build());
-    store.update(cur => ({ ...cur, name: add ? cur.name : project.name, background: add ? cur.background : project.background, layers: add ? [...project.layers, ...cur.layers] : project.layers }));
+    const shaderPreset = p.tags.includes('shader');
+    store.update(cur => ({
+      ...cur,
+      name: add ? cur.name : project.name,
+      background: add ? cur.background : project.background,
+      layers: add ? [...project.layers, ...cur.layers] : project.layers,
+      ...(shaderPreset ? {
+        shader: add
+          ? normalizeInteractiveSettings({ ...cur.shader, enabled: true, renderBackend: 'webgl' })
+          : project.shader ?? cur.shader,
+      } : {}),
+    }));
     store.select((project.layers.find(l => l.type !== 'noise') ?? project.layers[0]).id); setLast(p.id); announce(`${add ? 'Added' : 'Applied'} “${p.name}”`); onApplied?.();
   };
 

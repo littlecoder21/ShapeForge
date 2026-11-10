@@ -3,13 +3,16 @@ import { buildAurora, auroraPalette, auroraSky } from './aurora';
 import { newEffect } from './effects';
 import { newLayer, newProject, stop, type GradientLayer, type GradientProject } from './model';
 import { mulberry } from './rng';
+import { meshLayout, newMeshPoint } from './mesh';
+import { normalizeInteractiveSettings, normalizeShaderLayer } from '../interactive/types';
+import { newProcedural } from '../../procedural/types';
 
-/* ═══════════ Preset library (220 presets) ═══════════
+/* ═══════════ Preset library ═══════════
  * A preset is only a *recipe* that builds an ordinary project (layers, stops, effects, animation).
  * Nothing about it is special — every layer stays fully editable after it is applied.
  */
 
-export const CATEGORIES = ['Aurora', 'Mesh', 'Soft', 'Neon', 'Metallic', 'Atmospheric', 'Glass', 'Light', 'Dark', 'Editorial', 'Abstract', 'Repeating', 'Experimental'] as const;
+export const CATEGORIES = ['Aurora', 'Mesh', 'Procedural', 'Soft', 'Neon', 'Metallic', 'Atmospheric', 'Glass', 'Light', 'Dark', 'Editorial', 'Abstract', 'Repeating', 'Experimental'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export interface Preset { id: string; name: string; category: Category; tags: string[]; build: () => GradientProject }
 
@@ -24,6 +27,39 @@ const blur = (r: number) => [newEffect('blur', { radius: r })];
 const blob = (cx: number, cy: number, size: number, c: string, a = 0.9, o: Partial<GradientLayer> = {}) => rad(cx, cy, size, size * 1.5, [[c, 0, a], [c, 100, 0, undefined, 45]], o);
 const proj = (name: string, bg: string, layers: GradientLayer[]) => newProject({ name, background: bg, layers });
 const mk = (category: Category, i: number, name: string, tags: string[], build: () => GradientProject): Preset => ({ id: `${category.toLowerCase()}-${i + 1}`, name, category, tags, build });
+const stage = (type: string, extra: Record<string, unknown> = {}) => ({ type, ...extra });
+const none = () => stage('none');
+
+function proceduralMeshProject(name: string, colors: string[], base: string, seed: number, settings: Record<string, unknown>) {
+  const positions = meshLayout(colors.length, 'organic', seed);
+  const colorSettings = settings.color && typeof settings.color === 'object'
+    ? settings.color as Record<string, unknown>
+    : {};
+  const mesh = {
+    points: positions.map((position, index) => newMeshPoint(position.x, position.y, colors[index], 1, 50)),
+    base,
+    core: 42,
+    seed,
+  };
+  const procedural = newProcedural({
+    ...settings,
+    color: { ...colorSettings, source: 'custom', colors },
+    enabled: true,
+    mode: 'full',
+    mesh: { source: 'layer', render: 'unified-field', composite: 'background', base, core: 42, opacity: 1 },
+  });
+  const layer = newLayer('mesh', {
+    name,
+    mesh,
+    shader: normalizeShaderLayer({ enabled: true, procedural }),
+  });
+  return newProject({
+    name,
+    background: base,
+    layers: [layer],
+    shader: normalizeInteractiveSettings({ enabled: true, animate: true, renderBackend: 'webgl', style: 'flow' }),
+  });
+}
 
 const out: Preset[] = [];
 let built = false;
@@ -47,7 +83,7 @@ function aurora() {
   })))));
 }
 
-/* ───────── Mesh-like (20) ───────── */
+/* ───────── Mesh-like (30) ───────── */
 function mesh() {
   const R: [string, number[], boolean][] = [
     ['Candy Floss', [330, 285, 200, 50, 350], true], ['Neon Garden', [150, 190, 280, 320, 60], false], ['Peach Fizz', [20, 350, 40, 300, 10], true], ['Deep Lagoon', [190, 220, 160, 270, 200], false],
@@ -65,6 +101,136 @@ function mesh() {
     const layers = hues.map((h, k) => blob(pos[k][0] + (rnd() - 0.5) * 8, pos[k][1] + (rnd() - 0.5) * 8, 42 + rnd() * 22, light ? H(h, 88, 74) : H(h, 85, 52), 0.95));
     return proj(name, light ? H(hues[4], 45, 94) : H(hues[4], 50, 8), layers);
   })));
+
+  const shaders: { name: string; colors: string[]; base: string; settings: Record<string, unknown> }[] = [
+    {
+      name: 'Midnight Prism',
+      colors: ['#05060f', '#141a52', '#3a4fd6', '#8ab4ff', '#f2f7ff'],
+      base: '#05060f',
+      settings: {
+        points: { min: 5, max: 5, density: 0, distribution: 'circular', spread: 0.9, variance: 0, radius: 0.48 },
+        field: { method: 'idw', radius: 1.2, exponent: 1.2, base: '#05060f' },
+        motion: { type: 'orbit', speed: 1, amplitude: 0.08, smoothness: 0.9, randomness: 0 },
+        distortion: [{ type: 'warp', scale: 1, intensity: 0.3, octaves: 3, speed: 0.3 }, none(), none()],
+        color: { source: 'custom', colors: ['#05060f', '#141a52', '#3a4fd6', '#8ab4ff', '#f2f7ff'], interpolation: 'oklab', cycleSpeed: 0.18, variance: 0, contrast: 1.1 },
+      },
+    },
+    {
+      name: 'Prismatic Tide',
+      colors: ['#ff4d8d', '#ffbd59', '#f7f779', '#43e6c1', '#4b8cff', '#b86bff'],
+      base: '#071020',
+      settings: { points: { min: 6, max: 6, distribution: 'organic', radius: 0.4 }, field: { method: 'wendland-c2', radius: 1.15, strength: 1.15 }, motion: { type: 'flow', speed: 0.5, amplitude: 0.1, frequency: 1.1 }, distortion: [stage('wave', { frequency: 2.3, intensity: 0.42, speed: 0.35, direction: 25 }), stage('warp', { scale: 1.1, intensity: 0.22, speed: 0.2 }), none()], color: { source: 'custom', cycleSpeed: 0.28, saturation: 1.08, contrast: 1.08 } },
+    },
+    {
+      name: 'Cobalt Aurora',
+      colors: ['#061326', '#123b75', '#2376d2', '#52d6e8', '#b8f5ff'],
+      base: '#061326',
+      settings: { points: { min: 5, max: 5, distribution: 'grid', radius: 0.44 }, field: { method: 'gaussian', radius: 1.2, falloff: 0.38, softness: 0.75 }, motion: { type: 'sine', speed: 0.38, amplitude: 0.12, frequency: 0.8, smoothness: 0.95 }, distortion: [stage('wave', { frequency: 2.2, intensity: 0.5, speed: 0.28, direction: 90 }), stage('curl', { scale: 1, intensity: 0.18, speed: 0.16 }), none()], color: { source: 'custom', temperature: -0.1, saturation: 1.05 } },
+    },
+    {
+      name: 'Velvet Orbit',
+      colors: ['#170b29', '#4a236e', '#9b4d96', '#ed88a8', '#ffd4bc'],
+      base: '#170b29',
+      settings: { points: { min: 5, max: 5, distribution: 'circular', radius: 0.46 }, field: { method: 'soft', radius: 1.15, softness: 0.72, overlap: 0.82 }, motion: { type: 'orbit', speed: 0.42, amplitude: 0.1, smoothness: 0.9 }, distortion: [stage('multiwarp', { scale: 1.05, intensity: 0.32, octaves: 3, speed: 0.22 }), none(), none()], color: { source: 'custom', cycleSpeed: 0.12, temperature: 0.08, contrast: 1.08 } },
+    },
+    {
+      name: 'Ultraviolet Reef',
+      colors: ['#09071b', '#4722a8', '#a42bdb', '#20d5d0', '#b6ffda'],
+      base: '#09071b',
+      settings: { points: { min: 5, max: 5, distribution: 'cluster', radius: 0.34, variance: 0.3 }, field: { method: 'smin', radius: 1, softness: 0.68, overlap: 0.68 }, motion: { type: 'wander', speed: 0.45, amplitude: 0.11, randomness: 0.5 }, distortion: [stage('curl', { scale: 1.35, intensity: 0.42, speed: 0.28 }), stage('turbulence', { scale: 1.5, intensity: 0.22, octaves: 3, speed: 0.18 }), none()], color: { source: 'custom', cycleSpeed: 0.18, saturation: 1.18, contrast: 1.12 } },
+    },
+    {
+      name: 'Desert Glass',
+      colors: ['#29140f', '#8f3d28', '#d87946', '#f2bd78', '#fff0cc'],
+      base: '#29140f',
+      settings: { points: { min: 5, max: 5, distribution: 'organic', radius: 0.48 }, field: { method: 'inverse-multiquadric', radius: 1.25, falloff: 0.42 }, motion: { type: 'drift', speed: 0.28, amplitude: 0.07, smoothness: 0.94 }, distortion: [stage('wave', { frequency: 1.8, intensity: 0.25, speed: 0.2, direction: 15 }), stage('warp', { scale: 0.9, intensity: 0.16, speed: 0.12 }), none()], color: { source: 'custom', temperature: 0.2, exposure: 0.04, contrast: 1.06 } },
+    },
+    {
+      name: 'Glacier Pulse',
+      colors: ['#061a2b', '#0b5270', '#35a9c8', '#a6e9f2', '#f2ffff'],
+      base: '#061a2b',
+      settings: { points: { min: 5, max: 5, distribution: 'circular', radius: 0.5 }, field: { method: 'wendland-c2', radius: 1.25, strength: 1.1, softness: 0.62 }, motion: { type: 'circle', speed: 0.32, amplitude: 0.065, smoothness: 0.96 }, distortion: [stage('radial', { frequency: 2.2, intensity: 0.26, speed: 0.25 }), stage('warp', { scale: 1.15, intensity: 0.14, speed: 0.1 }), none()], color: { source: 'custom', cycleSpeed: 0.1, saturation: 0.96, exposure: 0.06, contrast: 1.04, temperature: -0.15 } },
+    },
+    {
+      name: 'Amber Ink',
+      colors: ['#090706', '#382013', '#9a451b', '#ed8b24', '#ffe29a'],
+      base: '#090706',
+      settings: { points: { min: 5, max: 5, distribution: 'cluster', radius: 0.36, variance: 0.32 }, field: { method: 'smin', radius: 0.95, softness: 0.58, exponent: 2.4 }, motion: { type: 'noise', speed: 0.42, amplitude: 0.1, smoothness: 0.78 }, distortion: [stage('turbulence', { noise: 'value', scale: 1.8, intensity: 0.42, octaves: 4, turbulence: 0.62, speed: 0.3 }), stage('curl', { scale: 1.2, intensity: 0.18, speed: 0.16 }), none()], color: { source: 'custom', interpolation: 'linear', cycleSpeed: 0.12, temperature: 0.22, contrast: 1.18 } },
+    },
+    {
+      name: 'Jade Nebula',
+      colors: ['#04130f', '#0b4935', '#168b64', '#55d6a5', '#d5ffe8'],
+      base: '#04130f',
+      settings: { points: { min: 5, max: 5, distribution: 'organic', radius: 0.42 }, field: { method: 'soft', radius: 1.2, softness: 0.72 }, motion: { type: 'flow', speed: 0.34, amplitude: 0.085, smoothness: 0.9 }, distortion: [stage('multiwarp', { scale: 1.15, intensity: 0.36, octaves: 3, speed: 0.2 }), stage('fbm', { scale: 1, intensity: 0.18, octaves: 3, speed: 0.12 }), none()], color: { source: 'custom', cycleSpeed: 0.14, saturation: 1.08, contrast: 1.12, temperature: -0.08 } },
+    },
+    {
+      name: 'Rose Circuit',
+      colors: ['#100b21', '#542478', '#ed4d9b', '#ffb2cf', '#27d8de'],
+      base: '#100b21',
+      settings: { points: { min: 5, max: 5, distribution: 'grid', radius: 0.4 }, field: { method: 'inverse-multiquadric', radius: 1.05, strength: 1.15, falloff: 0.62 }, motion: { type: 'figure8', speed: 0.58, amplitude: 0.095, smoothness: 0.84 }, distortion: [stage('wave', { frequency: 3, intensity: 0.38, speed: 0.38, direction: 35 }), stage('rotate', { intensity: 0.12, speed: 0.16 }), none()], color: { source: 'custom', cycleSpeed: 0.22, saturation: 1.18, contrast: 1.16 } },
+    },
+    {
+      name: 'Ink Nebula',
+      colors: ['#05060f', '#17203c', '#343b72', '#7688bd', '#e3e9f4'],
+      base: '#05060f',
+      settings: { points: { min: 5, max: 5, distribution: 'cluster', radius: 0.5 }, field: { method: 'idw', radius: 1.35, exponent: 0.8, overlap: 0.9 }, motion: { type: 'drift', speed: 0.22, amplitude: 0.055, smoothness: 0.98 }, distortion: [stage('warp', { scale: 0.85, intensity: 0.48, octaves: 4, speed: 0.18 }), stage('curl', { scale: 1.3, intensity: 0.18, speed: 0.12 }), none()], color: { source: 'custom', cycleSpeed: 0.08, variance: 0, contrast: 1.18, saturation: 0.82 } },
+    },
+    {
+      name: 'Blue Hour',
+      colors: ['#030817', '#092b59', '#116fa5', '#55c7d9', '#ddfbff'],
+      base: '#030817',
+      settings: { points: { min: 6, max: 6, distribution: 'organic', radius: 0.44 }, field: { method: 'gaussian', radius: 1.1, falloff: 0.52, softness: 0.68 }, motion: { type: 'flow', speed: 0.38, amplitude: 0.1, frequency: 0.9, smoothness: 0.88 }, distortion: [stage('fbm', { scale: 1.4, intensity: 0.42, octaves: 4, speed: 0.22 }), stage('wave', { frequency: 2, intensity: 0.24, direction: 70, speed: 0.18 }), none()], color: { source: 'custom', cycleSpeed: 0.14, saturation: 1.08, contrast: 1.12, temperature: -0.12 } },
+    },
+    {
+      name: 'Violet Voltage',
+      colors: ['#09051c', '#35116c', '#8528c7', '#df54ed', '#9de7ff'],
+      base: '#09051c',
+      settings: { points: { min: 5, max: 5, distribution: 'circular', radius: 0.38 }, field: { method: 'inverse-multiquadric', radius: 1.05, falloff: 0.68, exponent: 2.4 }, motion: { type: 'orbit', speed: 0.64, amplitude: 0.13, frequency: 1.2 }, distortion: [stage('multiwarp', { scale: 1.5, intensity: 0.58, octaves: 4, speed: 0.42 }), stage('polar', { frequency: 2.4, intensity: 0.26, speed: 0.24 }), none()], color: { source: 'custom', cycleSpeed: 0.3, variance: 0.12, saturation: 1.28, contrast: 1.2 } },
+    },
+    {
+      name: 'Polar Bloom',
+      colors: ['#06151b', '#0b5558', '#27a98c', '#9ce3b1', '#fff2d6'],
+      base: '#06151b',
+      settings: { points: { min: 6, max: 6, distribution: 'grid', radius: 0.46 }, field: { method: 'soft', radius: 1.2, softness: 0.78, overlap: 0.82 }, motion: { type: 'sine', speed: 0.34, amplitude: 0.12, frequency: 0.75, smoothness: 0.97 }, distortion: [stage('wave', { frequency: 2.1, intensity: 0.56, speed: 0.3, direction: 90 }), stage('curl', { scale: 1.15, intensity: 0.24, speed: 0.18 }), none()], color: { source: 'custom', cycleSpeed: 0.1, saturation: 1.04, contrast: 1.06, temperature: -0.08 } },
+    },
+    {
+      name: 'Solar Current',
+      colors: ['#180607', '#742018', '#dc4e20', '#ffa43b', '#fff0a8'],
+      base: '#180607',
+      settings: { points: { min: 5, max: 5, distribution: 'diagonal', radius: 0.45 }, field: { method: 'smin', radius: 1.08, softness: 0.62, exponent: 2.2 }, motion: { type: 'flow', speed: 0.48, amplitude: 0.1, direction: -1, smoothness: 0.82 }, distortion: [stage('turbulence', { noise: 'value', scale: 1.55, intensity: 0.46, turbulence: 0.72, octaves: 4, speed: 0.34 }), stage('radial', { frequency: 2.1, intensity: 0.2, speed: 0.2 }), none()], color: { source: 'custom', interpolation: 'linear', cycleSpeed: 0.18, temperature: 0.3, contrast: 1.22 } },
+    },
+    {
+      name: 'Crimson Veil',
+      colors: ['#100510', '#52132c', '#aa2445', '#f05b6e', '#ffd0b5'],
+      base: '#100510',
+      settings: { points: { min: 5, max: 5, distribution: 'organic', radius: 0.48 }, field: { method: 'wendland-c2', radius: 1.3, strength: 1.1, overlap: 0.85 }, motion: { type: 'wander', speed: 0.3, amplitude: 0.08, smoothness: 0.94, randomness: 0.35 }, distortion: [stage('curl', { scale: 1.1, intensity: 0.34, speed: 0.2 }), stage('wave', { frequency: 1.7, intensity: 0.22, direction: 20, speed: 0.16 }), none()], color: { source: 'custom', cycleSpeed: 0.12, saturation: 1.08, contrast: 1.16, temperature: 0.14 } },
+    },
+    {
+      name: 'Emerald Pulse',
+      colors: ['#03100d', '#074b3d', '#0c9978', '#58e0b0', '#dcffe8'],
+      base: '#03100d',
+      settings: { points: { min: 6, max: 6, distribution: 'cluster', radius: 0.4, variance: 0.24 }, field: { method: 'gaussian', radius: 1.12, falloff: 0.58, overlap: 0.66 }, motion: { type: 'circle', speed: 0.46, amplitude: 0.12, smoothness: 0.86 }, distortion: [stage('flow', { scale: 1.15, intensity: 0.5, direction: 35, speed: 0.32 }), stage('warp', { scale: 1.35, intensity: 0.2, speed: 0.16 }), none()], color: { source: 'custom', cycleSpeed: 0.2, saturation: 1.14, contrast: 1.14, temperature: -0.1 } },
+    },
+    {
+      name: 'Ghostlight',
+      colors: ['#080b18', '#31395d', '#7b8ab1', '#c4cce0', '#fff8ed'],
+      base: '#080b18',
+      settings: { points: { min: 5, max: 5, distribution: 'radial', radius: 0.52, variance: 0.08 }, field: { method: 'smooth', radius: 1.35, falloff: 0.32, softness: 0.86 }, motion: { type: 'noise', speed: 0.2, amplitude: 0.06, smoothness: 0.98, randomness: 0.16 }, distortion: [stage('warp', { scale: 0.8, intensity: 0.2, octaves: 3, speed: 0.12 }), none(), none()], color: { source: 'custom', cycleSpeed: 0.06, variance: 0, exposure: 0.08, saturation: 0.72, contrast: 1.08 } },
+    },
+    {
+      name: 'Hypernova Field',
+      colors: ['#08051b', '#352184', '#7656e8', '#ff5baa', '#ffe8aa', '#ffffff'],
+      base: '#08051b',
+      settings: { points: { min: 6, max: 6, distribution: 'radial', radius: 0.4, variance: 0.2 }, field: { method: 'idw', radius: 0.82, strength: 1.4, exponent: 2.8, overlap: 0.55 }, motion: { type: 'figure8', speed: 0.72, amplitude: 0.14, smoothness: 0.76, randomness: 0.32 }, distortion: [stage('multiwarp', { scale: 1.8, intensity: 0.65, octaves: 5, speed: 0.5 }), stage('turbulence', { scale: 1.3, intensity: 0.3, turbulence: 0.55, octaves: 3, speed: 0.24 }), stage('wave', { frequency: 3.2, intensity: 0.22, speed: 0.3 })], color: { source: 'custom', cycleSpeed: 0.36, variance: 0.14, saturation: 1.25, contrast: 1.22, exposure: 0.04 } },
+    },
+    {
+      name: 'Silver Nebula',
+      colors: ['#080b12', '#293349', '#63748e', '#c2d0df', '#f7fbff'],
+      base: '#080b12',
+      settings: { points: { min: 5, max: 5, distribution: 'circular', radius: 0.48 }, field: { method: 'inverse-multiquadric', radius: 1.2, falloff: 0.3, exponent: 1.4, overlap: 0.82 }, motion: { type: 'drift', speed: 0.25, amplitude: 0.07, smoothness: 0.96 }, distortion: [stage('curl', { scale: 0.95, intensity: 0.28, speed: 0.16 }), stage('wave', { frequency: 1.5, intensity: 0.16, direction: 45, speed: 0.12 }), none()], color: { source: 'custom', interpolation: 'linear', cycleSpeed: 0.08, saturation: 0.6, contrast: 1.2 } },
+    },
+  ];
+  shaders.forEach(({ name, colors, base, settings }, index) => out.push(mk('Procedural', index, name, ['mesh', 'shader', 'procedural', 'animated'], () => proceduralMeshProject(name, colors, base, 2400 + index * 17, settings))));
 }
 
 /* ───────── Soft (16) ───────── */
