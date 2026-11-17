@@ -1,0 +1,141 @@
+:root {
+  --page: rgb(18, 20, 23);
+  --ink: #fff;
+  --font: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  cursor: url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 28 28' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cg filter='url(%23shadow)'%3E%3Cpath d='M5.08814 5.36283L10.4791 20.7254C10.781 21.5857 11.9824 21.6263 12.3417 20.7884L15.0192 14.5442C15.1203 14.3083 15.3083 14.1203 15.5442 14.0192L21.7884 11.3417C22.6263 10.9824 22.5857 9.78096 21.7254 9.47907L6.36285 4.08812C5.57154 3.81044 4.81046 4.57152 5.08814 5.36283Z' fill='black' stroke='white' stroke-width='2.05556' stroke-linejoin='round'/%3E%3C/g%3E%3Cdefs%3E%3Cfilter id='shadow' x='0' y='0' width='27.4224' height='27.4221' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeColorMatrix in='SourceAlpha' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0' result='hardAlpha'/%3E%3CfeOffset dy='1'/%3E%3CfeGaussianBlur stdDeviation='2'/%3E%3CfeComposite in2='hardAlpha' operator='out'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0'/%3E%3CfeBlend mode='normal' in2='BackgroundImageFix' result='effect1_dropShadow'/%3E%3CfeBlend mode='normal' in='SourceGraphic' in2='effect1_dropShadow' result='shape'/%3E%3C/filter%3E%3C/defs%3E%3C/svg%3E") 5 4, default;
+}
+
+a, a *, button, button *, [role="button"] { cursor: pointer !important; }
+input, textarea { cursor: text !important; }
+
+.defs { position: absolute; }
+
+/* ---------- Background stack ---------- */
+.bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background-image: radial-gradient(55% 105% at 50% 8%, rgb(8, 71, 110) 0%, rgba(9, 9, 18, 0.99) 100%);
+}
+
+/* Spring-driven gradient blobs: JS rewrites `background` every frame. */
+.bg__gradient {
+  position: absolute;
+  inset: 0;
+  border-radius: 80px;
+  overflow: hidden;
+  filter: blur(5px) brightness(0.6);
+  will-change: background;
+  touch-action: none;
+  background:
+    radial-gradient(circle at 50% 50%, rgb(27, 77, 128) 0%, rgb(27, 77, 128) 22%, rgba(0, 0, 0, 0) 60%),
+    radial-gradient(circle at 65% 50%, rgb(6, 17, 38) 0%, rgb(6, 17, 38) 22%, rgba(0, 0, 0, 0) 60%),
+    radial-gradient(circle at 42% 57%, rgb(48, 139, 191) 0%, rgb(48, 139, 191) 22%, rgba(0, 0, 0, 0) 60%);
+}
+
+/* Chromatic WebGL layer, drawn by script.js */
+.bg__chroma {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Soft, rippled vignette */
+.bg__shadow {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.bg__shadow-inner {
+  position: absolute;
+  inset: -20px;
+  background: rgba(0, 0, 0, 0.25);
+  filter: url(#undulate) blur(4px);
+  -webkit-mask-image: radial-gradient(120% 90% at 50% 35%, transparent 25%, #000 100%);
+  mask-image: radial-gradient(120% 90% at 50% 35%, transparent 25%, #000 100%);
+}
+
+/* Film grain */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  opacity: 0.17;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1.6 -.25'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- Content ---------- */
+.hero {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  gap: 1rem;
+  padding: 2rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.6rem, 9vw, 7.5rem);
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  line-height: 0.95;
+  text-shadow: 0 0 70px #ffffff73, 0 0 5px #fff3, 0 10px 30px #00000078;
+}
+
+.hero p {
+  margin: 0 auto;
+  max-width: 34ch;
+  font-size: clamp(0.95rem, 1.6vw, 1.1rem);
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+html, body { touch-action: none; }
+
+.notice {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  z-index: 10;
+  max-width: min(32rem, calc(100% - 2rem));
+  margin: 0;
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  text-align: center;
+  transform: translateX(-50%);
+}

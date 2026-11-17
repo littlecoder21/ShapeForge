@@ -4,7 +4,7 @@
 export type InteractiveStyle =
   | 'flow' | 'aurora' | 'liquid' | 'holographic' | 'plasma' | 'silk' | 'nebula' | 'ribbons' | 'metaballs' | 'contours' | 'smoke' | 'fire'
   | 'marble' | 'waves' | 'topography' | 'crystal' | 'grid' | 'interference' | 'lava' | 'rays' | 'facets' | 'ink' | 'glass' | 'mist' | 'sunset' | 'pixels' | 'galaxy'
-  | 'vortex' | 'embers' | 'weave' | 'chrome' | 'organicCells' | 'botanical' | 'synthwave' | 'crt';
+  | 'vortex' | 'embers' | 'weave' | 'chrome' | 'organicCells' | 'botanical' | 'synthwave' | 'crt' | 'followLight';
 
 export type ShaderStyleGroup = 'Fluid' | 'Atmosphere' | 'Pattern' | 'Material' | 'Organic' | 'Retro';
 
@@ -57,6 +57,7 @@ export const SHADER_STYLE_LIST: ShaderStyleDef[] = [
   { id: 'lava', label: 'Lava lamp', group: 'Material', blurb: 'Gooey blobs that rise and merge', index: 18, isNew: true, params: [sp('Blobs', 2, 8, 5, 1), sp('Size', 0.1, 0.5, 0.24, 0.01), sp('Rise speed', 0, 2, 0.5), sp('Gooeyness', 0, 1, 0.45)] },
   { id: 'glass', label: 'Fluted glass', group: 'Material', blurb: 'Reeded glass that refracts the colours', index: 22, isNew: true, params: [sp('Ribs', 4, 60, 22, 1), sp('Refraction', 0, 1, 0.5), sp('Frost', 0, 1, 0.2), sp('Angle', 0, 180, 0, 1, '°')] },
   { id: 'chrome', label: 'Liquid chrome', group: 'Material', blurb: 'Polished metal with sweeping reflected bands', index: 30, isNew: true, params: [sp('Band scale', 2, 18, 7, 0.5), sp('Reflection', 0, 1, 0.7), sp('Warp', 0, 1, 0.35), sp('Motion', 0, 2, 0.45)] },
+  { id: 'followLight', label: 'Follow the light', group: 'Material', blurb: 'Springy chromatic light trails, liquid drift and moving rays', index: 35, isNew: true, params: [sp('Orbit radius', 0.02, 0.3, 0.15, 0.01), sp('Trail softness', 0, 1, 0.45), sp('Chromatic fringe', 0, 1, 0.35), sp('Ray strength', 0, 1, 0.5)] },
 
   { id: 'organicCells', label: 'Organic cells', group: 'Organic', blurb: 'Soft, living cells with pigment-rich boundaries', index: 31, isNew: true, params: [sp('Cell size', 2, 16, 6, 0.5), sp('Edge glow', 0, 1, 0.45), sp('Drift', 0, 1, 0.3), sp('Irregularity', 0, 1, 0.6)] },
   { id: 'botanical', label: 'Botanical bloom', group: 'Organic', blurb: 'Petal-like forms unfold from a moving centre', index: 32, isNew: true, params: [sp('Petals', 3, 16, 7, 1), sp('Fold', 0, 1, 0.55), sp('Motion', 0, 2, 0.4), sp('Core', 0, 1, 0.5)] },

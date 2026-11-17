@@ -725,7 +725,7 @@ export class InteractiveRenderer {
     gl.uniform4fv(this.uniforms['uRipples[0]'] ?? null, this.rippleData);
 
     // interaction rig: drives are evaluated on the CPU, the shader only receives the final numbers
-    if (!this.builtKey.startsWith('base#') && this.rigRuleCount() > 0) {
+    if (!this.builtKey.startsWith('base#') && (this.rigRuleCount() > 0 || settings.style === 'followLight')) {
       const frame = this.rigFrame;
       Object.assign(frame, pointer);
       frame.clock = this.clock;

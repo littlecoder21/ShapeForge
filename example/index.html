@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Follow the light</title>
+  <meta name="description" content="A pointer and touch reactive gradient background built with plain HTML, CSS and JavaScript.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="undulate">
+        <feTurbulence type="turbulence" baseFrequency="0.000995 0.00398" numOctaves="2" seed="0" result="undulation"/>
+        <feDisplacementMap in="SourceGraphic" in2="undulation" scale="20" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </defs>
+  </svg>
+
+  <div class="bg" aria-hidden="true">
+    <div class="bg__gradient" id="gradient"></div>
+    <canvas class="bg__chroma" id="chroma"></canvas>
+    <div class="bg__shadow"><div class="bg__shadow-inner"></div></div>
+  </div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <main class="hero">
+    <h1>Follow the light.</h1>
+    <p>Move your cursor, or drag a finger, across the screen.</p>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

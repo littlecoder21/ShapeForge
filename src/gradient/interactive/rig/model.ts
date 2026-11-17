@@ -22,7 +22,8 @@ export type RigEffectId =
   | 'lens' | 'bump' | 'mosaic' | 'mirror' | 'kaleido'
   | 'palette' | 'prism' | 'timewarp' | 'hue' | 'saturate' | 'tone' | 'invert' | 'posterize' | 'tint' | 'thinfilm'
   | 'glow' | 'light' | 'spotlight' | 'sparkle' | 'lightning' | 'rings'
-  | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch' | 'texture';
+  | 'glitch' | 'scanlines' | 'halftone' | 'grain' | 'stripes' | 'checker' | 'crosshatch' | 'texture'
+  | 'liquify' | 'chromaticTrail' | 'rayGlow';
 export type RigStage = 'warp' | 'pre' | 'post';
 export type RigShapeId = 'circle' | 'ellipse' | 'box' | 'diamond' | 'line' | 'cross' | 'star' | 'poly'
   | 'capsule' | 'roundBox' | 'triangle' | 'hexagon' | 'ringShape' | 'heart' | 'clover' | 'custom';
@@ -161,6 +162,7 @@ export const RIG_EFFECTS: RigEffectDef[] = [
   { id: 'vortex', label: 'Vortex', stage: 'warp', group: 'Move', icon: '◎', blurb: 'Spins the field while sucking it in (or blowing it out).', amount: amt('Strength', -2, 2, 1), params: [par('Spin', 0, 3, 1.4), par('Suction', -1.5, 1.5, 0.5)] },
   { id: 'magnet', label: 'Magnetic field', stage: 'warp', group: 'Move', icon: '⌖', blurb: 'Bends colours along dipole field lines.', amount: amt('Strength', -2, 2, 1), params: [par('Poles', 1, 6, 2, 1)], defaults: { falloff: 'smooth', radius: 1.4 } },
   { id: 'smear', label: 'Smear', stage: 'warp', group: 'Move', icon: '⇢', blurb: 'Drags the field along with pointer velocity.', amount: amt('Drag', -2, 2, 1.2), params: [par('Length', 0.2, 3, 1)], defaults: { radius: 1.2 } },
+  { id: 'liquify', label: 'Liquify', stage: 'warp', group: 'Move', icon: '〰', blurb: 'Adds rotating, animated liquid flow around the chosen source.', amount: amt('Flow', 0, 2, 0.8), params: [par('Amplitude', 0, 0.2, 0.06, 0.005), par('Frequency', 1, 14, 5, 0.5), par('Speed', 0, 2, 0.5), par('Angle', -180, 180, 0, 1, '°')], defaults: { radius: 1.5 } },
   { id: 'bend', label: 'Directional push', stage: 'warp', group: 'Move', icon: '→', blurb: 'Pushes the field in a fixed direction.', amount: amt('Push', -2, 2, 1), params: [par('Angle', -180, 180, 0, 1, '°')] },
   { id: 'shake', label: 'Shake', stage: 'warp', group: 'Move', icon: '≈', blurb: 'Jitters the field like a handheld camera.', amount: amt('Shake', 0, 2, 1), params: [par('Size', 0, 2, 1), par('Rate', 4, 60, 24, 1, 'Hz')], defaults: { falloff: 'smooth' } },
 
@@ -183,6 +185,7 @@ export const RIG_EFFECTS: RigEffectDef[] = [
 
   { id: 'palette', label: 'Palette slide', stage: 'pre', group: 'Colour', icon: '♨', blurb: 'Slides the colour ramp near the centre, like heat.', amount: amt('Amount', -2, 2, 1), params: [par('Push', -1, 1, 0.5, 0.02), par('Ripple', 0, 1, 0)], defaults: { falloff: 'smooth', radius: 1.4 } },
   { id: 'prism', label: 'Chromatic split', stage: 'pre', group: 'Colour', icon: '◭', blurb: 'Separates red and blue like light through glass.', amount: amt('Amount', -2, 2, 1), params: [par('Spread', 0, 3, 1)], defaults: { falloff: 'smooth', radius: 1.5 } },
+  { id: 'chromaticTrail', label: 'Chromatic trail', stage: 'post', group: 'Colour', icon: '◈', blurb: 'Builds a soft, fading RGB-fringed light trail along recent pointer positions.', amount: amt('Intensity', 0, 2, 1), params: [par('Colour fringe', 0, 1.5, 0.45), par('Softness', 0.02, 0.5, 0.14, 0.01), par('Fade speed', 0, 4, 1.3), par('Hue drift', 0, 2, 0.4)], usesColor: true, defaults: { falloff: 'smooth', radius: 1.1, source: 'trail' } },
   { id: 'hue', label: 'Hue shift', stage: 'post', group: 'Colour', icon: '◑', blurb: 'Rotates colours around the colour wheel.', amount: amt('Amount', -1.5, 1.5, 1), params: [par('Degrees', -180, 180, 100, 1, '°')], defaults: { falloff: 'smooth', radius: 1.3 } },
   { id: 'saturate', label: 'Saturation', stage: 'post', group: 'Colour', icon: '◐', blurb: 'Boosts or drains colour.', amount: amt('Amount', -1, 1, 1), params: [par('Gain', 0, 3, 1.5)], defaults: { falloff: 'smooth' } },
   { id: 'tone', label: 'Contrast & exposure', stage: 'post', group: 'Colour', icon: '◒', blurb: 'Adds contrast and lifts or dims exposure.', amount: amt('Amount', -1, 1, 1), params: [par('Contrast', -1, 2, 0.5), par('Brightness', -1, 1, 0)], defaults: { falloff: 'smooth' } },
@@ -196,6 +199,7 @@ export const RIG_EFFECTS: RigEffectDef[] = [
   { id: 'spotlight', label: 'Spotlight', stage: 'post', group: 'Light', icon: '◔', blurb: 'Darkens everything outside a pool of light.', amount: amt('Darkness', 0, 1, 0.9), params: [], global: true, defaults: { falloff: 'smooth', radius: 1.4 } },
   { id: 'sparkle', label: 'Sparkle', stage: 'post', group: 'Light', icon: '✧', blurb: 'Twinkling star glints.', amount: amt('Intensity', 0, 2, 1), params: [par('Density', 10, 120, 40, 1), par('Amount', 0, 1, 0.18)], usesColor: true, defaults: { falloff: 'smooth', radius: 1.3 } },
   { id: 'lightning', label: 'Lightning', stage: 'post', group: 'Light', icon: 'ϟ', blurb: 'Branching electric arcs.', amount: amt('Intensity', 0, 2, 1), params: [par('Branching', 3, 30, 12, 0.5), par('Flicker', 1, 40, 18, 1, 'Hz'), par('Thickness', 0, 1, 0.5)], usesColor: true, defaults: { falloff: 'smooth', radius: 1.4 } },
+  { id: 'rayGlow', label: 'Pointer rays', stage: 'post', group: 'Light', icon: '✴', blurb: 'Adds soft animated god-ray spokes around the pointer or another chosen source.', amount: amt('Intensity', 0, 2, 0.7), params: [par('Ray count', 3, 48, 22, 1), par('Sharpness', 0.5, 12, 5, 0.5), par('Falloff', 0.2, 5, 1.6, 0.1), par('Speed', -4, 4, 0.7)], usesColor: true, defaults: { falloff: 'smooth', radius: 2 } },
   { id: 'rings', label: 'Contour rings', stage: 'post', group: 'Light', icon: '◌', blurb: 'Crisp concentric lines that travel outward.', amount: amt('Intensity', 0, 2, 1), params: [par('Frequency', 6, 80, 30, 1), par('Speed', -6, 6, 2, 0.25), par('Width', 0.02, 0.5, 0.12, 0.01)], usesColor: true, usesBlend: true, defaults: { falloff: 'smooth', radius: 1.4 } },
 
   { id: 'glitch', label: 'Glitch', stage: 'warp', group: 'Glitch & time', icon: '▥', blurb: 'Slices the field into bands that jump sideways.', amount: amt('Amount', 0, 2, 1), params: [par('Bands', 8, 140, 44, 1), par('Rate', 1, 30, 10, 1, 'Hz')], defaults: { falloff: 'plateau' } },

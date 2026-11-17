@@ -82,6 +82,12 @@ export const RIG_PRESETS: RigPreset[] = [
   make('neon-pulse', 'Neon pulse', C, 'Pulses a saturated, multicolour neon ring.', () => [r('rings', { amount: 1.3, colorMode: 'spectrum', radius: 1.3 }, [24, 3, 0.1]), r('glow', { amount: 0.6, colorMode: 'spectrum' })]),
   make('color-chase', 'Color chase', C, 'Cycles interaction colours along the pointer path.', () => [r('tint', { amount: 1, source: 'trail', radius: 0.7, colorMode: 'spectrum', blend: 'add' })]),
   make('aurora-trail', 'Aurora trail', C, 'Leaves a broad, shifting aurora wake.', () => [r('tint', { amount: 0.8, source: 'trail', radius: 1.4, blend: 'screen' }), r('swirl', { amount: 0.5, source: 'trail', radius: 1.2 })], { physics: { trailLife: 1.4 } }),
+  make('follow-the-light', 'Follow the light', T, 'A springy blue light field with a soft chromatic trail, liquid motion and pointer rays.', () => [
+    r('liquify', { amount: 0.9, radius: 1.5 }, [0.07, 5, 0.45, 0]),
+    r('chromaticTrail', { amount: 1.25, source: 'trail', radius: 1.1, colorMode: 'spectrum' }, [0.5, 0.14, 1.2, 0.45]),
+    r('rayGlow', { amount: 0.7, radius: 2, colorMode: 'spectrum' }, [22, 5, 1.6, 0.7]),
+    r('glow', { amount: 0.55, source: 'trail', radius: 0.8, colorMode: 'spectrum' }),
+  ], { physics: { mode: 'spring', stiffness: 200, damping: 0.55, trailLife: 1.35 } }),
   make('iridescent-sheen', 'Iridescent sheen', C, 'Shifts a spectrum sheen across the pointer field.', () => [r('thinfilm', { amount: 1, radius: 1.5 })]),
   make('spectrum-bloom', 'Spectrum bloom', C, 'Expands a soft bloom that cycles through interaction colours.', () => [r('glow', { amount: 1.2, radius: 1.6, colorMode: 'spectrum', falloff: 'gauss', drives: [drive('lfoSine', 'radius', { mode: 'swing', depth: 0.3, rate: 0.4 })] })]),
   make('rainbow-turbulence', 'Rainbow turbulence', C, 'Injects swirling spectrum turbulence into the gradient.', () => [r('noise', { amount: 1.3 }), r('hue', { amount: 0.8, radius: 1.4 }, [160])]),

@@ -294,6 +294,9 @@ void main() {
   float alpha = 1.0;
   float bands = 1.0;
   float rimLight = 0.0;
+  float styleTrail = 0.0;
+  vec3 styleTrailColor = vec3(0.0);
+  float styleChroma = 0.0;
   vec4 sp = uStyleP;
   vec2 gradientOrigin = uGradientOrigin;
   if (uGradientKind < 0.5 || uGradientKind > 2.5 && uGradientKind < 4.5) gradientOrigin = vec2(0.5);
@@ -641,7 +644,7 @@ void main() {
     float syGrid = 1.0 - smoothstep(0.44, 0.5, max(syF.x, syF.y));
     colorPosition = wrapT(basePosition * 0.45 + 0.25 + fract(syP.y * 0.04) * 0.25);
     rimLight = syGrid * sp.z * 0.75;
-  } else {
+  } else if (uStyle < 34.5) {
     /* CRT phosphor: sp = scanline count, curvature, glow, flicker */
     vec2 crP = warped * (1.0 + dot(warped, warped) * sp.y * 0.35);
     float crLine = 0.72 + 0.28 * sin(crP.y * sp.x * 3.14159265);
@@ -650,12 +653,51 @@ void main() {
     colorPosition = wrapT(basePosition + (crNoise - 0.5) * 0.04);
     alpha *= crLine * crFlicker;
     rimLight = sp.z * (1.0 - crLine) * 0.35;
+  } else {
+    /* Follow the light: moving gradient pools, an analytic soft trail, and pointer-centred rays. */
+    float phase = t * 0.62831853;
+    vec2 lfPointer = 0.5 + (uPointer - 0.5) * 0.5;
+    float lfOrbitRadius = 0.04 + sp.x;
+    vec2 lfOrbitA = 0.5 + vec2(cos(phase), sin(phase)) * lfOrbitRadius;
+    vec2 lfOrbitB = 0.5 + vec2(cos(phase + 2.0943951), sin(phase + 2.0943951)) * lfOrbitRadius;
+    vec2 lfD0 = (p - lfPointer) * vec2(uAspect, 1.0);
+    vec2 lfD1 = (p - lfOrbitA) * vec2(uAspect, 1.0);
+    vec2 lfD2 = (p - lfOrbitB) * vec2(uAspect, 1.0);
+    float lfPools = exp(-dot(lfD0, lfD0) * 5.0) * 0.6
+      + exp(-dot(lfD1, lfD1) * 5.0) * 0.35
+      + exp(-dot(lfD2, lfD2) * 5.0) * 0.35;
+    float lfTrail = 0.0;
+    vec3 lfTrailColor = vec3(0.0);
+    float lfTrailWidth = mix(0.018, 0.11, sp.y);
+    for (int li = 0; li < 12; li++) {
+      vec4 lfPoint = uTrail[li];
+      if (lfPoint.z > 0.001) {
+        vec2 lfDelta = (p - lfPoint.xy) * vec2(uAspect, 1.0);
+        float lfWeight = exp(-dot(lfDelta, lfDelta) / max(lfTrailWidth * lfTrailWidth, 0.0001)) * lfPoint.z;
+        float lfAge = exp(-lfPoint.w * 1.3);
+        vec3 lfColor = sampleInteractionPalette(fract(lfPoint.w * 0.22 + t * 0.04));
+        lfTrail += lfWeight * lfAge;
+        lfTrailColor += lfColor * lfWeight * lfAge;
+      }
+    }
+    vec2 lfRayDelta = (p - lfPointer) * vec2(uAspect, 1.0);
+    float lfRayAngle = atan(lfRayDelta.y, lfRayDelta.x);
+    float lfRayWave = 0.5 + 0.5 * cos(lfRayAngle * 22.0 + t * 0.7 + n * 2.0);
+    float lfRays = pow(lfRayWave, 5.0) * exp(-length(lfRayDelta) * 1.6) * sp.w * uPointerActive;
+    float lfChroma = clamp(sp.z, 0.0, 1.0);
+    colorPosition = wrapT(basePosition * 0.35 + lfPools * 0.22 + n * 0.15 + lfRays * 0.18);
+    rimLight = lfRays * 0.6 + lfPools * 0.12;
+    styleTrail = lfTrail;
+    styleTrailColor = lfTrailColor;
+    styleChroma = lfChroma;
   }
 
   float colorDistortion = interactionWarp * (interactionWave * 0.12 + cos(pointerDistance * 13.0 + uClock) * 0.06);
   colorPosition = wrapT(colorPosition + colorDistortion + displacement * displacementDirection * 0.8 + rgPal);
   cssPosition = clamp(cssPosition + colorDistortion, 0.0, 1.0);
   vec4 color = samplePalette(colorPosition);
+  color.rgb += styleTrailColor * (0.45 + styleChroma * 0.75);
+  color.rgb += vec3(styleTrail * styleChroma * 0.16, styleTrail * 0.05, styleTrail * styleChroma * 0.28);
   color.rgb += samplePalette(wrapT(colorPosition + 0.06)).rgb * rimLight * 0.22;
   if (uMeshCount > 0.5) {
     vec4 meshColor = sampleMesh(warped / vec2(uAspect, 1.0) + 0.5);

@@ -4,6 +4,7 @@ import { Switch } from '../../../shared/controls';
 import { BLEND_MODES, DEFAULT_LAYER_MASK, KIND_LABEL, type LayerMask } from '../../engine/model';
 import { INTERACTIVE_PRESETS } from '../../interactive/presets';
 import { rigFromLegacyMode } from '../../interactive/rig/presets';
+import { instantiateRig } from '../../interactive/rig/model';
 import { DEFAULT_INTERACTIVE_SETTINGS, normalizeInteractiveSettings, type InteractiveSettings, type ShaderLayerColorBlend } from '../../interactive/types';
 import { useStudio } from '../ui';
 import { Num, Section, Select } from './parts';
@@ -45,6 +46,7 @@ export default function SetupPanel() {
 
   const applyLook = (look: { settings: Partial<InteractiveSettings> }) => {
     const next: Partial<InteractiveSettings> = { ...look.settings, enabled: true };
+    if (look.settings.rig) next.rig = instantiateRig(look.settings.rig);
     if (look.settings.pointerMode && !('rig' in look.settings)) next.rig = rigFromLegacyMode(look.settings.pointerMode);
     update(next);
     patchLayers({ enabled: true, style: look.settings.style ?? settings.style, styleParams: undefined });

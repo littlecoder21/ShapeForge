@@ -11,6 +11,7 @@ import { createPointerEngine, createRigBuffers, evaluateRig, packTrail, RIG_TRAI
 import { resolveStyleParams, SHADER_STYLE_INDEX, SHADER_STYLE_LIST, SHADER_STYLE_IDS } from './styles';
 import { POINTER_MODES } from './pointerModes';
 import { normalizeInteractiveSettings, normalizeShaderLayer } from './types';
+import { INTERACTIVE_PRESETS } from './presets';
 
 const template = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
 
@@ -29,17 +30,20 @@ function lintGlsl(source: string) {
   for (const match of source.replace(/uniform [^;]*;/g, '').matchAll(/uRule[BCDEFGH]\[(\d+)\]/g)) assert.ok(Number(match[1]) < RIG_MAX_RULES);
 }
 
-test('the style registry is the single source of truth: 35 styles, contiguous GLSL indices', () => {
-  assert.equal(SHADER_STYLE_LIST.length, 35);
-  assert.equal(SHADER_STYLE_LIST.filter(style => style.isNew).length, 23);
-  assert.deepEqual(SHADER_STYLE_IDS.map(id => SHADER_STYLE_INDEX[id]), Array.from({ length: 35 }, (_, index) => index));
+test('the style registry is the single source of truth: 36 styles, contiguous GLSL indices', () => {
+  assert.equal(SHADER_STYLE_LIST.length, 36);
+  assert.equal(SHADER_STYLE_LIST.filter(style => style.isNew).length, 24);
+  assert.deepEqual(SHADER_STYLE_IDS.map(id => SHADER_STYLE_INDEX[id]), Array.from({ length: 36 }, (_, index) => index));
   assert.equal(SHADER_STYLE_INDEX.smoke, 10);
   assert.equal(SHADER_STYLE_INDEX.fire, 11);
+  assert.equal(SHADER_STYLE_INDEX.followLight, 35);
+  assert.deepEqual(resolveStyleParams('followLight'), [0.15, 0.45, 0.35, 0.5]);
+  assert.ok(INTERACTIVE_PRESETS.some(preset => preset.id === 'follow-light' && preset.settings.style === 'followLight'));
   for (const style of SHADER_STYLE_LIST) {
     assert.ok(style.params.length <= 4, `${style.id} has more than four parameters`);
     if (style.isNew) assert.equal(style.params.length, 4, `${style.id} should expose four controls`);
     // every index has a branch in the shader (the last style is the final else)
-    if (style.index < 34) assert.ok(template.includes(`uStyle < ${style.index}.5`), `no branch for style ${style.id}`);
+    if (style.index < 35) assert.ok(template.includes(`uStyle < ${style.index}.5`), `no branch for style ${style.id}`);
   }
 });
 

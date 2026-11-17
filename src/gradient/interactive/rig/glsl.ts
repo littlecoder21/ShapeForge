@@ -80,6 +80,10 @@ export const RIG_EFFECT_GLSL: Record<RigEffectId, string> = {
   vortex: 'p += (rgPerpUv * rgP1 - rgDirUv * rgP2) * rgA * 0.2;',
   magnet: 'float rgTh = atan(rgD.y, rgD.x) * rgP1; p += (rgDirUv * cos(rgTh) + rgPerpUv * sin(rgTh)) * rgA * 0.12;',
   smear: 'p -= rgVel * rgA * 0.14 * rgP1;',
+  liquify: `vec2 rgLq = rigRot(rgD, rgP4 * 0.0174533 + rgT * rgP3);
+float rgLqX = sin(rgLq.y * rgP2 * 6.2831853 + rgT * 0.8);
+float rgLqY = cos(rgLq.x * rgP2 * 6.2831853 - rgT * 0.65);
+p += vec2(rgLqX, rgLqY) * rgA * rgP1 / vec2(uAspect, 1.0);`,
   bend: 'float rgBa = rgP1 * 0.0174533; p += vec2(cos(rgBa), sin(rgBa)) * rgA * 0.12;',
   shake: `float rgSt = floor(uClock * rgP2);
 vec2 rgSh = vec2(fract(sin(rgSt * 12.9898) * 43758.5453), fract(sin(rgSt * 78.233 + 1.7) * 43758.5453));
@@ -163,6 +167,35 @@ rgAlpha = max(rgAlpha, clamp(rgArc * rgA, 0.0, 0.85));`,
 float rgRm = 1.0 - smoothstep(rgP3, rgP3 + 0.25, abs(rgRr));
 col = RG_BLEND(col, rgCol, clamp(rgRm * rgA, 0.0, 1.0));
 rgAlpha = max(rgAlpha, clamp(rgRm * rgA * 0.8, 0.0, 0.85));`,
+  chromaticTrail: `float rgTrailSum = 0.0;
+vec3 rgTrailRgb = vec3(0.0);
+float rgSoft = max(rgR * rgP2, 0.006);
+for (int j = 0; j < 12; j++) {
+  vec4 rgTr = uTrail[j];
+  if (rgTr.z > 0.001) {
+    vec2 rgDelta = (p - rgTr.xy) * vec2(uAspect, 1.0);
+    vec2 rgTrailDir = vec2(1.0, 0.0);
+    if (j < 11 && uTrail[j + 1].z > 0.001) {
+      vec2 rgSegment = (rgTr.xy - uTrail[j + 1].xy) * vec2(uAspect, 1.0);
+      rgTrailDir = rgSegment / max(length(rgSegment), 0.0001);
+    }
+    float rgFade = exp(-rgTr.w * rgP3) * rgTr.z;
+    float rgCore = exp(-dot(rgDelta, rgDelta) / (rgSoft * rgSoft));
+    float rgRed = exp(-dot(rgDelta - rgTrailDir * rgSoft * rgP1, rgDelta - rgTrailDir * rgSoft * rgP1) / (rgSoft * rgSoft * 1.6));
+    float rgBlue = exp(-dot(rgDelta + rgTrailDir * rgSoft * rgP1, rgDelta + rgTrailDir * rgSoft * rgP1) / (rgSoft * rgSoft * 1.6));
+    float rgWeight = rgFade * max(rgCore, max(rgRed, rgBlue));
+    vec3 rgHue = rigHue(rgCol, rgTr.w * rgP4);
+    rgTrailRgb += vec3(rgHue.r * rgRed, rgHue.g * rgCore, rgHue.b * rgBlue) * rgFade;
+    rgTrailSum += rgWeight;
+  }
+}
+col += rgTrailRgb * rgAmt * 0.55;
+rgAlpha = max(rgAlpha, clamp(rgTrailSum * rgAmt * 0.12, 0.0, 0.85));`,
+  rayGlow: `float rgRayAngle = atan(rgD.y, rgD.x);
+float rgRayWave = 0.5 + 0.5 * cos(rgRayAngle * rgP1 + rgT * rgP4 + field(rgD * 3.0) * 1.8);
+float rgRay = pow(rgRayWave, rgP2) * exp(-rgLen * rgP3) * rgA;
+col += rgCol * rgRay * 1.25;
+rgAlpha = max(rgAlpha, clamp(rgRay * 0.35, 0.0, 0.85));`,
   grain: `float rgGn = field(p * rgP1 + vec2(rgT * rgP2, -rgT * rgP2 * 0.73));
 float rgGt = (rgGn - 0.5) * 2.0;
 col = RG_BLEND(col, rgCol * (0.5 + 0.5 * rgGn), clamp(abs(rgA * rgGt), 0.0, 1.0));`,

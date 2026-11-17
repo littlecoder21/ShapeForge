@@ -1,4 +1,5 @@
 import type { InteractiveSettings } from './types';
+import { buildPreset } from './rig/presets';
 
 export interface InteractivePreset {
   id: string;
@@ -13,6 +14,22 @@ export const INTERACTIVE_PRESETS: InteractivePreset[] = [
     name: 'Soft Mouse Glow',
     description: 'Gentle pointer light with a calm color field.',
     settings: { style: 'flow', speed: 0.18, distortion: 0.12, glow: 0.85, interactionStrength: 0.28 },
+  },
+  {
+    id: 'follow-light',
+    name: 'Follow the light',
+    description: 'Applies the springy chromatic trail, liquid warp and pointer rays from the interaction builder.',
+    settings: {
+      style: 'followLight',
+      quality: 'high',
+      speed: 0.25,
+      distortion: 0.24,
+      turbulence: 0.28,
+      interactionColors: ['#9df7ff', '#28a8ff', '#c4e7ff'],
+      interactionColorSource: 'custom',
+      interactionColorMix: 1,
+      rig: buildPreset('follow-the-light')!,
+    },
   },
   {
     id: 'liquid-mesh',
