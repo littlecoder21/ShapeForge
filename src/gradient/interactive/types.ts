@@ -3,11 +3,13 @@ import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type Int
 import { instantiateRig, normalizeRig, type InteractionRig } from './rig/model';
 import { defaultRig, rigFromLegacyMode } from './rig/presets';
 import { normalizeProcedural, type ProceduralConfig } from '../../procedural/types';
+import { normalizeTrailFx, type TrailFxConfig } from './trailfx/model';
 
 export type { InteractiveStyle } from './styles';
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type { PointerMode } from './pointerModes';
 export type { InteractionRig } from './rig/model';
+export type { TrailFxConfig } from './trailfx/model';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 export type ShaderLayerColorBlend = 'mix' | 'multiply' | 'screen' | 'overlay' | 'add';
 export type IdlePath = 'drift' | 'circle' | 'figure8' | 'scan' | 'wander';
@@ -125,6 +127,8 @@ export interface InteractiveSettings {
   /** "Use as single layer": the shader layers are rendered as ONE procedural layer in which every layer is a colour stop
    *  (see singleLayer.ts). Additive and optional: absent = off, so existing projects load unchanged. */
   singleLayer?: boolean;
+  /** Trail FX: the multi-pass pointer effect (see trailfx/model.ts). Additive and optional: absent = the project has none. */
+  trailFx?: TrailFxConfig;
 }
 
 /** Values that belong to one layer rather than the whole project. */
@@ -286,6 +290,7 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
   const pointerMode = normalizePointerMode(value.pointerMode);
   const rig = normalizeRig(value.rig)
     ?? (value.pointerMode !== undefined ? rigFromLegacyMode(pointerMode) : instantiateRig(DEFAULT_INTERACTIVE_SETTINGS.rig));
+  const trailFx = normalizeTrailFx(value.trailFx);
   return {
     enabled: value.enabled === true,
     style: choice('style', SHADER_STYLE_IDS, DEFAULT_INTERACTIVE_SETTINGS.style),
@@ -355,5 +360,6 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     renderBackend: choice('renderBackend', ['css', 'webgl', 'overlay'], DEFAULT_INTERACTIVE_SETTINGS.renderBackend),
     // written only when on, so projects that never used it serialise exactly as before
     ...(value.singleLayer === true ? { singleLayer: true } : {}),
+    ...(trailFx ? { trailFx } : {}),
   };
 }

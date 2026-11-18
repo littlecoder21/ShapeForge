@@ -2,7 +2,9 @@ import { memo, useMemo } from 'react';
 import { effectDefs, layerCss, stableNames } from '../engine/css';
 import type { GradientLayer, GradientProject } from '../engine/model';
 import { planSingleLayer, resolveRenderProject } from '../interactive/singleLayer';
+import { normalizeInteractiveSettings } from '../interactive/types';
 import InteractiveCanvas from './InteractiveCanvas';
+import TrailFxOverlay from './TrailFxOverlay';
 
 /** One <style> per layer: React only rewrites the style of the layer that actually changed, so dragging a handle on one
  *  layer never forces the browser to re-rasterise (blur!) the others. */
@@ -23,6 +25,9 @@ function LayeredArt({ project: source, rootClass, playing = false, interactiveSh
   const names = { ...stableNames, scope: rootClass };
   const defs = useMemo(() => effectDefs(project, names), [effectKey, rootClass]);
   const rootSel = `.${rootClass}`;
+  // Trail FX: a project-level multi-pass pointer effect drawn over the layers. Only the live stage (`gs-art`) runs it, so
+  // thumbnails and the before/after comparison never open extra WebGL contexts.
+  const trailFx = useMemo(() => normalizeInteractiveSettings(source.shader), [source.shader]);
   return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId} data-single-layer={project !== source ? 'on' : undefined}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} scope={rootClass} />)}
     {[...visible].reverse().map(l => <i key={l.id} className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}>
@@ -34,6 +39,7 @@ function LayeredArt({ project: source, rootClass, playing = false, interactiveSh
         ? <span className="g-text">{l.text.content}</span>
         : l.type === 'mesh' && [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ point, index }) => <i key={point.id} className={`mesh-point-${index}`} />)}
     </i>)}
+    {rootClass === 'gs-art' && trailFx.trailFx?.enabled && <TrailFxOverlay config={trailFx.trailFx} touch={trailFx.touchEnabled} />}
     {defs && <svg width="0" height="0" style={{ position: 'absolute' }}><defs dangerouslySetInnerHTML={{ __html: defs }} /></svg>}
   </div>;
 }

@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import { Gauge, MousePointerClick, Orbit, Palette, SlidersHorizontal, Sparkles, Wind, ArrowLeft } from 'lucide-react';
+import { Gauge, MousePointerClick, Orbit, Palette, SlidersHorizontal, Sparkles, Waves, Wind, ArrowLeft } from 'lucide-react';
 import { Switch } from '../../shared/controls';
 import { describeRig } from '../interactive/rig/model';
+import { describeTrailFx } from '../interactive/trailfx/model';
 import { SHADER_STYLE_MAP } from '../interactive/styles';
 import { normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type ShaderLayerConfig } from '../interactive/types';
 import { useStore } from '../engine/store';
@@ -14,6 +15,7 @@ import MotionPanel from './shader/MotionPanel';
 import ProceduralPanel from './shader/ProceduralPanel';
 import SingleLayerSwitch from './shader/SingleLayerSwitch';
 import InteractPanel from './shader/InteractPanel';
+import TrailFxPanel from './shader/TrailFxPanel';
 import FinishPanel from './shader/FinishPanel';
 import '../shader-panel.css';
 
@@ -23,6 +25,7 @@ const SUB_PANELS = [
   { id: 'motion', label: 'Motion', icon: Wind, Body: MotionPanel },
   { id: 'procedural', label: 'Procedural', icon: Orbit, Body: ProceduralPanel },
   { id: 'interaction', label: 'Interact', icon: MousePointerClick, Body: InteractPanel },
+  { id: 'trailfx', label: 'Trail FX', icon: Waves, Body: TrailFxPanel },
   { id: 'finish', label: 'Finish & quality', icon: Sparkles, Body: FinishPanel },
 ] as const;
 type SubPanelId = typeof SUB_PANELS[number]['id'];
@@ -88,6 +91,7 @@ export default function InteractivePanel({ layerId }: { layerId: string | null }
       ? 'Single layer · all layers merged'
       : procedural?.enabled ? `${procedural.mode === 'full' ? 'Full' : 'Hybrid'} · up to ${procedural.points.max} points` : 'Off',
     interaction: describeRig(settings.rig),
+    trailfx: settings.trailFx?.enabled ? describeTrailFx(settings.trailFx) : 'Off',
     finish: `${settings.quality[0].toUpperCase()}${settings.quality.slice(1)} quality`,
   };
   const active = SUB_PANELS.find(item => item.id === view);
