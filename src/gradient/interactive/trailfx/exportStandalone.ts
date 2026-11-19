@@ -1,6 +1,6 @@
 import runtimeSource from './runtime.js?raw';
 import { TRAILFX_SOURCES } from './shaders.generated';
-import { normalizeTrailFx, type TrailFxConfig } from './model';
+import { TRAILFX_FORMAT_VERSION, normalizeTrailFx, type TrailFxConfig } from './model';
 
 /* Standalone export: four plain files (HTML, CSS, JS, JSON) that run the effect on any page with no dependencies.
  * effect.json holds the pass stack AND the shader library, so the effect can be edited by hand or re-imported into ShapeForge. */
@@ -9,10 +9,10 @@ export interface TrailFxFiles { 'index.html': string; 'style.css': string; 'scri
 export const TRAILFX_FORMAT = 'shapeforge-trailfx';
 
 export function buildTrailFxJson(config: TrailFxConfig): string {
-  return JSON.stringify({ format: TRAILFX_FORMAT, version: 1, config: { ...config, enabled: true }, library: TRAILFX_SOURCES }, null, 1);
+  return JSON.stringify({ format: TRAILFX_FORMAT, version: TRAILFX_FORMAT_VERSION, config: { ...config, enabled: true }, library: TRAILFX_SOURCES }, null, 1);
 }
 
-/** Accepts an exported effect.json, a bare config, or a ShapeForge config copied from the panel. */
+/** Accepts an exported effect.json (version 1 or 2), a bare config, or a ShapeForge config copied from the panel. */
 export function parseTrailFxJson(text: string): TrailFxConfig | null {
   const value = JSON.parse(text) as { format?: unknown; config?: unknown };
   return normalizeTrailFx(value && value.format === TRAILFX_FORMAT ? value.config : value);
@@ -65,6 +65,7 @@ export function buildTrailFxFiles(config: TrailFxConfig, options: { title?: stri
   window.addEventListener('pointerdown', forward('down'), { passive: true });
   window.addEventListener('pointerup', forward('up'));
   window.addEventListener('pointercancel', forward('cancel'));
+  document.documentElement.addEventListener('pointerleave', forward('leave'));
   new ResizeObserver(() => fx.resize()).observe(canvas);
 })();
 `,

@@ -3,7 +3,7 @@ import type { TrailFxSources } from './shaders.generated';
 
 export interface TrailFxSample { clientX: number; clientY: number; pointerType?: string }
 export interface TrailFxRuntime {
-  /** feed a pointer event (mouse, touch or pen); only `move` and a touch `down` change anything */
+  /** feed a pointer event (mouse, touch or pen): `move` and `down` position it, `down`/`up` press and release it (particles and ribbons react to both), `leave` marks it gone */
   handle(kind: 'move' | 'down' | 'up' | 'cancel' | 'leave', sample: TrailFxSample): void;
   /** the canvas moved or scrolled: re-read its rectangle */
   invalidate(): void;

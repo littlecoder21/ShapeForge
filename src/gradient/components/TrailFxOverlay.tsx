@@ -22,18 +22,22 @@ export default function TrailFxOverlay({ config, touch }: { config: TrailFxConfi
     });
     runtimeRef.current = runtime;
     if (!runtime) { canvas.style.display = 'none'; return; }
-    const forward = (kind: 'move' | 'down' | 'up' | 'cancel') => (event: PointerEvent) => {
+    const forward = (kind: 'move' | 'down' | 'up' | 'cancel' | 'leave') => (event: PointerEvent) => {
       if (event.pointerType === 'touch' && !touchRef.current) return;
       runtime.handle(kind, event);
     };
     const handlers = { pointermove: forward('move'), pointerdown: forward('down'), pointerup: forward('up'), pointercancel: forward('cancel') };
     (Object.keys(handlers) as (keyof typeof handlers)[]).forEach(type => window.addEventListener(type, handlers[type], { passive: true }));
+    // the pointer leaving the window ends hover-driven particles, forces and chains
+    const onLeave = forward('leave');
+    document.documentElement.addEventListener('pointerleave', onLeave, { passive: true });
     const invalidate = () => runtime.invalidate();
     window.addEventListener('scroll', invalidate, { passive: true, capture: true });
     const observer = new ResizeObserver(() => runtime.resize());
     observer.observe(canvas);
     return () => {
       (Object.keys(handlers) as (keyof typeof handlers)[]).forEach(type => window.removeEventListener(type, handlers[type]));
+      document.documentElement.removeEventListener('pointerleave', onLeave);
       window.removeEventListener('scroll', invalidate, { capture: true });
       observer.disconnect();
       runtime.destroy();
