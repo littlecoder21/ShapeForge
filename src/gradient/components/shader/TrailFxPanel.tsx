@@ -1,10 +1,10 @@
-import { useState } from 'react';
-import { ArrowDown, ArrowUp, Copy, Download, Paintbrush, Palette, Plus, X } from 'lucide-react';
+import { useEffect, useState, type ChangeEvent } from 'react';
+import { ArrowDown, ArrowUp, Copy, Download, Paintbrush, Palette, Plus, Trash2, X } from 'lucide-react';
 import { Switch } from '../../../shared/controls';
 import {
   TRAILFX_BLENDS, TRAILFX_FAMILIES, TRAILFX_KINDS, TRAILFX_KIND_MAP, TRAILFX_MAX_PASSES, TRAILFX_PRESETS, TRAILFX_PRESET_GROUPS, TRAILFX_PRESET_MAP, TRAILFX_STARTERS,
   applyPaletteToConfig, describeTrailFx, makePass, newPassId, paramVisible, recolorWithColorMap,
-  type TrailFxBlend, type TrailFxConfig, type TrailFxKind, type TrailFxParamDef, type TrailFxPass,
+  type TrailFxBlend, type TrailFxConfig, type TrailFxCustomShape, type TrailFxKind, type TrailFxParamDef, type TrailFxPass,
 } from '../../interactive/trailfx/model';
 import { buildTrailFxFiles, buildTrailFxJson, parseTrailFxJson } from '../../interactive/trailfx/exportStandalone';
 import { buildCodeExportPackage, codeExportSlug, codeExportZip } from '../../engine/codeExport';
@@ -15,6 +15,48 @@ import ColorEditor from './TrailFxColors';
 import { useStudio } from '../ui';
 
 const GLYPH_SAMPLES = ['✦', '★', '♥', '❄', '✿', '♪', '●', '◆', '+', '01', '❀✿'];
+const MAX_PARTICLE_SHAPE_SOURCE = 250_000;
+
+function parseParticleShape(source: string): TrailFxCustomShape {
+  const trimmed = source.trim();
+  if (!trimmed) throw new Error('Paste SVG markup or path data first.');
+  if (trimmed.length > MAX_PARTICLE_SHAPE_SOURCE) throw new Error('SVG/path data must be smaller than 250 KB.');
+  if (/<!DOCTYPE|<!ENTITY/i.test(trimmed)) throw new Error('SVG document types and entities are not supported.');
+
+  const markup = /^\s*</.test(trimmed);
+  const xml = markup
+    ? /<svg(?:\s|>)/i.test(trimmed) ? trimmed : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${trimmed}</svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="${trimmed.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"/></svg>`;
+  const document = new DOMParser().parseFromString(xml, 'image/svg+xml');
+  const root = document.documentElement;
+  if (document.querySelector('parsererror') || root.localName !== 'svg') throw new Error('Could not read that SVG.');
+
+  const rawBox = root.getAttribute('viewBox')?.trim();
+  const viewBox = rawBox ? rawBox.split(/[\s,]+/).map(Number) : [];
+  const fallbackWidth = Number.parseFloat(root.getAttribute('width') ?? '') || 100;
+  const fallbackHeight = Number.parseFloat(root.getAttribute('height') ?? '') || 100;
+  const box = viewBox.length === 4 && viewBox.every(Number.isFinite)
+    ? viewBox
+    : [0, 0, fallbackWidth, fallbackHeight];
+  if (box[2] <= 0 || box[3] <= 0 || box.some(value => Math.abs(value) > 1_000_000)) throw new Error('The SVG needs a valid, positive viewBox.');
+
+  const elements = Array.from(root.querySelectorAll('path[d]'));
+  if (!elements.length) throw new Error('The SVG must contain at least one path with a d attribute.');
+  if (elements.length > 32) throw new Error('A particle shape can contain up to 32 paths.');
+  const paths = elements.map(element => {
+    const d = element.getAttribute('d')?.trim() ?? '';
+    if (!d || d.length > 16_000) throw new Error('Each SVG path must contain between 1 and 16,000 characters.');
+    try { new Path2D(d); } catch { throw new Error('One of the SVG path definitions is invalid.'); }
+    return { d, fillRule: element.getAttribute('fill-rule')?.toLowerCase() === 'evenodd' ? 'evenodd' as const : 'nonzero' as const };
+  });
+  if (paths.reduce((total, path) => total + path.d.length, 0) > 32_000) throw new Error('Combined SVG paths must be smaller than 32,000 characters.');
+  return { viewBox: box as TrailFxCustomShape['viewBox'], paths };
+}
+
+function serializeParticleShape(shape: TrailFxCustomShape): string {
+  const paths = shape.paths.map(path => `<path d="${path.d.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" fill-rule="${path.fillRule}"/>`).join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${shape.viewBox.join(' ')}">${paths}</svg>`;
+}
 
 function downloadBlob(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -32,6 +74,12 @@ function PassCard({ pass, index, total, onChange, onMove, onRemove, onDuplicate 
   onChange: (pass: TrailFxPass, coalesce?: string) => void;
   onMove: (direction: -1 | 1) => void; onRemove: () => void; onDuplicate: () => void;
 }) {
+  const [customShapeText, setCustomShapeText] = useState(() => pass.customShape ? serializeParticleShape(pass.customShape) : '');
+  const [customShapeError, setCustomShapeError] = useState('');
+  useEffect(() => {
+    setCustomShapeText(pass.customShape ? serializeParticleShape(pass.customShape) : '');
+    setCustomShapeError('');
+  }, [pass.id, pass.customShape]);
   const def = TRAILFX_KIND_MAP[pass.kind];
   const setP = (key: string, value: number) => onChange({ ...pass, p: { ...pass.p, [key]: value } }, `${pass.id}-${key}`);
   const showColors = !!def.colors && (pass.kind !== 'base' || pass.p.style === 9);
@@ -46,7 +94,36 @@ function PassCard({ pass, index, total, onChange, onMove, onRemove, onDuplicate 
   const loose = visible.filter(param => !param.group);
   const groups = [...new Set(visible.filter(param => param.group).map(param => param.group as string))];
   const glyphOn = !!def.text && Math.round(pass.p.shape ?? 0) === 12;
-  return <Section title={`${index + 1}. ${def.icon} ${def.label}`} aside={pass.enabled ? 'On' : 'Off'} open={false} testId={`trailfx-pass-${pass.kind}`}>
+  const customShapeOn = !!def.text && Math.round(pass.p.shape ?? 0) === 13;
+  const applyCustomShape = () => {
+    try {
+      onChange({ ...pass, customShape: parseParticleShape(customShapeText) }, `${pass.id}-custom-shape`);
+      setCustomShapeError('');
+    } catch (error) {
+      setCustomShapeError(error instanceof Error ? error.message : 'Could not read that SVG/path.');
+    }
+  };
+  const importShapeFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      if (file.size > MAX_PARTICLE_SHAPE_SOURCE) throw new Error('SVG file must be smaller than 250 KB.');
+      const source = await file.text();
+      const customShape = parseParticleShape(source);
+      setCustomShapeText(source);
+      onChange({ ...pass, customShape }, `${pass.id}-custom-shape`);
+      setCustomShapeError('');
+    } catch (error) {
+      setCustomShapeError(error instanceof Error ? error.message : 'Could not import that SVG.');
+    } finally {
+      input.value = '';
+    }
+  };
+  return <Section title={`${index + 1}. ${def.icon} ${def.label}`} aside={<span className="gs-tf-pass-aside">
+    <span>{pass.enabled ? 'On' : 'Off'}</span>
+    <button type="button" className="gs-tf-x" aria-label={`Remove ${def.label} pass`} title="Remove pass" onClick={event => { event.preventDefault(); event.stopPropagation(); onRemove(); }}><Trash2 /></button>
+  </span>} open={false} testId={`trailfx-pass-${pass.kind}`}>
     <p className="hint">{def.blurb}</p>
     <Switch label="Enabled" checked={pass.enabled} onChange={enabled => onChange({ ...pass, enabled })} />
     {loose.map(control)}
@@ -63,6 +140,18 @@ function PassCard({ pass, index, total, onChange, onMove, onRemove, onDuplicate 
           <input id={`trailfx-${pass.id}-text`} className="gs-tf-text" type="text" value={pass.text ?? def.text.def} maxLength={24} spellCheck={false} onChange={event => onChange({ ...pass, text: event.target.value }, `${pass.id}-text`)} data-testid={`trailfx-${pass.id}-text`} />
           <div className="gs-chip-row">{GLYPH_SAMPLES.map(sample => <button key={sample} type="button" className="chip" onClick={() => onChange({ ...pass, text: sample })}>{sample}</button>)}</div>
           <p className="hint">Up to 12 characters or emoji; each particle picks one of them. Emoji keep their own colours when “Tint glyphs” is 0.</p>
+        </div>}
+        {name === 'Shape' && customShapeOn && <div className="gs-field">
+          <label className="field-label" htmlFor={`trailfx-${pass.id}-custom-shape`}>SVG or path data</label>
+          <textarea id={`trailfx-${pass.id}-custom-shape`} className="gs-json gs-tf-svg-text" value={customShapeText} maxLength={MAX_PARTICLE_SHAPE_SOURCE} spellCheck={false} onChange={event => { setCustomShapeText(event.target.value); setCustomShapeError(''); }} placeholder="Paste an SVG with path elements or an SVG path d value (0–100 coordinates)." data-testid={`trailfx-${pass.id}-custom-shape`} />
+          <div className="gs-chip-row">
+            <label className="btn small gs-tf-file-label">Import SVG file<input type="file" accept=".svg,image/svg+xml" onChange={event => { void importShapeFile(event); }} data-testid={`trailfx-${pass.id}-custom-shape-file`} /></label>
+            <button type="button" className="btn small" onClick={applyCustomShape}>Use shape</button>
+            {pass.customShape && <button type="button" className="btn small" onClick={() => { onChange({ ...pass, customShape: undefined }); setCustomShapeText(''); setCustomShapeError(''); }}>Clear shape</button>}
+          </div>
+          <p className={customShapeError ? 'hint gs-tf-error' : 'hint'} role={customShapeError ? 'alert' : undefined}>
+            {customShapeError || (pass.customShape ? `${pass.customShape.paths.length} vector path${pass.customShape.paths.length === 1 ? '' : 's'} ready.` : 'Import an SVG file or paste SVG/path data. SVG scripts and non-path elements are ignored.')}
+          </p>
         </div>}
       </div>
     </details>)}

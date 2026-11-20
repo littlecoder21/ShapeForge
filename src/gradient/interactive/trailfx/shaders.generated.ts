@@ -1,9 +1,10 @@
 /* Generated from the Unicorn Studio "Chroma" project (effect.json): the original layer shaders with their constants lifted into uniforms,
  * plus the base, sheen and grade passes. The text below is now the source of truth: edit it directly. */
 import { GENERATOR_KINDS, GENERATOR_LIBRARY } from './shaders.generators';
+import { FIELD_SOURCES } from './fields';
 /** gen: a layer-drawing generator ("emitter" particles or "ribbon"); library.gen holds the shaders its simulation draws with */
 export interface TrailFxGenLibrary { fade: string; particle: { vert: string; frag: string }; ribbon: { vert: string; frag: string } }
-export interface TrailFxSources { vert: string; kinds: Record<string, { frag: string[]; trail?: string; gen?: string }>; gen?: TrailFxGenLibrary }
+export interface TrailFxSources { vert: string; kinds: Record<string, { frag: string[]; trail?: string; gen?: string; /** simulation steps per frame for the feedback shader */ steps?: number }>; gen?: TrailFxGenLibrary }
 const ORIGINAL_SOURCES: TrailFxSources = {
  "vert": "#version 300 es\nprecision highp float;\nin vec3 aVertexPosition;\nin vec2 aTextureCoord;\nout vec2 vTextureCoord;\nvoid main(){vTextureCoord=aTextureCoord;gl_Position=vec4(aVertexPosition,1.);}",
  "kinds": {
@@ -53,9 +54,9 @@ const ORIGINAL_SOURCES: TrailFxSources = {
  }
 };
 
-/** The original passes plus the v2 generators (particles, ribbon, colour map); this is what the runtime and the export use. */
+/** The original passes plus the v2 generators (particles, ribbon, colour map) and the 25 field generators and finish passes; this is what the runtime and the export use. */
 export const TRAILFX_SOURCES: TrailFxSources = {
   ...ORIGINAL_SOURCES,
-  kinds: { ...ORIGINAL_SOURCES.kinds, ...(GENERATOR_KINDS as unknown as TrailFxSources['kinds']) },
+  kinds: { ...ORIGINAL_SOURCES.kinds, ...(GENERATOR_KINDS as unknown as TrailFxSources['kinds']), ...FIELD_SOURCES },
   gen: GENERATOR_LIBRARY,
 };

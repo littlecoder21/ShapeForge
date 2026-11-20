@@ -371,6 +371,7 @@ export function createTrailFx(canvas, options) {
           previous: [0.5, 0.5],
           entry: getProgram(`${pass.kind}:trail`, src.trail),
           trail: true,
+          steps: src.steps || 1,
         };
         pingPongs.push(feedback);
         stack[stack.length - 1].pingPong = feedback;
@@ -587,22 +588,39 @@ export function createTrailFx(canvas, options) {
 
   /* ═════════════ generators: particles ═════════════ */
 
-  function ensureGlyphs(S, text) {
+  function ensureGlyphs(S, text, customShape) {
+    const custom = customShape && customShape.paths && customShape.paths.length ? customShape : null;
     const chars = Array.from(text || "✦").slice(0, 12);
-    const key = chars.join("");
+    const key = custom ? `custom:${JSON.stringify(custom)}` : `text:${chars.join("")}`;
     if (S.glyphKey === key) return;
     S.glyphKey = key;
-    S.glyphN = chars.length;
+    S.glyphN = custom ? 1 : chars.length;
     const cell = 96;
     const sheet = document.createElement("canvas");
-    sheet.width = cell * chars.length;
+    sheet.width = cell * S.glyphN;
     sheet.height = cell;
     const ctx = sheet.getContext("2d");
     ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `${Math.round(cell * 0.7)}px system-ui, "Segoe UI Symbol", "Apple Color Emoji", "Noto Color Emoji", "DejaVu Sans", sans-serif`;
-    chars.forEach((ch, i) => ctx.fillText(ch, cell * (i + 0.5), cell * 0.54));
+    if (custom) {
+      const [x, y, width, height] = custom.viewBox;
+      const scale = Math.min((cell * 0.78) / width, (cell * 0.78) / height);
+      ctx.save();
+      ctx.translate((cell - width * scale) / 2 - x * scale, (cell - height * scale) / 2 - y * scale);
+      ctx.scale(scale, scale);
+      custom.paths.forEach((item) => {
+        try {
+          ctx.fill(new Path2D(item.d), item.fillRule === "evenodd" ? "evenodd" : "nonzero");
+        } catch (error) {
+          console.error("Trail FX: could not render an imported particle path.", error);
+        }
+      });
+      ctx.restore();
+    } else {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `${Math.round(cell * 0.7)}px system-ui, "Segoe UI Symbol", "Apple Color Emoji", "Noto Color Emoji", "DejaVu Sans", sans-serif`;
+      chars.forEach((ch, i) => ctx.fillText(ch, cell * (i + 0.5), cell * 0.54));
+    }
     if (!S.glyphTex) S.glyphTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, S.glyphTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -613,7 +631,7 @@ export function createTrailFx(canvas, options) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
 
-  function spawn(S, P, x, y, ambient) {
+  function spawn(S, P, x, y, ambient, customShape) {
     if (S.n >= S.limit) return;
     const R = Math.random;
     const o = S.n * STRIDE;
@@ -649,9 +667,11 @@ export function createTrailFx(canvas, options) {
     const inherit = ambient || !ptr.active ? 0 : P.inherit;
     const shapeCode = Math.round(P.shape);
     const shape =
-      shapeCode === 11
-        ? MIXED_SHAPES[Math.floor(R() * MIXED_SHAPES.length)]
-        : shapeCode;
+      shapeCode === 13
+        ? customShape ? 12 : 0
+        : shapeCode === 11
+          ? MIXED_SHAPES[Math.floor(R() * MIXED_SHAPES.length)]
+          : shapeCode;
     S.data[o] = x;
     S.data[o + 1] = y;
     S.data[o + 2] = Math.cos(angle) * v + ptr.vx * inherit;
@@ -704,6 +724,7 @@ export function createTrailFx(canvas, options) {
       H = rect.height || 1;
     S.limit = Math.min(MAX_PARTS, Math.max(1, Math.round(P.maxCount)));
     if (Math.round(P.shape) === 12) ensureGlyphs(S, pass.text);
+    else if (Math.round(P.shape) === 13 && pass.customShape) ensureGlyphs(S, "", pass.customShape);
     const live = ptr.active && ptr.inside;
 
     /* spawn */
@@ -720,16 +741,17 @@ export function createTrailFx(canvas, options) {
         ptr.px + (ptr.x - ptr.px) * t,
         ptr.py + (ptr.y - ptr.py) * t,
         false,
+        pass.customShape,
       );
     }
     if (live && ptr.down && P.onHold > 0) S.accHold += P.onHold * dt;
     const holdCount = Math.min(Math.floor(S.accHold), 90);
     S.accHold -= Math.floor(S.accHold);
-    for (let k = 0; k < holdCount; k++) spawn(S, P, ptr.x, ptr.y, false);
+    for (let k = 0; k < holdCount; k++) spawn(S, P, ptr.x, ptr.y, false, pass.customShape);
     if (P.onClick > 0) {
       const burst = Math.round(P.onClick);
       ptr.clicks.forEach((click) => {
-        for (let k = 0; k < burst; k++) spawn(S, P, click.x, click.y, false);
+        for (let k = 0; k < burst; k++) spawn(S, P, click.x, click.y, false, pass.customShape);
       });
     }
     if (P.ambient > 0) S.accAmb += P.ambient * dt;
@@ -737,7 +759,7 @@ export function createTrailFx(canvas, options) {
     S.accAmb -= Math.floor(S.accAmb);
     for (let k = 0; k < ambientCount; k++) {
       const pt = ambientPoint(P.area, W, H);
-      spawn(S, P, pt[0], pt[1], true);
+      spawn(S, P, pt[0], pt[1], true, pass.customShape);
     }
 
     /* simulate + pack instances */
@@ -881,7 +903,7 @@ export function createTrailFx(canvas, options) {
     if (beads > 0 && ptr.active && history.length) {
       const gap = P.followGap / 1000;
       const shapeCode = Math.round(P.shape);
-      const shape = shapeCode === 11 ? 0 : shapeCode;
+      const shape = shapeCode === 13 ? (pass.customShape ? 12 : 0) : shapeCode === 11 ? 0 : shapeCode;
       for (let b = 0; b < beads; b++) {
         const t = beads > 1 ? b / (beads - 1) : 0,
           e = 1 - (1 - t) * (1 - t);
@@ -1219,6 +1241,23 @@ export function createTrailFx(canvas, options) {
       plane.previous[1],
     );
     gl.uniform1f(loc(entry, "uTime"), plane.time);
+    /* pointer + clock state for the field generators (seconds clock, frame delta, pressed, speed, click) */
+    setFloat(entry, "uClock", clock.now % 1000);
+    setFloat(entry, "uDt", clock.dt);
+    setFloat(entry, "uDown", ptr.down ? 1 : 0);
+    setFloat(entry, "uActive", ptr.active && ptr.inside ? 1 : 0);
+    setFloat(entry, "uSpeed", clamp(ptr.speed / 1500, 0, 3));
+    setFloat(entry, "uStepI", plane.stepIndex || 0);
+    const clickLoc = loc(entry, "uClick");
+    if (clickLoc) {
+      const click = ptr.clicks[ptr.clicks.length - 1];
+      gl.uniform3f(
+        clickLoc,
+        click ? click.x / (rect.width || 1) : 0.5,
+        click ? 1 - click.y / (rect.height || 1) : 0.5,
+        click ? 1 : 0,
+      );
+    }
     for (const key in pass.p) {
       const l = loc(entry, "u" + cap(key));
       if (l) gl.uniform1f(l, pass.p[key]);
@@ -1243,10 +1282,14 @@ export function createTrailFx(canvas, options) {
         return;
       }
       updatePlane(plane);
-      draw(plane, white, white, plane.read.tex, plane.write);
-      const swap = plane.read;
-      plane.read = plane.write;
-      plane.write = swap;
+      for (let step = 0; step < (plane.steps || 1); step++) {
+        plane.stepIndex = step; // simulations (waves, growth) run several steps per frame; pointer input only lands on the first
+        draw(plane, white, white, plane.read.tex, plane.write);
+        const swap = plane.read;
+        plane.read = plane.write;
+        plane.write = swap;
+      }
+      plane.stepIndex = 0;
     });
     ptr.clicks.length = 0;
     gl.bindVertexArray(quad);

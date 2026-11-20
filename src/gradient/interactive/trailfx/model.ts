@@ -1,6 +1,7 @@
 import { TRAILFX_PRESET_ROWS } from './presets.generated';
 import { TRAILFX_EXTRA_PRESET_ROWS } from './presets.extra';
 import { HEX_RE, TRAILFX_MAX_COLORS, resamplePalette, sortByLightness } from './palette';
+import { FIELD_KIND_DEFS, FIELD_PRESET_ROWS } from './fields';
 
 /* ═══════════════════════ Trail FX — data model ═══════════════════════
  * A multi-pass, pointer-driven effect. Pass order is the pipeline order, so the stack IS the effect:
@@ -18,7 +19,9 @@ import { HEX_RE, TRAILFX_MAX_COLORS, resamplePalette, sortByLightness } from './
 export const TRAILFX_MAX_PASSES = 12;
 export const TRAILFX_FORMAT_VERSION = 2;
 
-export type TrailFxKind = 'base' | 'reveal' | 'blur' | 'diffuse' | 'liquify' | 'sheen' | 'grade' | 'rays' | 'emitter' | 'ribbon' | 'gradmap';
+export type TrailFxCoreKind = 'base' | 'reveal' | 'blur' | 'diffuse' | 'liquify' | 'sheen' | 'grade' | 'rays' | 'emitter' | 'ribbon' | 'gradmap';
+/** the core passes, plus the 25 field generators and 4 finish passes defined in ./fields (their ids are plain strings) */
+export type TrailFxKind = TrailFxCoreKind | (string & {});
 export type TrailFxBlend = 'normal' | 'screen' | 'plus-lighter' | 'overlay' | 'soft-light' | 'multiply';
 export const TRAILFX_BLENDS: { id: TrailFxBlend; label: string }[] = [
   { id: 'normal', label: 'Normal' }, { id: 'screen', label: 'Screen' }, { id: 'plus-lighter', label: 'Add' },
@@ -40,7 +43,7 @@ export interface TrailFxKindDef {
   icon: string;
   blurb: string;
   /** the group the "Add pass" menu lists it under */
-  family: 'Generators' | 'Picture' | 'Colour' | 'Finish';
+  family: string;
   params: TrailFxParamDef[];
   /** colours this pass reads: how many it starts with and how many it accepts */
   colors?: TrailFxColorDef;
@@ -55,7 +58,7 @@ const when = (key: string, values: number[], defs: TrailFxParamDef[]): TrailFxPa
 
 export const BASE_STYLES = ['White', 'Silver', 'Spectrum', 'Reeded glass', 'Ember', 'Aurora', 'Marble', 'Ice', 'Gold', 'Custom gradient'];
 export const BASE_PATTERNS = ['Flowing', 'Radial', 'Angular', 'Clouds', 'Stripes'];
-export const PARTICLE_SHAPES = ['Circle', 'Ring', 'Square', 'Diamond', 'Triangle', 'Star', 'Spark', 'Cross', 'Hexagon', 'Heart', 'Crescent', 'Mixed shapes', 'Glyph / emoji'];
+export const PARTICLE_SHAPES = ['Circle', 'Ring', 'Square', 'Diamond', 'Triangle', 'Star', 'Spark', 'Cross', 'Hexagon', 'Heart', 'Crescent', 'Mixed shapes', 'Glyph / emoji', 'Custom SVG / path'];
 export const RIBBON_STYLES = ['Smooth', 'Neon', 'Dashed', 'Beads', 'Lightning'];
 export const LAYER_MODES = ['Paint over picture', 'Add to picture', 'Reveal the picture', 'Lens the picture'];
 export const AMBIENT_AREAS = ['Whole screen', 'Top edge', 'Bottom edge', 'Left edge', 'Right edge', 'Around cursor', 'Centre'];
@@ -172,17 +175,21 @@ export const TRAILFX_KINDS: TrailFxKindDef[] = [
   { id: 'grade', label: 'Colour grade', icon: '◐', family: 'Colour', blurb: 'Hue, saturation, contrast, brightness and an optional tint.',
     params: [p('hue', 'Hue shift', -180, 180, 0, 1, '°'), p('saturation', 'Saturation', 0, 2, 1), p('contrast', 'Contrast', 0.5, 2, 1), p('brightness', 'Brightness', -0.5, 0.5, 0), p('tintMix', 'Tint amount', 0, 1, 0)],
     colors: { label: 'Tint', defaults: ['#ffffff'], min: 1, max: 1 } },
-  { id: 'rays', label: 'Light rays', icon: '✴', family: 'Finish', blurb: 'Bright parts of the picture throw soft rays toward the centre (two passes).',
-    params: [p('threshold', 'Threshold', 0, 0.8, 0.2), p('decay', 'Ray length', 0.8, 0.995, 0.972, 0.001), p('gain', 'Intensity', 0, 2, 0.5)],
-    colors: { label: 'Ray tint', defaults: ['#ffffff'], min: 1, max: 1 } },
 ];
+/* the 25 field generators and the extra finish passes live in ./fields; their definitions join the catalogue here */
+TRAILFX_KINDS.push(...FIELD_KIND_DEFS.map<TrailFxKindDef>(def => ({
+  id: def.id, label: def.label, icon: def.icon, blurb: def.blurb, family: def.family, params: def.params, ...(def.colors ? { colors: def.colors } : {}),
+})));
 export const TRAILFX_KIND_MAP = Object.fromEntries(TRAILFX_KINDS.map(kind => [kind.id, kind])) as Record<TrailFxKind, TrailFxKindDef>;
-export const TRAILFX_FAMILIES: TrailFxKindDef['family'][] = ['Generators', 'Picture', 'Colour', 'Finish'];
+/** the order the "Add pass" menu lists its groups in */
+export const TRAILFX_FAMILIES: TrailFxKindDef['family'][] = ['Generators', 'Ink fields', 'Fluid', 'Water', 'Growth', 'Shatter & burn', 'Picture', 'Colour', 'Finish'];
 
 /** is a parameter currently meaningful, given the pass's other values? */
 export const paramVisible = (def: TrailFxParamDef, values: Record<string, number>): boolean => !def.when || def.when.in.includes(Math.round(values[def.when.key] ?? 0));
 
-export interface TrailFxPass { id: string; kind: TrailFxKind; enabled: boolean; p: Record<string, number>; colors: string[]; /** characters for the Glyph particle shape */ text?: string }
+export interface TrailFxVectorPath { d: string; fillRule: 'nonzero' | 'evenodd' }
+export interface TrailFxCustomShape { viewBox: [number, number, number, number]; paths: TrailFxVectorPath[] }
+export interface TrailFxPass { id: string; kind: TrailFxKind; enabled: boolean; p: Record<string, number>; colors: string[]; /** characters for the Glyph particle shape */ text?: string; customShape?: TrailFxCustomShape }
 export interface TrailFxConfig {
   enabled: boolean;
   presetId: string;
@@ -214,14 +221,36 @@ const cleanText = (raw: unknown, fallback: string): string => {
   const chars = typeof raw === 'string' ? Array.from(raw.replace(/\s+/g, '')).slice(0, 12).join('') : '';
   return chars || fallback;
 };
+const cleanCustomShape = (raw: unknown): TrailFxCustomShape | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!Array.isArray(value.viewBox) || value.viewBox.length !== 4 || !Array.isArray(value.paths) || !value.paths.length || value.paths.length > 32) return undefined;
+  const box = value.viewBox;
+  if (!box.every((n): n is number => typeof n === 'number' && Number.isFinite(n)) || box.some(n => Math.abs(n) > 1_000_000)) return undefined;
+  const [x, y, width, height] = box;
+  if (width <= 0 || height <= 0) return undefined;
+  const paths: TrailFxVectorPath[] = [];
+  let totalLength = 0;
+  for (const path of value.paths) {
+    if (!path || typeof path !== 'object') return undefined;
+    const item = path as Record<string, unknown>;
+    if (typeof item.d !== 'string' || !item.d.trim() || item.d.length > 16_000) return undefined;
+    const d = item.d.trim();
+    totalLength += d.length;
+    if (totalLength > 32_000) return undefined;
+    paths.push({ d, fillRule: item.fillRule === 'evenodd' ? 'evenodd' : 'nonzero' });
+  }
+  return { viewBox: [x, y, width, height], paths };
+};
 let counter = 0;
 export const newPassId = () => `tp${Date.now().toString(36).slice(-4)}${(counter++).toString(36)}${Math.random().toString(36).slice(2, 4)}`;
 
-export function makePass(kind: TrailFxKind, over: { p?: Record<string, number>; colors?: string[]; enabled?: boolean; text?: string } = {}): TrailFxPass {
+export function makePass(kind: TrailFxKind, over: { p?: Record<string, number>; colors?: string[]; enabled?: boolean; text?: string; customShape?: TrailFxCustomShape } = {}): TrailFxPass {
   const def = TRAILFX_KIND_MAP[kind];
   const values = Object.fromEntries(def.params.map(param => [param.key, over.p?.[param.key] ?? param.def]));
   const colors = def.colors ? cleanColors(over.colors, def.colors.min, def.colors.max, def.colors.defaults) : [];
-  return { id: newPassId(), kind, enabled: over.enabled !== false, p: values, colors, ...(def.text ? { text: cleanText(over.text, def.text.def) } : {}) };
+  const customShape = def.text ? cleanCustomShape(over.customShape) : undefined;
+  return { id: newPassId(), kind, enabled: over.enabled !== false, p: values, colors, ...(def.text ? { text: cleanText(over.text, def.text.def) } : {}), ...(customShape ? { customShape } : {}) };
 }
 
 export function normalizePass(raw: unknown): TrailFxPass | null {
@@ -231,6 +260,7 @@ export function normalizePass(raw: unknown): TrailFxPass | null {
   if (!kind) return null;
   const def = TRAILFX_KIND_MAP[kind];
   const rawP = value.p && typeof value.p === 'object' ? value.p as Record<string, unknown> : {};
+  const customShape = def.text ? cleanCustomShape(value.customShape) : undefined;
   return {
     id: typeof value.id === 'string' && value.id ? value.id : newPassId(),
     kind,
@@ -238,6 +268,7 @@ export function normalizePass(raw: unknown): TrailFxPass | null {
     p: Object.fromEntries(def.params.map(param => [param.key, num(rawP[param.key], param.min, param.max, param.def)])),
     colors: def.colors ? cleanColors(value.colors, def.colors.min, def.colors.max, def.colors.defaults) : [],
     ...(def.text ? { text: cleanText(value.text, def.text.def) } : {}),
+    ...(customShape ? { customShape } : {}),
   };
 }
 
@@ -314,7 +345,7 @@ export const TRAILFX_PRESETS: TrailFxPreset[] = [
     id: row.id, label: row.label, group: row.group, description: row.description,
     build: () => stack(row.label, row.id, row.passes.map(pass => makePass(pass.kind as TrailFxKind, { ...(pass.p ? { p: pass.p } : {}), ...(pass.colors ? { colors: pass.colors } : {}) }))),
   })),
-  ...TRAILFX_EXTRA_PRESET_ROWS.map<TrailFxPreset>(row => ({
+  ...[...TRAILFX_EXTRA_PRESET_ROWS, ...FIELD_PRESET_ROWS].map<TrailFxPreset>(row => ({
     id: row.id, label: row.label, group: row.group, description: row.description,
     build: () => stack(row.label, row.id, row.passes.map(pass => makePass(pass.kind as TrailFxKind, { ...(pass.p ? { p: pass.p } : {}), ...(pass.colors ? { colors: pass.colors } : {}), ...(pass.text ? { text: pass.text } : {}) })), {
       ...(row.opacity !== undefined ? { opacity: row.opacity } : {}), ...(row.blend ? { blend: row.blend as TrailFxBlend } : {}), ...(row.palette ? { palette: row.palette } : {}),

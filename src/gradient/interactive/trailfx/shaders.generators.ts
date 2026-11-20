@@ -8,7 +8,7 @@
  *   ribbon     – a triangle strip with soft edges, glow, dashes and beads
  * Colours are premultiplied everywhere, matching the canvas. */
 
-const PALETTE = `
+export const PALETTE = `
 uniform vec3 uPal[8];
 uniform float uPalN;
 uniform float uStepped;

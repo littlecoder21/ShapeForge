@@ -625,6 +625,46 @@
   letter-spacing: .04em;
 }
 
+.gs-tf-pass-aside {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.gs-tf-pass-aside .gs-tf-x {
+  flex: 0 0 auto;
+}
+
+.gs-tf-pass-aside .gs-tf-x:hover,
+.gs-tf-pass-aside .gs-tf-x:focus-visible {
+  border-color: var(--sh-accent);
+  color: var(--sh-accent);
+}
+
+.gs-tf-svg-text {
+  min-height: 84px;
+  resize: vertical;
+  font: 11px/1.4 ui-monospace, monospace;
+}
+
+.gs-tf-file-label {
+  position: relative;
+  overflow: hidden;
+}
+
+.gs-tf-file-label input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.gs-tf-error {
+  color: #ff9a9a;
+}
+
 .gs-tf-x {
   width: 28px;
   height: 28px;

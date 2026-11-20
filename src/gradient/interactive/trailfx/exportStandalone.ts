@@ -8,8 +8,14 @@ import { TRAILFX_FORMAT_VERSION, normalizeTrailFx, type TrailFxConfig } from './
 export interface TrailFxFiles { 'index.html': string; 'style.css': string; 'script.js': string; 'effect.json': string }
 export const TRAILFX_FORMAT = 'shapeforge-trailfx';
 
+/** The shader library an exported effect needs: only the pass kinds the effect actually uses (the full library, with the 25 field generators, is several hundred KB). */
+function libraryFor(config: TrailFxConfig): typeof TRAILFX_SOURCES {
+  const used = new Set(config.passes.map(pass => pass.kind));
+  return { ...TRAILFX_SOURCES, kinds: Object.fromEntries(Object.entries(TRAILFX_SOURCES.kinds).filter(([kind]) => used.has(kind))) };
+}
+
 export function buildTrailFxJson(config: TrailFxConfig): string {
-  return JSON.stringify({ format: TRAILFX_FORMAT, version: TRAILFX_FORMAT_VERSION, config: { ...config, enabled: true }, library: TRAILFX_SOURCES }, null, 1);
+  return JSON.stringify({ format: TRAILFX_FORMAT, version: TRAILFX_FORMAT_VERSION, config: { ...config, enabled: true }, library: libraryFor(config) }, null, 1);
 }
 
 /** Runtime for attaching Trail FX to an existing ShapeForge gradient root. */
