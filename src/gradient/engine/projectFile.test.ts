@@ -23,6 +23,20 @@ test('legacy raw project JSON remains importable', () => {
   assert.deepEqual(imported.warnings, []);
 });
 
+test('per-stop effects survive project normalization', () => {
+  const project = newProject();
+  project.layers[1].stops[0].effects = [{
+    id: 'stop-blur',
+    type: 'blur',
+    enabled: true,
+    params: { radius: 32 },
+  }];
+  const imported = parseProjectFile(serializeProjectFile(project));
+  assert.equal(imported.project.layers[1].stops[0].effects?.[0].type, 'blur');
+  assert.equal(imported.project.layers[1].stops[0].effects?.[0].params.radius, 32);
+  assert.deepEqual(imported.warnings, []);
+});
+
 test('unsupported gradient and shader settings recover with warnings', () => {
   const project = newProject();
   const source = JSON.parse(JSON.stringify(project)) as Record<string, unknown>;

@@ -24,6 +24,8 @@ export interface ColorStop {
   color: string;      // #rrggbb
   alpha: number;      // 0…1
   pos: number;        // 0…100 along the gradient
+  /** Optional effects applied only to this stop and its local transition. */
+  effects?: EffectInstance[];
   /** Optional cubic-bezier easing for the transition from this stop to the next. */
   curve?: { x1: number; y1: number; x2: number; y2: number };
   /** Hold this colour until the next stop's position, then switch abruptly (hard edge). */
@@ -273,7 +275,7 @@ export function cloneLayer(l: GradientLayer, keepId = false): GradientLayer {
     delete c.builderSource;
     delete c.builderGroup;
     const map = new Map<string, string>();
-    c.stops.forEach(s => { const n = uid('s'); map.set(s.id, n); s.id = n; });
+    c.stops.forEach(s => { const n = uid('s'); map.set(s.id, n); s.id = n; s.effects?.forEach(e => { e.id = uid('e'); }); });
     c.mesh.points.forEach(p => { const n = uid('m'); map.set(p.id, n); p.id = n; });
     c.effects.forEach(e => { e.id = uid('e'); });
     c.mesh.points.forEach(p => p.effects?.forEach(e => { e.id = uid('e'); }));
@@ -321,6 +323,16 @@ export function normalizeProject(raw: unknown): GradientProject {
       },
     } : effect);
     if (!Array.isArray(merged.stops) || merged.stops.length < 2) merged.stops = newLayer(t).stops;
+    merged.stops = merged.stops.map((stopValue: ColorStop) => ({
+      ...stopValue,
+      id: stopValue.id || uid('s'),
+      effects: (stopValue.effects ?? []).filter(effect => effect && typeof effect.type === 'string').map(effect => ({
+        ...effect,
+        id: effect.id || uid('e'),
+        enabled: effect.enabled !== false,
+        params: effect.params && typeof effect.params === 'object' ? effect.params : {},
+      })),
+    }));
     merged.mesh = { ...DEFAULT_MESH, ...(l.mesh ?? {}), points: (l.mesh?.points ?? []).map(p => ({
       ...p,
       id: p.id || uid('m'),

@@ -1,4 +1,4 @@
-import { rgbaString } from './color';
+import { rgbaCss, rgbaString } from './color';
 import { EFFECTS, activeEffects } from './effects';
 import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } from './geom';
 import { meshCoord, meshParts } from './mesh';
@@ -6,7 +6,7 @@ import { IDENTITY, outputOf, sortedStops, type AnimTrack, type ColorStop, type G
 import { noiseDataUri } from './noise';
 import { curveSvgDataUri } from './curve';
 import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
-import { curveProgress } from './ramp';
+import { curveProgress, stopRgba } from './ramp';
 import { textureDataUri, textureOverlay } from './textures';
 import { textMaskDataUri } from './text';
 
@@ -62,7 +62,7 @@ function posCss(layer: GradientLayer, pos: number, ctx: Ctx): string {
 
 export function stopTokens(layer: GradientLayer, ctx: Ctx): string[] {
   const st = sortedStops(layer.stops), out: string[] = [];
-  const colorOf = (x: ColorStop) => ctx.colorVar.get(x.id) ?? rgbaString(x.color, x.alpha * ctx.alphaMul);
+  const colorOf = (x: ColorStop) => ctx.colorVar.get(x.id) ?? ((x.effects?.length ?? 0) ? rgbaCss(stopRgba({ ...x, alpha: x.alpha * ctx.alphaMul })) : rgbaString(x.color, x.alpha * ctx.alphaMul));
   const posOf = (x: ColorStop) => ctx.posVar.get(x.id) ?? posCss(layer, x.pos, ctx);
   st.forEach((x, i) => {
     const nx = st[i + 1];

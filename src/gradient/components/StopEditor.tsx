@@ -1,6 +1,7 @@
 import { useMemo, useRef, type KeyboardEvent as RKeyboardEvent, type PointerEvent as RPointerEvent } from 'react';
 import { Copy, Plus, Trash2 } from 'lucide-react';
-import { ValueControl, Switch, Seg } from '../../shared/controls';
+import { ValueControl, Switch, Seg, Section } from '../../shared/controls';
+import { EFFECTS, EFFECT_LIST, newEffect } from '../engine/effects';
 import { gradientFn } from '../engine/css';
 import { colorAtPos, CURVE_PRESETS, curvePreset, curveProgress, type CurvePreset } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
@@ -34,6 +35,11 @@ export default function StopEditor({ layerId }: { layerId: string }) {
 
   const patchStops = (fn: (s: ColorStop[]) => ColorStop[], coalesce?: string) => store.updateLayer(layerId, l => ({ ...l, stops: fn(l.stops) }), { coalesce });
   const patchStop = (id: string, p: Partial<ColorStop>, coalesce?: string) => patchStops(ss => ss.map(s => (s.id === id ? { ...s, ...p } : s)), coalesce);
+  const setStopFx = (stopId: string, effectId: string, fn: (e: NonNullable<ColorStop['effects']>[number]) => NonNullable<ColorStop['effects']>[number], coalesce?: string) => {
+    patchStop(stopId, {
+      effects: (stops.find(s => s.id === stopId)?.effects ?? []).map(effect => effect.id === effectId ? fn(effect) : effect),
+    }, coalesce);
+  };
   const sliderGesture = { onBegin: () => store.begin(), onCommit: () => store.end() };
   const posOf = (e: { clientX: number }) => {
     const r = bar.current?.getBoundingClientRect();
@@ -140,6 +146,25 @@ export default function StopEditor({ layerId }: { layerId: string }) {
         </>}
         <p className="hint">Custom curves are approximated with sampled CSS colour mixes and rendered directly for PNG/SVG.</p>
       </div>}
+      <Section title="Stop effects" hint={`${(sel.effects ?? []).filter(effect => effect.enabled).length} active`}>
+        <p className="hint">Effects are attached to this stop only, instead of the entire gradient layer.</p>
+        <div className="gs-chips gs-addchips" role="group" aria-label="Add stop effect">
+          {EFFECT_LIST.map(effect => <button key={effect.id} type="button" className="chip" title={effect.hint} onClick={() => patchStop(sel.id, { effects: [...(sel.effects ?? []), newEffect(effect.id)] })} data-testid={`stop-add-fx-${effect.id}`}>+ {effect.label}</button>)}
+        </div>
+        {(sel.effects ?? []).map(effect => {
+          const def = EFFECTS[effect.type];
+          if (!def) return null;
+          return <div key={effect.id} className={`gs-fxcard ${effect.enabled ? '' : 'off'}`} data-testid="stop-fx-card">
+            <div className="gs-fxhead">
+              <b>{def.label}</b>
+              <Switch label="" checked={effect.enabled} onChange={enabled => setStopFx(sel.id, effect.id, current => ({ ...current, enabled }))} testId={`stop-fx-on-${effect.type}`} />
+              <button type="button" className="icon-btn" aria-label={`Remove stop ${def.label}`} onClick={() => patchStop(sel.id, { effects: (sel.effects ?? []).filter(current => current.id !== effect.id) })} data-testid={`stop-fx-del-${effect.type}`}><Trash2 /></button>
+            </div>
+            {def.params.map(param => <ValueControl key={param.key} label={param.label} value={effect.params[param.key] ?? param.def} min={param.min} max={param.max} step={param.step} unit={param.unit} def={param.def} onChange={value => setStopFx(sel.id, effect.id, current => ({ ...current, params: { ...current.params, [param.key]: value } }), `stop-fx-${effect.id}-${param.key}`)} testId={`stop-fx-${effect.type}-${param.key}`} {...sliderGesture} />)}
+            <p className="hint">{def.hint}</p>
+          </div>;
+        })}
+      </Section>
       <Switch label="Hard edge after this stop" checked={!!sel.hard} onChange={v => patchStop(sel.id, { hard: v || undefined })} testId="stop-hard" />
       <div className="gs-btnrow">
         <button type="button" className="btn" onClick={duplicate} data-testid="stop-duplicate"><Copy />Duplicate</button>

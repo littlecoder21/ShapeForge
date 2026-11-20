@@ -3,6 +3,7 @@ import { buildTrailFxJson, buildTrailFxRuntime } from '../interactive/trailfx/ex
 import { layeredOutput, selectorFor } from './css';
 import type { GradientProject } from './model';
 import { outputOf } from './model';
+import { stagedLayeredOutput, usesScaledStage } from './stageOutput';
 import { ZipWriter } from '../export/zip';
 
 export type WebsiteTag = 'section' | 'div' | 'article' | 'header' | 'main' | 'aside' | 'figure';
@@ -91,18 +92,21 @@ ${hasScript ? '<script src="script.js" defer></script>' : ''}
 `;
 }
 
-function makeReadme(mode: CodeExportMode, hasScript: boolean, includesTrailFx: boolean, websiteFileNames: WebsiteExportFileNames | null): string {
+function makeReadme(mode: CodeExportMode, hasScript: boolean, includesTrailFx: boolean, websiteFileNames: WebsiteExportFileNames | null, exactStage: boolean): string {
+  const stageNote = exactStage
+    ? 'The gradient is built at its native canvas size inside a `data-sf-stage` element and scaled to the box exactly like the ShapeForge preview, so blur, grain and textures match at every width. Keep that element and the script together; without the script a CSS-only fallback computes the same scale in modern browsers.'
+    : '';
   if (mode === 'website' && websiteFileNames) return `# ShapeForge website integration
 
 These are fragments for an existing website, not a complete page.
 
 1. Paste \`${websiteFileNames.html}\` where the gradient section should appear. It includes a link to \`${websiteFileNames.javascript}\` when this project needs JavaScript.
 2. Append \`${websiteFileNames.css}\` to your site's stylesheet. The rules are scoped to the configured root selector.
-3. ${hasScript ? `Keep the generated script link after the HTML fragment; it initializes the included shader/interaction canvases and does not add another gradient element.` : 'This project does not need a JavaScript file.'}
+3. ${hasScript ? `Keep the generated script link after the HTML fragment; it ${exactStage ? 'keeps the gradient scaled exactly like the preview' : 'initializes the included shader/interaction canvases'} and does not add another gradient element.` : 'This project does not need a JavaScript file.'}
 4. \`${websiteFileNames.effectJson}\` is included only when Trail FX needs its settings and shader library; those data are also embedded in \`${websiteFileNames.javascript}\`. It is not fetched at runtime.
 
 The root tag and class/ID/attribute selector can be changed in ShapeForge before exporting. Keep the root selector consistent between the HTML and CSS. ${includesTrailFx ? 'Trail FX is included and listens for pointer input over the configured gradient root.' : ''}
-${hasScript ? '\nThe JavaScript is dependency-free. WebGL effects require browser WebGL support.' : '\nThis project needs no JavaScript.'}
+${stageNote ? `\n${stageNote}\n` : ''}${hasScript ? '\nThe JavaScript is dependency-free. WebGL effects require browser WebGL support.' : '\nThis project needs no JavaScript.'}
 `;
   return `# ShapeForge custom export
 
@@ -112,7 +116,7 @@ ${hasScript ? '\nThe JavaScript is dependency-free. WebGL effects require browse
 - \`effect.json\` is included only when Trail FX needs its settings and shader library; those data are also embedded in \`script.js\`.
 - Use the **JSON** format in the Custom exporter for the editable ShapeForge project source.
 
-${includesTrailFx ? 'Trail FX is included with the full gradient project. Its pointer events are scoped to the exported gradient canvas.' : ''}
+${stageNote ? `${stageNote}\n\n` : ''}${includesTrailFx ? 'Trail FX is included with the full gradient project. Its pointer events are scoped to the exported gradient canvas.' : ''}
 `;
 }
 
@@ -135,7 +139,11 @@ export function buildCodeExportPackage(project: GradientProject, options: {
   const visibleShader = !!project.shader?.enabled && project.layers.some(layer => layer.visible && layer.shader?.enabled);
   const activeTrailFx = !!options.includeTrailFx && !!project.shader?.trailFx?.enabled;
   const interactive = visibleShader ? interactiveExports(project, `document.querySelector(${JSON.stringify(rootSelector)})`) : null;
-  const base = layeredOutput(project);
+  // The code export carries JavaScript anyway, so it is built like the studio preview: the layers live in a native-size
+  // stage that is scaled to the box (blur, grain and textures included), which makes the export a carbon copy of the preview.
+  // Shader-canvas projects keep their own runtime and layout.
+  const staged = !interactive && usesScaledStage(project) ? stagedLayeredOutput(project) : null;
+  const base = staged ?? layeredOutput(project);
   let html = interactive?.markup ?? base.html;
   let css = interactive
     ? [
@@ -171,6 +179,7 @@ ${css}`;
   }
 
   const javascript = [
+    staged?.runtime,
     interactive?.runtime,
     activeTrailFx && project.shader?.trailFx
       ? buildTrailFxRuntime(project.shader.trailFx, rootSelector, project.shader.touchEnabled)
@@ -189,7 +198,7 @@ ${css}`;
       [websiteFileNames.css]: css,
       ...(javascript ? { [websiteFileNames.javascript]: javascript } : {}),
       ...(effectJson ? { [websiteFileNames.effectJson]: effectJson } : {}),
-      'README.md': makeReadme(mode, !!javascript, activeTrailFx, websiteFileNames),
+      'README.md': makeReadme(mode, !!javascript, activeTrailFx, websiteFileNames, !!staged),
     }
     : {
       'index.html': makeLinkedHtml(title, html, !!javascript),
@@ -197,7 +206,7 @@ ${css}`;
       'style.css': css,
       ...(javascript ? { 'script.js': javascript } : {}),
       ...(effectJson ? { 'effect.json': effectJson } : {}),
-      'README.md': makeReadme(mode, !!javascript, activeTrailFx, null),
+      'README.md': makeReadme(mode, !!javascript, activeTrailFx, null, !!staged),
     };
 
   return { html: exportedHtml, css, javascript, effectJson, allInOneHtml, files, websiteFileNames };

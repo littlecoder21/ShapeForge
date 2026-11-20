@@ -1,10 +1,44 @@
-import { hexToRgb, mixColors, toRgba, type RGBA } from './color';
+import { hexToHsl, hslToHex, hexToRgb, mixColors, toRgba, type RGBA } from './color';
 import { sortedStops, type ColorStop, type GradientLayer } from './model';
+import { activeEffects } from './effects';
 
 /* Colour ramp evaluation with CSS semantics (hard stops, colour hints, curves, interpolation space).
  * SVG and canvas have no equivalent of hints / custom curves / oklab, so they sample this ramp. */
 
-export const stopRgba = (s: { color: string; alpha: number }): RGBA => ({ ...hexToRgb(s.color), a: s.alpha });
+export const stopRgba = (s: ColorStop | { color: string; alpha: number; effects?: ColorStop['effects'] }): RGBA => {
+  let rgb = hexToRgb(s.color);
+  const effects = 'effects' in s ? activeEffects(s.effects ?? []) : [];
+  effects.forEach(effect => {
+    const params = effect.params;
+    if (effect.type === 'brightness' || effect.type === 'contrast') {
+      const amount = (params.amount ?? 100) / 100;
+      const offset = effect.type === 'contrast' ? 127.5 * (1 - amount) : 0;
+      rgb = {
+        r: Math.max(0, Math.min(255, rgb.r * amount + offset)),
+        g: Math.max(0, Math.min(255, rgb.g * amount + offset)),
+        b: Math.max(0, Math.min(255, rgb.b * amount + offset)),
+      };
+    } else if (effect.type === 'hue' || effect.type === 'color-drift') {
+      const hsl = hexToHsl(`#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`);
+      rgb = hexToRgb(hslToHex(hsl.h + (params.angle ?? params.hue ?? 0), hsl.s * ((params.amount ?? 100) / 100), hsl.l));
+    } else if (effect.type === 'saturate') {
+      const hsl = hexToHsl(hslHex(rgb));
+      rgb = hexToRgb(hslToHex(hsl.h, hsl.s * ((params.amount ?? 100) / 100), hsl.l));
+    } else if (effect.type === 'grayscale') {
+      const gray = rgb.r * 0.299 + rgb.g * 0.587 + rgb.b * 0.114;
+      const amount = (params.amount ?? 100) / 100;
+      rgb = {
+        r: rgb.r * (1 - amount) + gray * amount,
+        g: rgb.g * (1 - amount) + gray * amount,
+        b: rgb.b * (1 - amount) + gray * amount,
+      };
+    }
+  });
+  return { ...rgb, a: s.alpha };
+};
+
+const hslHex = (rgb: { r: number; g: number; b: number }) =>
+  `#${Math.round(rgb.r).toString(16).padStart(2, '0')}${Math.round(rgb.g).toString(16).padStart(2, '0')}${Math.round(rgb.b).toString(16).padStart(2, '0')}`;
 export const rampRange = (layer: GradientLayer) => { const st = sortedStops(layer.stops); return { lo: st[0].pos, hi: st[st.length - 1].pos }; };
 
 export const CURVE_PRESETS = {
