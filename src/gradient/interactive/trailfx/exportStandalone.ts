@@ -12,6 +12,44 @@ export function buildTrailFxJson(config: TrailFxConfig): string {
   return JSON.stringify({ format: TRAILFX_FORMAT, version: TRAILFX_FORMAT_VERSION, config: { ...config, enabled: true }, library: TRAILFX_SOURCES }, null, 1);
 }
 
+/** Runtime for attaching Trail FX to an existing ShapeForge gradient root. */
+export function buildTrailFxRuntime(config: TrailFxConfig, rootSelector: string, touch = true): string {
+  const runtime = runtimeSource.replace(/^export\s+/gm, '');
+  const safeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+  const effectData = JSON.parse(buildTrailFxJson(config)) as { config: TrailFxConfig; library: typeof TRAILFX_SOURCES };
+  return `(() => {
+${runtime}
+const shapeForgeTrailFxData = ${safeJson(effectData)};
+(() => {
+  const hosts = document.querySelectorAll(${safeJson(rootSelector)});
+  if (!hosts.length) throw new Error('ShapeForge Trail FX could not find its gradient element.');
+  hosts.forEach(host => {
+    const canvas = host.querySelector('[data-shapeforge-trailfx]');
+    if (!(canvas instanceof HTMLCanvasElement) || canvas.dataset.shapeforgeInitialized) return;
+    canvas.dataset.shapeforgeInitialized = 'true';
+    const fx = createTrailFx(canvas, {
+      sources: shapeForgeTrailFxData.library,
+      config: shapeForgeTrailFxData.config,
+      onError: message => { console.warn('ShapeForge Trail FX disabled:', message); canvas.style.display = 'none'; },
+    });
+    if (!fx) return;
+    const forward = kind => event => {
+      if (event.pointerType === 'touch' && !${touch}) return;
+      fx.handle(kind, event);
+    };
+    window.addEventListener('pointermove', forward('move'), { passive: true });
+    window.addEventListener('pointerdown', forward('down'), { passive: true });
+    window.addEventListener('pointerup', forward('up'));
+    window.addEventListener('pointercancel', forward('cancel'));
+    document.documentElement.addEventListener('pointerleave', forward('leave'), { passive: true });
+    window.addEventListener('scroll', () => fx.invalidate(), { passive: true, capture: true });
+    new ResizeObserver(() => fx.resize()).observe(canvas);
+  });
+})();
+})();
+`;
+}
+
 /** Accepts an exported effect.json (version 1 or 2), a bare config, or a ShapeForge config copied from the panel. */
 export function parseTrailFxJson(text: string): TrailFxConfig | null {
   const value = JSON.parse(text) as { format?: unknown; config?: unknown };
@@ -22,6 +60,8 @@ export function buildTrailFxFiles(config: TrailFxConfig, options: { title?: stri
   const title = (options.title || config.name || 'Trail FX').replace(/[<>&]/g, '');
   const background = options.background || '#0b1220';
   const runtime = runtimeSource.replace(/^export\s+/gm, '');
+  const effectData = JSON.parse(buildTrailFxJson(config)) as { config: TrailFxConfig; library: typeof TRAILFX_SOURCES };
+  const embeddedData = JSON.stringify(effectData).replace(/</g, '\\u003c');
   return {
     'index.html': `<!DOCTYPE html>
 <html lang="en">
@@ -46,19 +86,10 @@ export function buildTrailFxFiles(config: TrailFxConfig, options: { title?: stri
 .notice { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%); margin: 0; padding: 0.6rem 1rem; border-radius: 999px; background: rgba(0, 0, 0, 0.55); font-size: 0.8rem; }
 `,
     'script.js': `${runtime}
+const effectData = ${embeddedData};
 (async () => {
   const canvas = document.getElementById('trailfx');
-  let data;
-  try { data = await (await fetch('effect.json')).json(); }
-  catch (error) {
-    canvas.style.display = 'none';
-    const note = document.createElement('p');
-    note.className = 'notice';
-    note.textContent = 'Open this page through a local server so effect.json can load.';
-    document.body.appendChild(note);
-    return;
-  }
-  const fx = createTrailFx(canvas, { sources: data.library, config: data.config, onError: (message) => { console.warn(message); canvas.style.display = 'none'; } });
+  const fx = createTrailFx(canvas, { sources: effectData.library, config: effectData.config, onError: (message) => { console.warn(message); canvas.style.display = 'none'; } });
   if (!fx) return;
   const forward = (kind) => (event) => fx.handle(kind, event);
   window.addEventListener('pointermove', forward('move'), { passive: true });

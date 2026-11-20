@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Copy, Download, ImageDown, Upload } from 'lucide-react';
-import { Seg } from '../../shared/controls';
+import { ChevronDown, Copy, Download, Upload } from 'lucide-react';
+import { Seg, Switch } from '../../shared/controls';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 import { buildOutputs } from '../engine/output';
+import { buildCodeExportPackage, codeExportSlug, codeExportZip } from '../engine/codeExport';
 import { exportPng } from '../engine/raster';
 import { outputOf } from '../engine/model';
 import { parseProjectFile } from '../engine/projectFile';
@@ -21,10 +22,11 @@ import { interactiveExports } from '../../interactive/export';
 import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
 import OutputSettingsForm from './OutputSettingsForm';
+import WebsiteExportPanel from './WebsiteExportPanel';
 import { useStudio } from './ui';
 
 type Fmt = 'css' | 'html' | 'interactive' | 'vars' | 'svg' | 'keyframes' | 'json';
-const FORMATS: { id: Fmt; label: string }[] = [{ id: 'css', label: 'CSS' }, { id: 'html', label: 'HTML + CSS' }, { id: 'interactive', label: 'Interactive' }, { id: 'vars', label: 'Variables' }, { id: 'svg', label: 'SVG' }, { id: 'keyframes', label: 'Keyframes' }, { id: 'json', label: 'JSON' }];
+const FORMATS: { id: Fmt; label: string }[] = [{ id: 'css', label: 'CSS' }, { id: 'html', label: 'All in HTML' }, { id: 'interactive', label: 'Interactive' }, { id: 'vars', label: 'Variables' }, { id: 'svg', label: 'SVG' }, { id: 'keyframes', label: 'Keyframes' }, { id: 'json', label: 'JSON' }];
 
 const save = (name: string, blob: Blob) => {
   const url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -34,7 +36,7 @@ const save = (name: string, blob: Blob) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
-/** Output panel — organised code, each format with its own copy actions. */
+/** Output panel — organised code, each format with its own copy actions. Image files (PNG, JPEG, WebP) are exported from the Image panel. */
 export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt) => void }) {
   const { store, announce } = useStudio();
   const project = useDeferredValue(useStore(store, s => s.project));
@@ -47,11 +49,24 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const [recoveryWarnings, setRecoveryWarnings] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [system, setSystem] = useState<'custom' | 'website'>('custom');
+  const [includeTrailFx, setIncludeTrailFx] = useState(true);
   const configuredName = outputOf(project).downloadName.trim();
   const slug = (configuredName || project.name || 'gradient').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'gradient';
   const saveText = (extension: string, text: string, type = 'text/plain;charset=utf-8') => save(`${slug}.${extension}`, new Blob([text], { type }));
   const saveStandaloneHtml = () => save(`${slug}.standalone.html`, new Blob([interactive.html], { type: 'text/html;charset=utf-8' }));
   const saveStandaloneJs = () => save(`${slug}.standalone.js`, new Blob([interactive.javascript], { type: 'text/javascript;charset=utf-8' }));
+  const codePackage = useMemo(() => buildCodeExportPackage(project, { mode: 'custom', includeTrailFx }), [project, includeTrailFx]);
+  const customSlug = codeExportSlug(project);
+  const hasTrailFx = !!project.shader?.trailFx?.enabled;
+  const downloadCodeZip = async () => {
+    try {
+      save(`${customSlug}-custom-export.zip`, await codeExportZip(customSlug, codePackage.files));
+      announce('All custom export files downloaded');
+    } catch (error) {
+      announce(error instanceof Error ? `Custom export failed: ${error.message}` : 'Custom export failed');
+    }
+  };
   const standaloneHtmlButton = <button type="button" className="btn small" onClick={saveStandaloneHtml} aria-label="Download standalone interactive HTML" data-testid="download-interactive-standalone-html-direct"><Download />.html</button>;
   const standaloneJsButton = <button type="button" className="btn small" onClick={saveStandaloneJs} aria-label="Download standalone interactive JavaScript" data-testid="download-interactive-standalone-js-direct"><Download />.js</button>;
   const downloadButton = (extension: string, text: string, label = `.${extension}`) => <button type="button" className="btn small" onClick={() => saveText(extension, text)} data-testid={`download-${extension}`}><Download />{label}</button>;
@@ -60,15 +75,6 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
     catch { announce('Clipboard unavailable'); }
   };
 
-  const png = async (scale: number) => {
-    try {
-      const r = await exportPng(project, scale);
-      save(`${slug}${scale === 1 ? '' : `@${scale}x`}.png`, r.blob);
-      announce(r.notes.length ? r.notes.join(' · ') : `PNG exported · ${project.canvas.w * scale}×${project.canvas.h * scale}`);
-    } catch (error) {
-      announce(error instanceof Error ? `PNG export failed: ${error.message}` : 'PNG export failed');
-    }
-  };
   const downloadPreset = async () => {
     try {
       const result = await exportPng(project, 1);
@@ -108,17 +114,20 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const downloadRecoveryBackup = () => save(`${slug}.recovery-backup.json`, new Blob([recoveryBackup], { type: 'application/json;charset=utf-8' }));
 
   return <div className="gs-output" data-testid="output-panel">
+    <div className="gs-fmt" role="tablist" aria-label="Export system">
+      <button type="button" role="tab" aria-selected={system === 'custom'} className={`ptab ${system === 'custom' ? 'active' : ''}`} onClick={() => setSystem('custom')} data-testid="export-system-custom">Custom</button>
+      <button type="button" role="tab" aria-selected={system === 'website'} className={`ptab ${system === 'website' ? 'active' : ''}`} onClick={() => setSystem('website')} data-testid="export-system-website">Website integration</button>
+    </div>
+    {system === 'website' ? <WebsiteExportPanel /> : <>
+    {hasTrailFx && <Switch label="Include Trail FX from the project preview" checked={includeTrailFx} onChange={setIncludeTrailFx} testId="custom-include-trailfx" />}
+    <div className="gs-copyrow" role="group" aria-label="Custom export downloads">
+      <button type="button" className="btn primary" onClick={() => { void downloadCodeZip(); }} data-testid="custom-download-all"><Download />Download all files ZIP</button>
+    </div>
     <div className="gs-fmt" role="tablist" aria-label="Output format">
       {FORMATS.map(f => <button key={f.id} type="button" role="tab" aria-selected={fmt === f.id} className={`ptab ${fmt === f.id ? 'active' : ''}`} onClick={() => setFmt(f.id)} data-testid={`out-tab-${f.id}`}>{f.label}</button>)}
       <button type="button" className={`ptab gear ${showSettings ? 'active' : ''}`} onClick={() => setShowSettings(!showSettings)} aria-expanded={showSettings} data-testid="out-settings-toggle">Names &amp; size</button>
     </div>
     {showSettings && <OutputSettingsForm />}
-    <div className="gs-copyrow gs-downloadbar" role="group" aria-label="Download PNG at output resolution">
-      <span className="nf-label">Download preview</span>
-      <button type="button" className="btn small" onClick={() => png(1)} data-testid="png-1"><ImageDown />PNG</button>
-      <button type="button" className="btn small" onClick={() => png(2)} data-testid="png-2"><ImageDown />PNG @2×</button>
-      <button type="button" className="btn small" onClick={() => png(3)} data-testid="png-3"><ImageDown />PNG @3×</button>
-    </div>
     {out.analysis.needsLayers && (fmt === 'css' || fmt === 'vars') && <div className="gs-note" role="note" data-testid="flat-note">
       <b>Approximate:</b> {out.analysis.warnings.slice(0, 2).join(' · ')}{out.analysis.warnings.length > 2 ? ` · +${out.analysis.warnings.length - 2} more` : ''}.
       <button type="button" className="link" onClick={() => setFmt('html')}>Use HTML + CSS for the exact result</button>
@@ -130,14 +139,18 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
     </>}
     {fmt === 'html' && <>
       <div className="gs-copyrow" role="group" aria-label="Copy options">
-        <button type="button" className="btn primary" onClick={() => navigator.clipboard.writeText(out.layered.all).then(() => announce('HTML + CSS copied'), () => announce('Clipboard unavailable'))} data-testid="copy-all">Copy all</button>
+        <button type="button" className="btn primary" onClick={() => navigator.clipboard.writeText(codePackage.allInOneHtml).then(() => announce('Standalone HTML copied'), () => announce('Clipboard unavailable'))} data-testid="copy-all">Copy all in HTML</button>
         <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(out.layered.css).then(() => announce('CSS copied'), () => announce('Clipboard unavailable'))} data-testid="copy-css">Copy CSS</button>
         <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(out.layered.html).then(() => announce('HTML copied'), () => announce('Clipboard unavailable'))} data-testid="copy-html">Copy HTML</button>
-        {downloadButton('html', out.layered.all, 'Download all')}
+        {downloadButton('html', codePackage.allInOneHtml, 'Download all in HTML')}
         {downloadButton('css', out.layered.css, 'Download CSS')}
       </div>
-      <CodeBlock title="HTML" text={out.layered.html} lang="html" testId="code-html" copyLabel="Copy HTML" />
-      <CodeBlock title="CSS" text={out.layered.css} testId="code-layered-css" copyLabel="Copy CSS" />
+      <CodeBlock title="Standalone HTML (CSS, runtime and project JSON included)" text={codePackage.allInOneHtml} lang="html" testId="code-html" copyLabel="Copy standalone HTML" />
+      <details className="gs-export-settings">
+        <summary className="btn small">Show separate HTML and CSS</summary>
+        <CodeBlock title="HTML fragment" text={out.layered.html} lang="html" testId="code-html-fragment" copyLabel="Copy HTML" />
+        <CodeBlock title="CSS" text={out.layered.css} testId="code-layered-css" copyLabel="Copy CSS" />
+      </details>
     </>}
     {fmt === 'vars' && <CodeBlock title="CSS variables" text={out.vars} testId="code-vars" actions={downloadButton('css', out.vars)} />}
     {fmt === 'svg' && <>
@@ -232,6 +245,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
         <ul>{recoveryWarnings.map(warning => <li key={warning}>{warning}</li>)}</ul>
         <button type="button" className="btn small" onClick={downloadRecoveryBackup} data-testid="download-recovery-backup"><Download />Download original JSON backup</button>
       </div>}
+    </>}
     </>}
   </div>;
 }

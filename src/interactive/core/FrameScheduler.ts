@@ -8,6 +8,8 @@
  * Global controls live here so they apply to every layer at once:
  *   setPaused(true)      stops the loop entirely; queued callbacks wait and resume together
  *   setTimeScale(0…n)    a global speed multiplier renderers fold into their own time (0.5 = half speed)
+ *   step(timestamp)      runs the waiting callbacks once, right now, with a timestamp of the caller's choosing. The video / image
+ *                        export uses it (with the loop paused) to advance shader time deterministically, frame by frame.
  * One failing callback never stops the others. */
 
 export type FrameCallback = (now: number) => void;
@@ -31,6 +33,10 @@ export class FrameScheduler {
   private scale = 1;
   private frames = 0;
   private host: FrameSchedulerHost | null;
+  /** added to browser timestamps once a stepped frame has run ahead of the real clock, so callbacks never see time go backwards */
+  private offset = 0;
+  /** the latest timestamp handed out by `step`, 0 when no stepped frame is waiting to be reconciled */
+  private steppedTo = 0;
 
   constructor(host?: FrameSchedulerHost) {
     this.host = host ?? browserHost();
@@ -66,6 +72,17 @@ export class FrameScheduler {
   /** Frames the loop has delivered since creation (handy for tests and diagnostics). */
   get frameCount(): number { return this.frames; }
 
+  /** The timestamp the next real frame would carry (the same clock requestAnimationFrame reports, kept monotonic). */
+  clock(): number {
+    return (typeof performance !== 'undefined' ? performance.now() : 0) + this.offset;
+  }
+
+  /** Runs every waiting callback once with `timestamp`, even while paused. Timestamps passed to consecutive calls must not decrease. */
+  step(timestamp: number): void {
+    this.steppedTo = Math.max(this.steppedTo, timestamp);
+    this.runBatch(timestamp);
+  }
+
   private ensureLoop(): void {
     if (this.handle || this.paused || !this.pending.size || !this.host) return;
     this.handle = this.host.raf(this.tick);
@@ -77,9 +94,7 @@ export class FrameScheduler {
     this.handle = 0;
   }
 
-  private readonly tick = (now: number): void => {
-    this.handle = 0;
-    if (this.paused) return;
+  private runBatch(now: number): void {
     this.frames += 1;
     // callbacks that ask for another frame while running land in `pending` and run next frame
     const batch = new Map(this.pending);
@@ -94,6 +109,19 @@ export class FrameScheduler {
       }
     }
     this.running = null;
+  }
+
+  private readonly tick = (raw: number): void => {
+    this.handle = 0;
+    if (this.paused) return;
+    let now = raw + this.offset;
+    if (this.steppedTo > now) {
+      // stepped frames ran ahead of the real clock: carry on from where they stopped instead of going backwards
+      this.offset += this.steppedTo - now;
+      now = this.steppedTo;
+    }
+    this.steppedTo = 0;
+    this.runBatch(now);
     this.ensureLoop();
   };
 }

@@ -7,14 +7,17 @@ import {
   type TrailFxBlend, type TrailFxConfig, type TrailFxKind, type TrailFxParamDef, type TrailFxPass,
 } from '../../interactive/trailfx/model';
 import { buildTrailFxFiles, buildTrailFxJson, parseTrailFxJson } from '../../interactive/trailfx/exportStandalone';
+import { buildCodeExportPackage, codeExportSlug, codeExportZip } from '../../engine/codeExport';
+import { useStore } from '../../engine/store';
 import { Num, Section, Select } from './parts';
 import { useShader } from './context';
 import ColorEditor from './TrailFxColors';
+import { useStudio } from '../ui';
 
 const GLYPH_SAMPLES = ['✦', '★', '♥', '❄', '✿', '♪', '●', '◆', '+', '01', '❀✿'];
 
-function download(name: string, text: string, type: string) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+function downloadBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
@@ -77,10 +80,13 @@ function PassCard({ pass, index, total, onChange, onMove, onRemove, onDuplicate 
  *  (particles, ribbons, colour maps) from scratch. */
 export default function TrailFxPanel() {
   const { settings, update, announce } = useShader();
+  const { store } = useStudio();
+  const project = useStore(store, state => state.project);
   const config = settings.trailFx ?? null;
   const [group, setGroup] = useState<string>(TRAILFX_PRESET_MAP[config?.presetId ?? '']?.group ?? TRAILFX_PRESET_GROUPS[0]);
   const [jsonText, setJsonText] = useState('');
   const [showJson, setShowJson] = useState(false);
+  const [includeProject, setIncludeProject] = useState(true);
 
   const commit = (next: TrailFxConfig, coalesce?: string) => update({ trailFx: next }, coalesce ? `trailfx-${coalesce}` : undefined);
   const edited = (current: TrailFxConfig): Pick<TrailFxConfig, 'presetId' | 'name'> => ({
@@ -105,12 +111,26 @@ export default function TrailFxPanel() {
     announce('Colour map set to your palette: it recolours everything above it.');
   };
   const files = () => buildTrailFxFiles(config!, { title: config!.name });
-  const downloadAll = () => {
+  const downloadAll = async () => {
     if (!config) return;
-    const all = files();
-    const types: Record<string, string> = { 'index.html': 'text/html', 'style.css': 'text/css', 'script.js': 'text/javascript', 'effect.json': 'application/json' };
-    (Object.keys(all) as (keyof typeof all)[]).forEach((name, i) => setTimeout(() => download(name, all[name], types[name]), i * 300));
-    announce('Downloading index.html, style.css, script.js and effect.json.');
+    try {
+      const slug = codeExportSlug(project);
+      if (includeProject) {
+        const bundle = buildCodeExportPackage(project, { mode: 'custom', includeTrailFx: true });
+        downloadBlob(`${slug}-full-project.zip`, await codeExportZip(slug, bundle.files));
+        announce('Full project preview downloaded with Trail FX.');
+      } else {
+        const all = files();
+        const filesWithGuide = {
+          ...all,
+          'README.md': '# ShapeForge Trail FX only\n\nOpen index.html directly; script.js contains the effect data and does not fetch files. The effect.json file is the clean, editable Trail FX settings and shader library and can be imported back into ShapeForge.\n',
+        };
+        downloadBlob(`${slug}-trailfx-only.zip`, await codeExportZip(slug, filesWithGuide));
+        announce('Trail FX-only ZIP downloaded.');
+      }
+    } catch (error) {
+      announce(error instanceof Error ? `Trail FX export failed: ${error.message}` : 'Trail FX export failed');
+    }
   };
   const copyJson = async () => {
     if (!config) return;
@@ -193,9 +213,10 @@ export default function TrailFxPanel() {
       </Section>
 
       <Section title="Export" open={false}>
-        <p className="hint">Download the effect as four plain files (index.html, style.css, script.js, effect.json). Open the page through a local server. The same effect.json can be pasted back here.</p>
+        <p className="hint">Download Trail FX by itself, or include the full gradient, shader, procedural and interaction project shown in the preview.</p>
+        <Switch label="Include the full project preview" checked={includeProject} onChange={setIncludeProject} testId="trailfx-include-project" />
         <div className="gs-chip-row">
-          <button type="button" className="btn small" onClick={downloadAll} data-testid="trailfx-download"><Download />Download 4 files</button>
+          <button type="button" className="btn small" onClick={() => { void downloadAll(); }} data-testid="trailfx-download"><Download />Download {includeProject ? 'full project' : 'Trail FX-only'} ZIP</button>
           <button type="button" className="btn small" onClick={copyJson}><Copy />Copy effect.json</button>
           <button type="button" className="btn small" onClick={() => setShowJson(!showJson)}>{showJson ? 'Hide JSON' : 'Paste JSON'}</button>
         </div>

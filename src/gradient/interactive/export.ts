@@ -535,7 +535,7 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     entries.push({
       layer: null,
       settings: defaultSettings,
-      adapter: { ...fallbackPalette, geometry: { kind: 'linear' as const, angle: 135, originX: 50, originY: 50, radiusX: 50, radiusY: 50 }, meshPoints: [], meshBase: '' },
+      adapter: { ...fallbackPalette, geometry: { kind: 'linear' as const, angle: 135, originX: 50, originY: 50, radiusX: 50, radiusY: 50 }, meshPoints: [], meshBase: '', mesh: null },
       layerState: { styleParams: resolveStyleParams(defaultSettings.style), reaction: 1 },
       layerMix: { palette: [], space: 'srgb', mode: 'mix', strength: 0, speed: 0 },
     });

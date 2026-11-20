@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronDown, ChevronUp, Code2, Copy, Frame, Redo2, Settings2, Undo2, Wand2 } from 'lucide-react';
+import { ArrowLeft, ChevronDown, ChevronUp, Code2, Frame, Image as ImageIcon, Redo2, Settings2, Undo2, Video, Wand2 } from 'lucide-react';
 import { useMedia } from '../shared/useMedia';
 import AnimationPanel from './components/AnimationPanel';
 import ApplySheet, { type ApplyOptions } from './components/ApplySheet';
 import ScenesPanel from './components/ScenesPanel';
 import EffectsPanel from './components/EffectsPanel';
+import ImageExportPanel from './components/ImageExportPanel';
 import InteractivePanel from './components/InteractivePanel';
 import GradientPanel from './components/GradientPanel';
 import LayersPanel from './components/LayersPanel';
@@ -15,8 +16,8 @@ import ProjectMenu from './components/ProjectMenu';
 import TransformPanel from './components/TransformPanel';
 import TexturePanel from './components/TexturePanel';
 import TextPanel from './components/TextPanel';
+import VideoExportPanel from './components/VideoExportPanel';
 import { StudioCtx, Empty } from './components/ui';
-import { buildOutputs } from './engine/output';
 import { normalizeProject, type GradientProject } from './engine/model';
 import { loadProject, saveProject } from './engine/persist';
 import { createStudioStore, useStore } from './engine/store';
@@ -27,6 +28,10 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'layers', label: 'Layers' }, { id: 'gradient', label: 'Gradient' }, { id: 'text', label: 'Text' }, { id: 'transform', label: 'Transform' }, { id: 'fx', label: 'FX' }, { id: 'texture', label: 'Texture' },
   { id: 'animate', label: 'Animate' }, { id: 'shader', label: 'Shader' }, { id: 'scenes', label: 'Scenes' }, { id: 'presets', label: 'Presets' },
 ];
+
+/** The panel that slides up from the output bar: code, still image export or video export. */
+type Sheet = 'code' | 'image' | 'video';
+const SHEET_TITLE: Record<Sheet, string> = { code: 'Code', image: 'Image export', video: 'Video export' };
 
 export interface GradientStudioProps {
   onClose: () => void;
@@ -44,7 +49,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
   const wide = useMedia('(min-width: 1000px)');
   const [tab, setTab] = useState<Tab>('presets');
   const [dockOpen, setDockOpen] = useState(true), [dockTall, setDockTall] = useState(false);
-  const [outOpen, setOutOpen] = useState(false), [fmt, setFmt] = useState<Fmt>('css');
+  const [sheet, setSheet] = useState<Sheet | null>(null), [fmt, setFmt] = useState<Fmt>('css');
   const [playing, setPlaying] = useState(false);
   const [menu, setMenu] = useState<'project' | 'apply' | null>(null);
   const [toast, setToast] = useState('');
@@ -53,6 +58,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
   const announce = useCallback((m: string) => { setToast(m); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setToast(''), 2200); }, []);
   const stopPlayback = useCallback(() => setPlaying(false), []);
   const ctx = useMemo(() => ({ store, announce }), [store, announce]);
+  const toggleSheet = (next: Sheet) => setSheet(current => current === next ? null : next);
 
   useEffect(() => store.subscribe(() => saveProject(store.getState().project)), [store]);
   const layerId = useStore(store, s => s.layerId);
@@ -66,18 +72,11 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
       const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
       if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? store.redo() : store.undo(); }
       else if (mod && k === 'y') { e.preventDefault(); store.redo(); }
-      else if (k === 'escape') { if (menu) setMenu(null); else if (outOpen) setOutOpen(false); }
+      else if (k === 'escape') { if (menu) setMenu(null); else if (sheet) setSheet(null); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [store, menu, outOpen]);
-
-  const copyBest = async () => {
-    const o = buildOutputs(store.getState().project);
-    const text = o.analysis.needsLayers ? o.layered.css : o.flat.full;
-    try { await navigator.clipboard.writeText(text); announce(o.analysis.needsLayers ? 'Copied exact layered CSS (blur / effects need layers)' : 'CSS copied'); } catch { announce('Clipboard unavailable'); }
-  };
-  const copySvg = async () => { try { await navigator.clipboard.writeText(buildOutputs(store.getState().project).svg); announce('SVG copied'); } catch { announce('Clipboard unavailable'); } };
+  }, [store, menu, sheet]);
 
   const body = (t: Tab) => {
     if (t === 'presets') return <PresetsPanel onApplied={() => { if (!wide) setDockTall(false); }} />;
@@ -110,11 +109,13 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
   </header>;
 
   const outbar = <footer className="gs-outbar">
-    <button type="button" className="btn primary big" onClick={copyBest} data-testid="copy-css-bar"><Copy />Copy CSS</button>
-    <button type="button" className="btn big" onClick={copySvg} data-testid="copy-svg-bar"><Copy />Copy SVG</button>
+    <button type="button" className={`btn big ${sheet === 'video' ? 'on' : ''}`} onClick={() => toggleSheet('video')} aria-expanded={sheet === 'video'} data-testid="gs-video"><Video />Video</button>
+    <button type="button" className={`btn big ${sheet === 'image' ? 'on' : ''}`} onClick={() => toggleSheet('image')} aria-expanded={sheet === 'image'} data-testid="gs-image"><ImageIcon />Image</button>
     {showApply && <button type="button" className="btn big" onClick={() => setMenu(menu === 'apply' ? null : 'apply')} data-testid="gs-apply"><Wand2 />Shape</button>}
-    <button type="button" className={`btn big icon ${outOpen ? 'on' : ''}`} onClick={() => setOutOpen(!outOpen)} aria-expanded={outOpen} aria-label="Show code" data-testid="gs-code"><Code2 />{outOpen ? <ChevronDown /> : <ChevronUp />}</button>
+    <button type="button" className={`btn big icon ${sheet === 'code' ? 'on' : ''}`} onClick={() => toggleSheet('code')} aria-expanded={sheet === 'code'} aria-label="Show code" data-testid="gs-code"><Code2 />{sheet === 'code' ? <ChevronDown /> : <ChevronUp />}</button>
   </footer>;
+
+  const sheetBody = sheet === 'code' ? <OutputPanel fmt={fmt} setFmt={setFmt} /> : sheet === 'image' ? <ImageExportPanel /> : sheet === 'video' ? <VideoExportPanel /> : null;
 
   const overlays = <>
     {menu === 'project' && <div className="gs-pop"><ProjectMenu onClose={() => setMenu(null)} /></div>}
@@ -129,9 +130,9 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
         <aside className="gs-left" aria-label="Layers"><div className="gs-panelhead">Layers</div><div className="gs-panelbody"><LayersPanel /></div></aside>
         <section className="gs-center"><PreviewStage store={store} mode={activeTab === 'transform' ? 'transform' : 'gradient'} playing={playing} onTogglePlay={() => setPlaying(p => !p)} onPlaybackComplete={stopPlayback} /></section>
         <aside className="gs-right" aria-label="Tools">{tabBar('panel-tabs')}<div className="gs-panelbody">{body(activeTab)}</div></aside>
-        <section className={`gs-bottom ${outOpen ? 'open' : ''}`} aria-label="Output">
-          <div className="gs-bottom-bar"><b>Output</b>{outbar}</div>
-          {outOpen && <div className="gs-bottom-body"><OutputPanel fmt={fmt} setFmt={setFmt} /></div>}
+        <section className={`gs-bottom ${sheet ? 'open' : ''} ${sheet === 'image' || sheet === 'video' ? 'xp-tall' : ''}`} aria-label={sheet ? SHEET_TITLE[sheet] : 'Output'}>
+          <div className="gs-bottom-bar"><b>{sheet ? SHEET_TITLE[sheet] : 'Output'}</b>{outbar}</div>
+          {sheet && <div className="gs-bottom-body">{sheetBody}</div>}
         </section>
       </> : <>
         <div className="gs-main">
@@ -143,7 +144,7 @@ export default function GradientStudio({ onClose, initial, shapeName, hasPaint =
           {dockOpen && <div className={`gs-dock ${dockTall ? 'tall' : ''}`} data-testid="gs-dock">{body(activeTab)}</div>}
         </div>
         {outbar}
-        {outOpen && <section className="gs-outsheet" aria-label="Output"><div className="gs-sheet-grab" onClick={() => setOutOpen(false)} /><OutputPanel fmt={fmt} setFmt={setFmt} /></section>}
+        {sheet && <section className="gs-outsheet" aria-label={SHEET_TITLE[sheet]}><div className="gs-sheet-grab" onClick={() => setSheet(null)} />{sheetBody}</section>}
       </>}
       {overlays}
     </div>
