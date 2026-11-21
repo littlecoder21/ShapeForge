@@ -6,7 +6,7 @@ import { IDENTITY, outputOf, sortedStops, type AnimTrack, type ColorStop, type G
 import { noiseDataUri } from './noise';
 import { curveSvgDataUri } from './curve';
 import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
-import { curveProgress, stopRgba } from './ramp';
+import { curveProgress, smoothedRamp, stopRgba } from './ramp';
 import { textureDataUri, textureOverlay } from './textures';
 import { textMaskDataUri } from './text';
 
@@ -61,6 +61,10 @@ function posCss(layer: GradientLayer, pos: number, ctx: Ctx): string {
 }
 
 export function stopTokens(layer: GradientLayer, ctx: Ctx): string[] {
+  // Stop effects Blur / Colour bleed / Glow: the smoothed ramp is baked into plain colour stops (stops whose position or colour
+  // is animated through CSS variables keep their live variables, so smoothing is skipped for those layers).
+  const smoothed = !ctx.posVar.size && !ctx.colorVar.size ? smoothedRamp(layer) : null;
+  if (smoothed) return smoothed.map(sample => `${rgbaCss({ ...sample.color, a: sample.color.a * ctx.alphaMul })} ${posCss(layer, sample.pos, ctx)}`);
   const st = sortedStops(layer.stops), out: string[] = [];
   const colorOf = (x: ColorStop) => ctx.colorVar.get(x.id) ?? ((x.effects?.length ?? 0) ? rgbaCss(stopRgba({ ...x, alpha: x.alpha * ctx.alphaMul })) : rgbaString(x.color, x.alpha * ctx.alphaMul));
   const posOf = (x: ColorStop) => ctx.posVar.get(x.id) ?? posCss(layer, x.pos, ctx);

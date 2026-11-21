@@ -15,8 +15,11 @@ import { outputOf, type GradientProject } from './model';
  *     <div data-sf-stage>                    ← native canvas size, scaled by --sf-k (box width ÷ canvas width)
  *       <i class="layer layer-1"></i> …
  *
- * A tiny dependency-free script keeps --sf-k exact. Without JavaScript a CSS-only fallback computes the same number in
- * browsers that support container units and tan(atan2()). */
+ * CSS computes --sf-k itself (container units + tan(atan2())), so the scale can never go stale on zoom or resize; the tiny
+ * dependency-free script keeps the stage height in step with the box and covers browsers that lack those functions.
+ *
+ * The permanent `will-change: transform, opacity` hint the preview uses is left out of the export: the browser still moves
+ * animated layers to the GPU on its own, and without the hint their raster scale follows zoom instead of staying pinned. */
 
 const cssIdentifier = (value: string, fallback: string) => {
   const clean = value.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-') || fallback;
@@ -35,39 +38,43 @@ export function usesScaledStage(project: GradientProject): boolean {
   return !literalOutputPreview;
 }
 
-/** Keeps `--sf-k` (box width ÷ canvas width) and `--sf-h` (stage height in canvas pixels) in sync with the box. */
+/** Keeps `--sf-h` (stage height in canvas pixels) in sync with the box and, in browsers that cannot compute the scale in CSS,
+ *  `--sf-k` (box width ÷ canvas width). Where CSS can do it, the scale is left to CSS so it can never go stale. */
 export function buildStageRuntime(rootSelector: string, canvasWidth: number): string {
-  return `/* ShapeForge: scales the gradient stage to its box so the export matches the studio preview at any size. */
+  return `/* ShapeForge: keeps the gradient stage fitted to its box so the export matches the studio preview at any size or zoom. */
 (function () {
   var SELECTOR = ${JSON.stringify(rootSelector)};
   var CANVAS_WIDTH = ${Math.round(canvasWidth)};
+  var CSS_SCALE = !!(window.CSS && CSS.supports && CSS.supports('transform', 'scale(tan(atan2(100cqw, ' + CANVAS_WIDTH + 'px)))'));
+  var roots = [], queued = false;
 
-  function fit(root, width, height) {
+  function fit(root) {
+    var style = getComputedStyle(root), width = parseFloat(style.width), height = parseFloat(style.height);
     if (!(width > 0) || !(height > 0)) return;
-    var k = width / CANVAS_WIDTH;
-    root.style.setProperty('--sf-k', String(k));
-    root.style.setProperty('--sf-h', (height / k) + 'px');
+    var k = width / CANVAS_WIDTH, h = height / k;
+    if (root.__sfK === k && root.__sfH === h) return;
+    root.__sfK = k; root.__sfH = h;
+    if (!CSS_SCALE) root.style.setProperty('--sf-k', String(k));
+    root.style.setProperty('--sf-h', h + 'px');
   }
 
-  function init(root) {
-    if (root.__sfStage) return;
-    root.__sfStage = true;
-    fit(root, root.clientWidth, root.clientHeight);
-    if (typeof ResizeObserver === 'function') {
-      new ResizeObserver(function (entries) {
-        var box = entries[0].contentRect;
-        fit(root, box.width, box.height);
-      }).observe(root);
-    } else {
-      window.addEventListener('resize', function () { fit(root, root.clientWidth, root.clientHeight); });
+  function fitAll() { queued = false; for (var i = 0; i < roots.length; i++) fit(roots[i]); }
+  function schedule() { if (queued) return; queued = true; (window.requestAnimationFrame || setTimeout)(fitAll); }
+
+  function start() {
+    var found = document.querySelectorAll(SELECTOR);
+    for (var i = 0; i < found.length; i++) {
+      if (found[i].__sfStage) continue;
+      found[i].__sfStage = true;
+      roots.push(found[i]);
+      fit(found[i]);
+      if (typeof ResizeObserver === 'function') new ResizeObserver(schedule).observe(found[i]);
     }
   }
 
-  function start() {
-    var roots = document.querySelectorAll(SELECTOR);
-    for (var i = 0; i < roots.length; i++) init(roots[i]);
-  }
-
+  window.addEventListener('resize', schedule);
+  window.addEventListener('orientationchange', schedule);
+  window.addEventListener('pageshow', schedule);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 })();`;
@@ -110,7 +117,7 @@ export function stagedLayeredOutput(project: GradientProject) {
     rootRules,
     fallbackRules,
     stageRules,
-    ...[...visible].reverse().map(l => layerCss(l, project, options)),
+    ...[...visible].reverse().map(l => layerCss(l, project, options).replace(/\n  will-change: transform, opacity;/g, '')),
     ...(anyAnim ? [`${comment('Respect reduced-motion preferences')}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : []),
   ].filter(Boolean).join('\n\n');
 

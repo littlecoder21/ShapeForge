@@ -1,7 +1,7 @@
 import { useMemo, useRef, type KeyboardEvent as RKeyboardEvent, type PointerEvent as RPointerEvent } from 'react';
 import { Copy, Plus, Trash2 } from 'lucide-react';
 import { ValueControl, Switch, Seg, Section } from '../../shared/controls';
-import { EFFECTS, EFFECT_LIST, newEffect } from '../engine/effects';
+import { STOP_EFFECTS, STOP_EFFECT_LIST, newStopEffect, reachOf } from '../engine/stopEffects';
 import { gradientFn } from '../engine/css';
 import { colorAtPos, CURVE_PRESETS, curvePreset, curveProgress, type CurvePreset } from '../engine/ramp';
 import { rgbToHex } from '../engine/color';
@@ -19,6 +19,8 @@ export function reverseStops(stops: ColorStop[]): ColorStop[] {
   return mirrored;
 }
 
+type StopEffect = NonNullable<ColorStop['effects']>[number];
+
 export default function StopEditor({ layerId }: { layerId: string }) {
   const { store, announce } = useStudio();
   const layer = useStore(store, s => s.project.layers.find(l => l.id === layerId) ?? null);
@@ -35,11 +37,11 @@ export default function StopEditor({ layerId }: { layerId: string }) {
 
   const patchStops = (fn: (s: ColorStop[]) => ColorStop[], coalesce?: string) => store.updateLayer(layerId, l => ({ ...l, stops: fn(l.stops) }), { coalesce });
   const patchStop = (id: string, p: Partial<ColorStop>, coalesce?: string) => patchStops(ss => ss.map(s => (s.id === id ? { ...s, ...p } : s)), coalesce);
-  const setStopFx = (stopId: string, effectId: string, fn: (e: NonNullable<ColorStop['effects']>[number]) => NonNullable<ColorStop['effects']>[number], coalesce?: string) => {
-    patchStop(stopId, {
-      effects: (stops.find(s => s.id === stopId)?.effects ?? []).map(effect => effect.id === effectId ? fn(effect) : effect),
-    }, coalesce);
-  };
+  // computed from the latest stops inside the update, so quick slider moves never overwrite each other
+  const setStopFx = (stopId: string, effectId: string, fn: (e: StopEffect) => StopEffect, coalesce?: string) => patchStops(
+    ss => ss.map(s => (s.id === stopId ? { ...s, effects: (s.effects ?? []).map(effect => (effect.id === effectId ? fn(effect) : effect)) } : s)),
+    coalesce,
+  );
   const sliderGesture = { onBegin: () => store.begin(), onCommit: () => store.end() };
   const posOf = (e: { clientX: number }) => {
     const r = bar.current?.getBoundingClientRect();
@@ -69,7 +71,24 @@ export default function StopEditor({ layerId }: { layerId: string }) {
     addAt(best.gap < 0 ? 50 : best.pos);
   };
   const remove = () => { if (!sel) return; if (stops.length <= 2) { announce('A gradient needs at least two stops'); return; } patchStops(ss => ss.filter(s => s.id !== sel.id)); store.selectStop(null); };
-  const duplicate = () => { if (!sel) return; const id = uid('s'); patchStops(ss => [...ss, { ...sel, id, pos: Math.min(100, r1(sel.pos + 4)) }]); store.selectStop(id); };
+  const duplicate = () => {
+    if (!sel) return;
+    const id = uid('s');
+    patchStops(ss => [...ss, { ...sel, id, pos: Math.min(100, r1(sel.pos + 4)), effects: sel.effects?.map(effect => ({ ...effect, id: uid('e'), params: { ...effect.params } })) }]);
+    store.selectStop(id);
+  };
+
+  /** One slider that melts the whole ramp: a Blur on every stop (0 removes them). */
+  const smoothAll = stops.reduce((max, s) => Math.max(max, (s.effects ?? []).find(effect => effect.type === 'blur' && effect.enabled)?.params.radius ?? 0), 0);
+  const setSmoothAll = (radius: number) => patchStops(ss => ss.map(s => {
+    const rest = (s.effects ?? []).filter(effect => effect.type !== 'blur'), prior = (s.effects ?? []).find(effect => effect.type === 'blur');
+    if (radius <= 0) return { ...s, effects: rest.length ? rest : undefined };
+    const blur: StopEffect = prior ? { ...prior, enabled: true, params: { ...prior.params, radius } } : { ...newStopEffect('blur'), params: { radius } };
+    return { ...s, effects: [...rest, blur] };
+  }), 'stops-smooth-all');
+
+  const reach = sel ? reachOf(sel.effects) : 0;
+  const reachLeft = sel ? Math.max(0, sel.pos - reach) : 0, reachRight = sel ? Math.min(100, sel.pos + reach) : 0;
 
   const markerDown = (e: RPointerEvent, id: string) => {
     e.preventDefault();
@@ -104,6 +123,9 @@ export default function StopEditor({ layerId }: { layerId: string }) {
     }), { coalesce: `stop-pos-${s.id}` });
   };
 
+  const addEffectChips = (group: 'smooth' | 'colour') => STOP_EFFECT_LIST.filter(effect => effect.group === group).map(effect =>
+    <button key={effect.id} type="button" className="chip" title={effect.hint} onClick={() => sel && patchStop(sel.id, { effects: [...(sel.effects ?? []), newStopEffect(effect.id)] })} data-testid={`stop-add-fx-${effect.id}`}>+ {effect.label}</button>);
+
   return <div className="gs-stops" data-testid="stop-editor">
     <div className="gs-stopbar-wrap">
       <div className="gs-stopbar" ref={bar} style={{ background: `${barBg}, ${CHECKER}` }}
@@ -116,7 +138,12 @@ export default function StopEditor({ layerId }: { layerId: string }) {
         </button>)}
       </div>
     </div>
+    {reach > 0 && <div aria-hidden="true" data-testid="stop-reach" title="How far this stop's smoothing reaches" style={{ position: 'relative', height: 6, margin: '2px 0 6px', borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+      <i style={{ position: 'absolute', top: 0, bottom: 0, left: `${reachLeft}%`, width: `${Math.max(0, reachRight - reachLeft)}%`, borderRadius: 3, background: 'linear-gradient(90deg, transparent, rgba(117,228,188,0.85) 50%, transparent)' }} />
+    </div>}
     <p className="gs-bar-hint">Tap the bar to add a stop · drag a handle or use arrow keys for 0.1% steps. Overlapping stops cycle on tap.</p>
+    <ValueControl label="Smooth all stops" value={smoothAll} min={0} max={40} step={0.5} unit="%" def={0} onChange={setSmoothAll} testId="stops-smooth-all" {...sliderGesture} />
+    <p className="hint">One slider that blurs every stop into its neighbours. Fine-tune a single stop under “Stop effects”.</p>
     <div className="gs-chips" role="listbox" aria-label="Stops">
       {sorted.map((s, i) => <button key={s.id} type="button" role="option" aria-selected={s.id === selId} className={`gs-stopchip ${s.id === selId ? 'sel' : ''}`} onClick={() => store.selectStop(s.id)} data-testid="stop-chip">
         <i style={{ background: s.color, opacity: Math.max(0.25, s.alpha) }} />{i + 1}<small>{s.pos}%</small>
@@ -147,13 +174,23 @@ export default function StopEditor({ layerId }: { layerId: string }) {
         <p className="hint">Custom curves are approximated with sampled CSS colour mixes and rendered directly for PNG/SVG.</p>
       </div>}
       <Section title="Stop effects" hint={`${(sel.effects ?? []).filter(effect => effect.enabled).length} active`}>
-        <p className="hint">Effects are attached to this stop only, instead of the entire gradient layer.</p>
-        <div className="gs-chips gs-addchips" role="group" aria-label="Add stop effect">
-          {EFFECT_LIST.map(effect => <button key={effect.id} type="button" className="chip" title={effect.hint} onClick={() => patchStop(sel.id, { effects: [...(sel.effects ?? []), newEffect(effect.id)] })} data-testid={`stop-add-fx-${effect.id}`}>+ {effect.label}</button>)}
-        </div>
+        <p className="hint">Effects act on this stop only. Smooth effects soften the blend with its neighbours; Colour effects change the stop’s own colour.</p>
+        <div className="field-label">Smooth</div>
+        <div className="gs-chips gs-addchips" role="group" aria-label="Add smoothing effect">{addEffectChips('smooth')}</div>
+        <div className="field-label">Colour</div>
+        <div className="gs-chips gs-addchips" role="group" aria-label="Add colour effect">{addEffectChips('colour')}</div>
         {(sel.effects ?? []).map(effect => {
-          const def = EFFECTS[effect.type];
-          if (!def) return null;
+          const def = STOP_EFFECTS[effect.type];
+          if (!def) {
+            // an effect saved before stops were limited to the ones above (e.g. grain): it never did anything on a stop
+            return <div key={effect.id} className="gs-fxcard off" data-testid="stop-fx-card-unsupported">
+              <div className="gs-fxhead">
+                <b>{effect.type}</b>
+                <button type="button" className="icon-btn" aria-label={`Remove stop ${effect.type}`} onClick={() => patchStop(sel.id, { effects: (sel.effects ?? []).filter(current => current.id !== effect.id) })}><Trash2 /></button>
+              </div>
+              <p className="hint">This effect works on pixels, so it cannot change a colour stop. Remove it, or add it to the whole layer under Effects.</p>
+            </div>;
+          }
           return <div key={effect.id} className={`gs-fxcard ${effect.enabled ? '' : 'off'}`} data-testid="stop-fx-card">
             <div className="gs-fxhead">
               <b>{def.label}</b>
