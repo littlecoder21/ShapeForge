@@ -29,7 +29,19 @@ describe('procedural GLSL injection', () => {
     expect(out.indexOf('procDistort(warped, t)')).toBeLessThan(out.indexOf(PROC_ANCHORS.warp));
     expect(out.indexOf('procSample(warped')).toBeLessThan(out.indexOf(PROC_ANCHORS.color));
     expect(out).toContain('procDistort(warped, uProcD.y)');
-    for (const name of PROCEDURAL_UNIFORM_NAMES) expect(out).toContain(name.replace('[0]', ''));
+    // the base uniforms are always declared; the optional blocks (shape records, RBF, extra fields, material) only when compiled in
+    for (const name of PROCEDURAL_UNIFORM_NAMES.slice(0, 12)) expect(out).toContain(name.replace('[0]', ''));
+    expect(out).not.toContain('uniform vec4 uProcRbf');
+    expect(out).not.toContain('uniform vec4 uProcM0');
+    expect(out).not.toContain('uniform vec4 uProcShape');
+  });
+  it('declares every uniform the runtime uploads in at least one feature variant', () => {
+    const variants = [
+      cfg(), cfg({ field: { method: 'rbf-gaussian' } }), cfg({ influence: { shape: 'ellipse' } }),
+      cfg({ fields: [{}], material: { enabled: true, glow: 0.5 } }),
+    ];
+    const text = variants.map(variant => injectProceduralGlsl(TEMPLATE, variant)).join('\n');
+    for (const name of PROCEDURAL_UNIFORM_NAMES) expect(text).toContain(name.replace('[0]', ''));
   });
   it('compiles only the distortion types that are present', () => {
     const wave = generateProceduralGlsl(cfg({ distortion: [{ type: 'wave' }, { type: 'none' }, { type: 'none' }] })).functions;
@@ -52,10 +64,11 @@ describe('procedural GLSL injection', () => {
   it('generates distinct inverse-multiquadric and compact-support kernels', () => {
     const inverse = generateProceduralGlsl(cfg({ field: { method: 'inverse-multiquadric' } })).functions;
     const compact = generateProceduralGlsl(cfg({ field: { method: 'wendland-c2' } })).functions;
-    expect(inverse).toContain('inversesqrt(1.0 + scaled * scaled)');
+    expect(inverse).toContain('inversesqrt(1.0 + (dn * mix(1.0, 4.0, falloff))');
     expect(inverse).not.toContain('support * support * support * support');
+    expect(inverse).not.toContain('procCustomKernel');
     expect(compact).toContain('support * support * support * support * (4.0 * dn + 1.0)');
-    expect(compact).not.toContain('inversesqrt(1.0 + scaled * scaled)');
+    expect(compact).not.toContain('inversesqrt(');
   });
   it('fails loudly if the template changes and an anchor disappears or repeats', () => {
     expect(() => injectProceduralGlsl(TEMPLATE.replace(PROC_ANCHORS.warp, ''), cfg())).toThrow(/warp/);

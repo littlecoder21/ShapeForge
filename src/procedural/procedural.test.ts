@@ -3,7 +3,7 @@ import { proceduralizeSource, type ProceduralSource } from './convert';
 import { PROCEDURAL_PRESETS, applyPreset, isLocked, parsePresetFile, randomizeProcedural, reseed, serializePresetFile } from './presets';
 import { bakeColorLut, createProceduralState, forceDisplacement, generatePoints, motionPosition, pointCount, PROC_MAX_POINTS } from './proceduralRuntime';
 import {
-  DEFAULT_PROCEDURAL, FIELD_METHODS, MOTION_TYPES, POINT_DISTRIBUTIONS, newProcedural, normalizeProcedural, parseProcedural, proceduralSignature, serializeProcedural,
+  DEFAULT_PROCEDURAL, FIELD_METHODS, MOTION_TYPES, POINT_DISTRIBUTIONS, PROCEDURAL_VERSION, newProcedural, normalizeProcedural, parseProcedural, proceduralSignature, serializeProcedural,
   type ProceduralConfig,
 } from './types';
 
@@ -18,7 +18,7 @@ describe('procedural model', () => {
     expect(fixed.points.max).toBeGreaterThanOrEqual(fixed.points.min);
     expect(fixed.color.colors).toEqual(['#12ab34']);
     expect(fixed.distortion).toHaveLength(3);
-    expect(normalizeProcedural(null).version).toBe(1);
+    expect(normalizeProcedural(null).version).toBe(PROCEDURAL_VERSION);
   });
   it('clamps numbers to their ranges', () => {
     const c = normalizeProcedural({ motion: { speed: 99, amplitude: -3 }, field: { exponent: 100 }, color: { hue: 1000 } });

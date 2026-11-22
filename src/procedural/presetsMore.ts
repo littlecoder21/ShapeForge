@@ -1,4 +1,5 @@
 import { PROCEDURAL_PRESETS, type ProceduralPreset } from './presets';
+import { ADVANCED_PROCEDURAL_PRESETS } from './presetsAdvanced';
 import type { DistortionType } from './types';
 
 /* Additional procedural presets (17). They use exactly the same shape and rules as the built-in ones in presets.ts: a partial config
@@ -181,5 +182,5 @@ export const MORE_PROCEDURAL_PRESETS: readonly ProceduralPreset[] = [
   },
 ];
 
-/** Built-in presets followed by the additional ones. Ids are unique across both lists. */
-export const ALL_PROCEDURAL_PRESETS: readonly ProceduralPreset[] = [...PROCEDURAL_PRESETS, ...MORE_PROCEDURAL_PRESETS];
+/** Built-in presets, the additional ones, then the advanced-engine ones (presetsAdvanced.ts). Ids are unique across all lists. */
+export const ALL_PROCEDURAL_PRESETS: readonly ProceduralPreset[] = [...PROCEDURAL_PRESETS, ...MORE_PROCEDURAL_PRESETS, ...ADVANCED_PROCEDURAL_PRESETS];

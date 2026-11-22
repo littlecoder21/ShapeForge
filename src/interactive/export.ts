@@ -7,7 +7,7 @@ import { bakePaletteLut, encodePaletteLut } from '../gradient/interactive/palett
 import { UNIFORM_NAMES } from './uniforms';
 import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from '../gradient/interactive/styles';
 import { assembleProceduralShader } from '../procedural/glsl';
-import { isProceduralActive, type ProceduralConfig } from '../procedural/types';
+import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../procedural/types';
 import { ruleTextureAtlasDataUri } from '../gradient/interactive/rig/textureAtlas';
 import { shapeCellsBase64 } from '../gradient/interactive/rig/shapeField';
 import fragmentShaderTemplate from '../gradient/interactive/shaders/gradient.frag.glsl?raw';
@@ -40,7 +40,7 @@ function proceduralRuntimeExpression() {
  *  procedural distortion types) the project uses. */
 export function projectFragmentSource(
   settings: Pick<InteractiveSettings, 'rig' | 'quality'>,
-  procedural: Pick<ProceduralConfig, 'enabled' | 'distortion'> | null = null,
+  procedural: ProceduralConfig | null = null,
 ) {
   return assembleProceduralShader(fragmentShaderTemplate, settings.rig, {
     octaves: QUALITY_OCTAVES[settings.quality],
@@ -729,7 +729,7 @@ export function interactiveGlslExport(project?: GradientProject) {
     if (!procedural) return;
     const source = projectFragmentSource(settings, procedural);
     if (source !== baseSource && !variants.some(variant => variant.source === source)) {
-      variants.push({ label: procedural.distortion.map(stage => stage.type).join(', '), source });
+      variants.push({ label: proceduralSignature(procedural), source });
     }
   });
   return [
@@ -744,8 +744,11 @@ export function interactiveGlslExport(project?: GradientProject) {
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
     '// Finishing: uToneMap, uVignette, uSheen, uGrain; palette texture: uPaletteLut.',
-    '// Procedural engine (only in the procedural variants below): uProcPoints[12], uProcColors[12], uProcA..uProcD, uProcGrade, uProcBase,',
-    '// uProcWarpA/B/C[3]. The CPU side that fills them (seeded points, motion, forces) is procedural/proceduralRuntime.js.',
+    '// Procedural engine (only in the procedural variants below): uProcPoints[n], uProcColors[n], uProcA..uProcD, uProcGrade, uProcBase,',
+    '// uProcWarpA/B/C[3], uProcF/G/H (interpolation settings) and, only when compiled in, uProcShape[n] (shaped reach), uProcRbf[n] / uProcRbfP / uProcRbfR',
+    '// (exact RBF), uProcFieldA/B/C[3] (extra fields) and uProcM0..M3 (lighting & glow). A variant\'s label is its proceduralSignature(): the interpolation',
+    '// method, shaped reach, OKLCH, extra fields, lighting and distortion targets it compiles in. The CPU side that fills the uniforms (seeded points,',
+    '// motion, forces, the RBF solve) is procedural/proceduralRuntime.js.',
     `// Legacy pointer style ids (now presets in the builder): ${POINTER_MODES.map(mode => mode.id).join(', ')}`,
     '',
     '// --- vertex.glsl ---',
@@ -753,7 +756,7 @@ export function interactiveGlslExport(project?: GradientProject) {
     '',
     '// --- fragment.glsl ---',
     baseSource,
-    ...variants.flatMap((variant, index) => ['', `// --- fragment.procedural-${index + 1}.glsl (distortion stages: ${variant.label}) ---`, variant.source]),
+    ...variants.flatMap((variant, index) => ['', `// --- fragment.procedural-${index + 1}.glsl (compiled features: ${variant.label}) ---`, variant.source]),
   ].join('\n');
 }
 

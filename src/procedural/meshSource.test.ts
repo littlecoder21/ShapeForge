@@ -215,7 +215,7 @@ describe('presets', () => {
   it('ships unique, valid presets', () => {
     const ids = ALL_PROCEDURAL_PRESETS.map(p => p.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ALL_PROCEDURAL_PRESETS.length).toBe(PROCEDURAL_PRESETS.length + 17);
+    expect(ALL_PROCEDURAL_PRESETS.length).toBe(PROCEDURAL_PRESETS.length + 17 + 10); // + the ten advanced presets (presetsAdvanced.ts)
     for (const preset of ALL_PROCEDURAL_PRESETS) {
       const applied = applyPreset(newProcedural({ enabled: true }), preset);
       expect(applied.enabled).toBe(true);

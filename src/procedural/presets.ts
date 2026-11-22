@@ -1,7 +1,7 @@
 import { createRng } from './proceduralRuntime';
 import {
-  DEFAULT_PROCEDURAL, DISTORTION_TYPES, FIELD_METHODS, MOTION_TYPES, POINT_DISTRIBUTIONS, normalizeProcedural,
-  type DistortionType, type FieldMethod, type MotionType, type ProceduralConfig,
+  DEFAULT_PROCEDURAL, DISTORTION_TYPES, FIELD_METHODS, MOTION_TYPES, POINT_DISTRIBUTIONS, normalizeProcedural, validateProcedural,
+  type DistortionType, type FieldMethod, type MotionType, type ProceduralConfig, type ProceduralIssue,
 } from './types';
 
 /* Presets, the randomiser and preset files.
@@ -280,7 +280,8 @@ export function randomizeProcedural(current: ProceduralConfig, scope: RandomizeS
     };
   }
   if (all || scope === 'motion') {
-    const types: MotionType[] = MOTION_TYPES.filter(type => type !== 'static' && type !== 'follow');
+    // the randomiser keeps to the original motions (a stable look per seed); the newer ones are one click away in the panel
+    const types: MotionType[] = MOTION_TYPES.filter(type => ['orbit', 'circle', 'figure8', 'sine', 'drift', 'noise', 'flow', 'wander'].includes(type));
     draft.motion = {
       ...draft.motion, type: choose(rng, types), mixed: rng() < 0.2, speed: range(rng, 0.3, 1.2), amplitude: range(rng, 0.05, 0.18),
       frequency: range(rng, 0.6, 1.8), smoothness: range(rng, 0.4, 0.9), randomness: range(rng, 0.2, 0.7), direction: rng() < 0.25 ? -1 : 1,
@@ -314,15 +315,20 @@ export function reseed(current: ProceduralConfig, seed: number): ProceduralConfi
 
 export function serializePresetFile(name: string, config: ProceduralConfig): string {
   const { enabled: _enabled, locks: _locks, anchors: _anchors, origin: _origin, ...portable } = normalizeProcedural(config);
-  return JSON.stringify({ format: PRESET_FORMAT, version: 1, name: name.slice(0, 60) || 'Untitled', config: portable }, null, 2);
+  return JSON.stringify({ format: PRESET_FORMAT, version: 2, name: name.slice(0, 60) || 'Untitled', config: portable }, null, 2);
 }
 
-export function parsePresetFile(text: string): { name: string; config: ProceduralPresetConfig } | null {
+/** Reads a preset file (version 1 or 2). `issues` lists what was unknown or repaired, so the panel can say so instead of failing silently. */
+export function parsePresetFile(text: string): { name: string; config: ProceduralPresetConfig; issues: ProceduralIssue[] } | null {
   try {
     const parsed = JSON.parse(text) as { format?: unknown; name?: unknown; config?: unknown };
     if (parsed.format !== PRESET_FORMAT || !parsed.config || typeof parsed.config !== 'object') return null;
-    const normalized = normalizeProcedural(parsed.config);
-    return { name: typeof parsed.name === 'string' ? parsed.name.slice(0, 60) : 'Imported preset', config: normalized as unknown as ProceduralPresetConfig };
+    const checked = validateProcedural(parsed.config);
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name.slice(0, 60) : 'Imported preset',
+      config: checked.config as unknown as ProceduralPresetConfig,
+      issues: checked.issues,
+    };
   } catch {
     return null;
   }

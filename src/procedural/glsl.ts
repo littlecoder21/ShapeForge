@@ -1,5 +1,6 @@
 import { assembleFragmentShader, type ShaderBuildOptions } from '../gradient/interactive/rig/glsl';
-import { PROC_MAX_POINTS, PROC_MAX_STAGES, isProceduralActive, proceduralCapacity, type DistortionType, type ProceduralConfig } from './types';
+import { PROC_MAX_FIELDS, PROC_MAX_POINTS, PROC_MAX_STAGES, fieldFeatures, isProceduralActive, proceduralCapacity, type DistortionType, type ProceduralConfig, type StageTarget } from './types';
+import { fieldSamplerGlsl } from './fieldGlsl';
 import { PREMULT_BLEND_COMPENSATION, cssMeshGlsl } from './meshGlsl';
 
 /* Generates the procedural part of the fragment shader and splices it into the template.
@@ -23,9 +24,10 @@ export const PROC_ANCHORS = {
 } as const;
 
 /** What the generator needs from a config: its distortion stages, and (for the loop size) its points and anchors. */
-export type ProceduralShaderInput = Pick<ProceduralConfig, 'enabled' | 'distortion'> & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh'>>;
+export type ProceduralShaderInput = Pick<ProceduralConfig, 'enabled' | 'distortion'>
+  & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh' | 'field' | 'color' | 'influence' | 'fields' | 'material'>>;
 
-const declarations = (capacity: number) => `uniform vec4 uProcPoints[${capacity}];
+const declarations = (capacity: number, f: ReturnType<typeof fieldFeatures>) => `uniform vec4 uProcPoints[${capacity}];
 uniform vec4 uProcColors[${capacity}];
 uniform vec4 uProcA;
 uniform vec4 uProcB;
@@ -37,9 +39,22 @@ uniform vec4 uProcE;
 uniform vec4 uProcWarpA[${PROC_MAX_STAGES}];
 uniform vec4 uProcWarpB[${PROC_MAX_STAGES}];
 uniform vec4 uProcWarpC[${PROC_MAX_STAGES}];
+uniform vec4 uProcF;
+uniform vec4 uProcG;
+uniform vec4 uProcH;
+${f.shaped ? `uniform vec4 uProcShape[${capacity}];` : ''}
+${f.family === 'rbf' ? `uniform vec4 uProcRbf[${capacity}];\nuniform vec4 uProcRbfP[3];\nuniform vec4 uProcRbfR[2];` : ''}
+${f.layers ? `uniform vec4 uProcFieldA[${PROC_MAX_FIELDS}];\nuniform vec4 uProcFieldB[${PROC_MAX_FIELDS}];\nuniform vec4 uProcFieldC[${PROC_MAX_FIELDS}];` : ''}
+${f.material ? 'uniform vec4 uProcM0;\nuniform vec4 uProcM1;\nuniform vec4 uProcM2;\nuniform vec4 uProcM3;' : ''}
 /* uProcA: mode (1 hybrid, 2 full), point count, field method, hybrid mix
  * uProcB: field radius, strength, falloff, softness
- * uProcC: exponent, overlap, colour space (0 srgb, 1 linear, 2 oklab), octave cap
+ * uProcC: exponent, overlap, colour space the shader decodes (0 srgb, 1 linear, 2 oklab), octave cap
+ * uProcF: OKLCH hue route (0 shorter, 1 longer, 2 increasing, 3 decreasing), chroma preservation, global influence, core intensity
+ * uProcG: custom-weighted kernel mix (gaussian, compact, inverse), polygon sides
+ * uProcH: RBF scale, RBF kernel parameter, polygon rounding, OKLCH reference hue
+ * uProcShape[i]: shape id, rotation (rad), anisotropy, inner fraction · uProcRbf[i]: exact-RBF coefficients
+ * uProcFieldA/B/C[k]: extra fields (first centre, count, kernel, blend · radius, strength, falloff, opacity · distort flag)
+ * uProcM0…3: material (sampling radius, glow, bloom, threshold · inner glow, edge glow, ambient, light · light dir, elevation, specular · shininess, depth, shadow, scatter)
  * uProcD: hue shift in radians, procedural animation time
  * uProcE: CSS-compatible mesh on (0 = the unified field), layered compositing (0 = background-image), ellipse ratio
  * uProcPoints[i]: x, y, radius, weight · uProcColors[i]: rgb, CSS hint exponent
@@ -134,14 +149,41 @@ function stageFunctions(types: DistortionType[]): string {
 }`).join('\n');
 }
 
-function distortFunction(types: DistortionType[]): string {
-  const calls = types.slice(0, PROC_MAX_STAGES).map((type, index) => type === 'none' ? '' :
-    `  if (uProcWarpA[${index}].x > 0.5) s = procStage_${type}(s, t, uProcWarpA[${index}], uProcWarpB[${index}], uProcWarpC[${index}]);`).filter(Boolean);
-  return `vec2 procDistort(vec2 sIn, float t) {
+type StageInput = { type: DistortionType; target?: StageTarget };
+const targetOf = (stage: StageInput): StageTarget => stage.target ?? 'layer';
+const stageCall = (index: number, type: string, arg: string) =>
+  `procStage_${type}(${arg}, t, uProcWarpA[${index}], uProcWarpB[${index}], uProcWarpC[${index}])`;
+
+/** One function per stage target. `layer` moves the whole shader's sampling position (the original behaviour and the default);
+ *  `field` only the position the colour field is sampled at; `points` the colour centres; `color` returns a displacement that
+ *  the entry point turns into a hue / exposure offset. A target with no stages is the identity and costs nothing. */
+function distortFunctions(stages: StageInput[]): string {
+  const list = stages.slice(0, PROC_MAX_STAGES);
+  const chain = (name: string, target: StageTarget) => {
+    const calls = list.map((stage, index) => stage.type === 'none' || targetOf(stage) !== target ? ''
+      : `  if (uProcWarpA[${index}].x > 0.5) s = ${stageCall(index, stage.type, 's')};`).filter(Boolean);
+    return `vec2 ${name}(vec2 sIn, float t) {
   vec2 s = sIn;
 ${calls.join('\n')}
   return s;
 }`;
+  };
+  const colorCalls = list.map((stage, index) => stage.type === 'none' || targetOf(stage) !== 'color' ? ''
+    : `  if (uProcWarpA[${index}].x > 0.5) d += ${stageCall(index, stage.type, 'sIn')} - sIn;`).filter(Boolean);
+  return [
+    chain('procDistort', 'layer'),
+    chain('procDistortField', 'field'),
+    chain('procDistortPoints', 'points'),
+    `vec2 procDistortColor(vec2 sIn, float t) {
+  vec2 d = vec2(0.0);
+${colorCalls.join('\n')}
+  return d;
+}`,
+    `vec2 procMovePoint(vec2 p) {
+  vec2 asp = vec2(uAspect, 1.0);
+  return procDistortPoints((p - 0.5) * asp, uProcD.y) / asp + 0.5;
+}`,
+  ].join('\n');
 }
 
 const COLOR_GLSL = `vec3 procToSrgb(vec3 lin) {
@@ -175,82 +217,6 @@ vec3 procGrade(vec3 c) {
   return clamp(c, 0.0, 1.0);
 }`;
 
-const fieldGlsl = (capacity: number) => `vec4 procSampleSmin(vec2 uv, float count, float radius, float softness) {
-  vec2 asp = vec2(uAspect, 1.0);
-  float k = 0.02 + softness * 0.35;
-  float dmin = 100.0;
-  float dsoft = 100.0;
-  for (int i = 0; i < ${capacity}; i++) {
-    if (float(i) >= count) break;
-    float dist = length((uv - uProcPoints[i].xy) * asp);
-    dmin = min(dmin, dist);
-    float h = clamp(0.5 + 0.5 * (dsoft - dist) / k, 0.0, 1.0);
-    dsoft = mix(dsoft, dist, h) - k * h * (1.0 - h);
-  }
-  float tau = 0.015 + softness * 0.25;
-  vec3 accum = vec3(0.0);
-  float wsum = 0.0;
-  for (int i = 0; i < ${capacity}; i++) {
-    if (float(i) >= count) break;
-    float dist = length((uv - uProcPoints[i].xy) * asp);
-    float w = exp(-(dist - dmin) / tau) * uProcPoints[i].w;
-    accum += uProcColors[i].rgb * w;
-    wsum += w;
-  }
-  return vec4(accum / max(wsum, 0.00001), 1.0 - smoothstep(0.0, radius * 0.55, dsoft));
-}
-
-/* rgb = the field's colour in sRGB; a = how much of the pixel it covers (always 1 in full mode) */
-vec4 procSample(vec2 uv) {
-  float count = uProcA.y;
-  float method = uProcA.z;
-  float radius = max(uProcB.x, 0.02);
-  float strength = uProcB.y;
-  float falloff = uProcB.z;
-  float expo = uProcC.x;
-  float overlapPow = 1.0 + (1.0 - uProcC.y) * 7.0;
-  vec2 asp = vec2(uAspect, 1.0);
-  vec3 encoded = vec3(0.0);
-  float cover = 0.0;
-  if (method > 3.5 && method < 4.5) {
-    vec4 s = procSampleSmin(uv, count, radius, uProcB.w);
-    encoded = s.rgb;
-    cover = s.a;
-  } else {
-    vec3 accum = vec3(0.0);
-    float wsum = 0.0;
-    float uncovered = 1.0;
-    for (int i = 0; i < ${capacity}; i++) {
-      if (float(i) >= count) break;
-      vec4 pt = uProcPoints[i];
-      float dn = length((uv - pt.xy) * asp) / max(pt.z * radius, 0.005);
-      float w;
-      if (method < 0.5) w = 1.0 / (pow(dn, expo) + 0.05);
-      else if (method < 1.5) w = exp(-dn * dn * mix(1.5, 9.0, falloff));
-      else if (method < 2.5) w = pow(1.0 - smoothstep(0.0, 1.0, dn), mix(0.6, 3.0, falloff));
-      else if (method < 3.5) w = pow(max(1.0 - dn, 0.0), expo);
-      else if (method < 5.5) w = exp(-dn * dn * mix(0.8, 6.0, falloff));
-      else if (method < 6.5) {
-        float scaled = dn * mix(1.0, 4.0, falloff);
-        w = inversesqrt(1.0 + scaled * scaled);
-      } else {
-        float support = max(1.0 - dn, 0.0);
-        w = support * support * support * support * (4.0 * dn + 1.0);
-      }
-      w = pow(max(w, 0.0), overlapPow) * pt.w * strength;
-      accum += uProcColors[i].rgb * w;
-      wsum += w;
-      uncovered *= 1.0 - clamp(w, 0.0, 1.0);
-    }
-    encoded = wsum > 0.00001 ? accum / wsum : uProcBase.rgb;
-    cover = (method < 0.5 || (method > 4.5 && method < 6.5)) ? 1.0 : 1.0 - uncovered;
-  }
-  if (uProcA.x > 1.5) {
-    return vec4(procGrade(procDecode(mix(uProcBase.rgb, encoded, cover), uProcC.z)), 1.0);
-  }
-  return vec4(procGrade(procDecode(encoded, uProcC.z)), cover);
-}`;
-
 export interface GeneratedProceduralGlsl {
   functions: string;
   /** distortion types compiled in, in stage order; changing it needs a rebuild */
@@ -259,11 +225,18 @@ export interface GeneratedProceduralGlsl {
   capacity: number;
 }
 
-export function generateProceduralGlsl(config: Pick<ProceduralConfig, 'distortion'> & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh'>>, capacity = proceduralCapacity(config)): GeneratedProceduralGlsl {
-  const types = config.distortion.slice(0, PROC_MAX_STAGES).map(stage => stage.type);
+export function generateProceduralGlsl(config: Pick<ProceduralConfig, 'distortion'> & Partial<Pick<ProceduralConfig, 'points' | 'anchors' | 'mesh' | 'field' | 'color' | 'influence' | 'fields' | 'material'>>, capacity = proceduralCapacity(config)): GeneratedProceduralGlsl {
+  const stages = config.distortion.slice(0, PROC_MAX_STAGES);
+  const types = stages.map(stage => stage.type);
   const size = Math.max(PROC_MAX_POINTS, capacity);
+  const features = fieldFeatures(config);
+  const used = (target: StageTarget) => stages.some(stage => stage.type !== 'none' && targetOf(stage) === target);
   return {
-    functions: [declarations(size), NOISE_GLSL, COLOR_GLSL, stageFunctions(types), distortFunction(types), fieldGlsl(size), cssMeshGlsl(size)].filter(Boolean).join('\n'),
+    functions: [
+      declarations(size, features), NOISE_GLSL, COLOR_GLSL, stageFunctions(types), distortFunctions(stages),
+      fieldSamplerGlsl({ capacity: size, features, fieldStages: used('field'), pointStages: used('points'), colorStages: used('color') }),
+      cssMeshGlsl(size),
+    ].filter(Boolean).join('\n'),
     signature: types.join(','),
     capacity: size,
   };

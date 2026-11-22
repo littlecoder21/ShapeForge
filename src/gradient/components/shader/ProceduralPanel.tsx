@@ -12,10 +12,14 @@ import { ALL_PROCEDURAL_PRESETS } from '../../../procedural/presetsMore';
 import MeshRenderControls from './MeshRenderControls';
 import {
   COLOR_SPACES, DEFAULT_PROCEDURAL, DEFAULT_PROCEDURAL_STAGE, DISTORTION_TYPES, FALLOFFS, FIELD_METHODS, FORCE_TYPES, MOTION_TYPES,
-  NOISE_KINDS, POINT_DISTRIBUTIONS, PROC_MAX_POINTS, PROC_MODES, PROC_RANGES, newProcedural, normalizeProcedural,
-  type ProceduralConfig, type ProceduralStage,
+  NOISE_KINDS, POINT_DISTRIBUTIONS, PROC_MAX_POINTS, PROC_MODES, PROC_RANGES, STAGE_TARGETS, estimateProceduralCost, newProcedural, normalizeProcedural,
+  type FieldMethod, type ProceduralConfig, type ProceduralIssue, type ProceduralStage,
 } from '../../../procedural/types';
 import { useStudio } from '../ui';
+import {
+  AnimationExtras, ColorProcessingExtras, FieldCompositionSection, InfluenceSection, InteractionExtras, InterpolationExtras, MaterialSection,
+  PerformanceSection, TARGET_LABEL,
+} from './ProceduralAdvanced';
 import { useShader } from './context';
 import { Num, Section, Select } from './parts';
 
@@ -24,19 +28,32 @@ const LABEL = (id: string) => id.replace(/([a-z])([A-Z0-9])/g, '$1 $2').replace(
 const options = <T extends string>(ids: readonly T[], overrides: Partial<Record<T, string>> = {}) => ids.map(id => ({ id, label: overrides[id] ?? LABEL(id) }));
 
 const MODE_LABEL = { hybrid: 'Hybrid · over the manual gradient', full: 'Full · replaces the gradient colours' } as const;
-const FIELD_LABEL = {
-  idw: 'Inverse distance',
-  gaussian: 'Gaussian',
-  smooth: 'Smooth falloff',
-  radial: 'Radial',
-  smin: 'Smooth-min (metaballs)',
-  soft: 'Wide Gaussian',
-  'inverse-multiquadric': 'Inverse multiquadric',
-  'wendland-c2': 'Compact support (Wendland C2)',
+/** label and menu group of every interpolation method (the groups are the three families the engine compiles differently) */
+const FIELD_LABEL: Record<FieldMethod, { label: string; group: string }> = {
+  idw: { label: 'Inverse distance (IDW)', group: 'Weighted kernels' },
+  gaussian: { label: 'Gaussian', group: 'Weighted kernels' },
+  smooth: { label: 'Smooth falloff', group: 'Weighted kernels' },
+  radial: { label: 'Radial', group: 'Weighted kernels' },
+  smin: { label: 'Smooth-min (metaballs)', group: 'Weighted kernels' },
+  soft: { label: 'Wide Gaussian', group: 'Weighted kernels' },
+  'inverse-multiquadric': { label: 'Inverse multiquadric', group: 'Weighted kernels' },
+  'wendland-c2': { label: 'Compact support (Wendland C2)', group: 'Weighted kernels' },
+  'custom-weighted': { label: 'Custom weighted mix', group: 'Weighted kernels' },
+  'smooth-voronoi': { label: 'Smooth Voronoi', group: 'Cell geometry' },
+  'power-diagram': { label: 'Power diagram', group: 'Cell geometry' },
+  'natural-neighbor': { label: 'Natural-neighbour (approx.)', group: 'Cell geometry' },
+  'rbf-gaussian': { label: 'RBF · Gaussian (exact)', group: 'Exact interpolation (RBF)' },
+  'rbf-multiquadric': { label: 'RBF · Multiquadric (exact)', group: 'Exact interpolation (RBF)' },
+  'thin-plate': { label: 'RBF · Thin-plate spline (exact)', group: 'Exact interpolation (RBF)' },
+  harmonic: { label: 'RBF · Harmonic (exact)', group: 'Exact interpolation (RBF)' },
+};
+const FIELD_ORDER: FieldMethod[] = ['gaussian', 'soft', 'smooth', 'radial', 'idw', 'inverse-multiquadric', 'wendland-c2', 'smin', 'custom-weighted', 'smooth-voronoi', 'power-diagram', 'natural-neighbor', 'rbf-gaussian', 'rbf-multiquadric', 'thin-plate', 'harmonic'];
+const MOTION_LABEL = {
+  static: 'Static', orbit: 'Orbit the centre', circle: 'Circular', figure8: 'Figure eight', sine: 'Sine wave', drift: 'Organic drift', noise: 'Noise-driven', flow: 'Flow field',
+  wander: 'Random wander', follow: 'Follow the pointer', spring: 'Spring (damped bounce)', elastic: 'Elastic (overshoot)', float: 'Floating', magnetic: 'Magnetic (drawn to a magnet)',
 } as const;
-const MOTION_LABEL = { static: 'Static', orbit: 'Orbit the centre', circle: 'Circular', figure8: 'Figure eight', sine: 'Sine wave', drift: 'Organic drift', noise: 'Noise-driven', flow: 'Flow field', wander: 'Random wander', follow: 'Follow the pointer' } as const;
 const DIST_LABEL = { none: 'None', fbm: 'FBM noise', warp: 'Domain warp', multiwarp: 'Multi-level warp', turbulence: 'Turbulence', curl: 'Curl-noise flow', polar: 'Polar twist', radial: 'Radial ripple', wave: 'Waves', flow: 'Directional flow', rotate: 'Rotate', scale: 'Scale' } as const;
-const FORCE_LABEL = { none: 'No reaction', attract: 'Attract', repel: 'Repel', swirl: 'Swirl', vortex: 'Vortex', push: 'Push with motion', pull: 'Pull against motion', ripple: 'Ripple', wave: 'Wave', fluid: 'Fluid drag' } as const;
+const FORCE_LABEL = { none: 'No reaction', attract: 'Attract', repel: 'Repel', swirl: 'Swirl', vortex: 'Vortex', push: 'Push with motion', pull: 'Pull against motion', ripple: 'Ripple', wave: 'Wave', fluid: 'Fluid drag', magnetic: 'Magnetic pull', drag: 'Drag along', disturb: 'Disturb (jitter)' } as const;
 
 /** Which stage controls matter for each distortion type. */
 const STAGE_CONTROLS: Record<string, (keyof ProceduralStage)[]> = {
@@ -55,16 +72,14 @@ const STAGE_CONTROLS: Record<string, (keyof ProceduralStage)[]> = {
 const STAGE_LABEL: Record<keyof ProceduralStage, string> = {
   type: 'Type', enabled: 'Enabled', noise: 'Noise', scale: 'Noise scale', intensity: 'Intensity (warp strength)', octaves: 'Octaves',
   lacunarity: 'Lacunarity', persistence: 'Persistence', frequency: 'Frequency', turbulence: 'Turbulence amount', speed: 'Flow speed', direction: 'Direction',
+  target: 'Applies to',
 };
 const STAGE_STEP: Partial<Record<keyof ProceduralStage, number>> = { octaves: 1, direction: 1, scale: 0.05, frequency: 0.1 };
 
-/** A rough count of noise evaluations per pixel, used for the cost readout (not a benchmark). */
-const STAGE_COST: Record<string, number> = { fbm: 2, warp: 4, multiwarp: 6, turbulence: 2, curl: 4, flow: 2, polar: 0.2, radial: 0.2, wave: 0.2, rotate: 0.1, scale: 0.1 };
-export function proceduralCost(config: ProceduralConfig): 'Low' | 'Medium' | 'High' {
-  const noise = config.distortion.reduce((sum, stage) => stage.type === 'none' || !stage.enabled ? sum : sum + (STAGE_COST[stage.type] ?? 0) * stage.octaves, 0);
-  const points = config.points.max * (config.field.method === 'smin' ? 2 : 1);
-  const score = noise + points * 0.5;
-  return score <= 14 ? 'Low' : score <= 34 ? 'Medium' : 'High';
+/** Level of the engine's cost estimate (types.ts → estimateProceduralCost), as the label the header shows. */
+export function proceduralCost(config: ProceduralConfig): 'Low' | 'Medium' | 'High' | 'Extreme' {
+  const { level } = estimateProceduralCost(config);
+  return level === 'low' ? 'Low' : level === 'medium' ? 'Medium' : level === 'high' ? 'High' : 'Extreme';
 }
 
 const STORE_KEY = 'shapeforge.procedural.presets';
@@ -85,6 +100,7 @@ export default function ProceduralPanel() {
   const { store } = useStudio();
   const project = useStore(store, state => state.project);
   const [userPresets, setUserPresets] = useState<UserPreset[]>(loadUserPresets);
+  const [importIssues, setImportIssues] = useState<ProceduralIssue[]>([]);
   const rollRef = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const config = primary?.shader?.procedural ?? null;
@@ -159,9 +175,11 @@ export default function ProceduralPanel() {
   const importPreset = async (file: File | undefined) => {
     if (!file) return;
     const parsed = parsePresetFile(await file.text());
-    if (!parsed) { announce('That file is not a procedural preset.'); return; }
+    if (!parsed) { announce('That file is not a procedural preset.'); setImportIssues([]); return; }
     edit(current => applyPreset(current, parsed.config));
-    announce(`Applied preset “${parsed.name}”.`);
+    setImportIssues(parsed.issues.filter(issue => issue.severity !== 'info' || issue.path === 'version'));
+    const repaired = parsed.issues.filter(issue => issue.severity !== 'info').length;
+    announce(repaired ? `Applied preset “${parsed.name}” — ${repaired} value${repaired === 1 ? ' was' : 's were'} unknown or repaired (listed below).` : `Applied preset “${parsed.name}”.`);
   };
 
   if (!primary) return <p className="hint">Add a gradient layer first.</p>;
@@ -226,7 +244,7 @@ export default function ProceduralPanel() {
           <MeshRenderControls value={config} onChange={next => edit(() => next, 'mesh')} pointCount={primary?.mesh?.points.length ?? 0} />
         </Section>
       )}
-      {cost === 'High' &&       <p className="hint">This combination is heavy. Lower the distortion octaves or point count if it stutters; preview pixel density is automatically shared across visible shader layers.</p>}
+      {(cost === 'High' || cost === 'Extreme') && <p className="hint">This combination is heavy. Lower the distortion octaves, centres, extra fields or lighting if it stutters; preview pixel density is automatically shared across visible shader layers. See Performance below.</p>}
     </Section>
 
     <Section title="Colour centres">
@@ -246,17 +264,23 @@ export default function ProceduralPanel() {
       </>}
     </Section>
 
-    <Section title="Colour field">
-      <Select id="procedural-method" label="Blend method" value={config.field.method} options={FIELD_METHODS.map(id => ({ id, label: FIELD_LABEL[id] }))} onChange={value => setField('field', 'method', value)} />
+    <Section title="Interpolation" aside={FIELD_LABEL[config.field.method].label} testId="procedural-section-interpolation">
+      <Select id="procedural-method" label="Interpolation method" groups value={config.field.method}
+        options={FIELD_ORDER.filter(id => FIELD_METHODS.includes(id)).map(id => ({ id, label: FIELD_LABEL[id].label, group: FIELD_LABEL[id].group }))} onChange={value => setField('field', 'method', value)} />
       <Num label="Radius" value={config.field.radius} min={R.field.radius.min} max={R.field.radius.max} def={def.field.radius} onChange={value => setField('field', 'radius', value)} />
       <Num label="Strength" value={config.field.strength} min={R.field.strength.min} max={R.field.strength.max} def={def.field.strength} onChange={value => setField('field', 'strength', value)} />
       <Num label="Falloff (soft → sharp)" value={config.field.falloff} min={0} max={1} def={def.field.falloff} onChange={value => setField('field', 'falloff', value)} />
       <Num label="Softness" value={config.field.softness} min={0} max={1} def={def.field.softness} onChange={value => setField('field', 'softness', value)} />
       <Num label="Influence exponent" value={config.field.exponent} min={R.field.exponent.min} max={R.field.exponent.max} def={def.field.exponent} onChange={value => setField('field', 'exponent', value)} />
       <Num label="Overlap" value={config.field.overlap} min={0} max={1} def={def.field.overlap} onChange={value => setField('field', 'overlap', value)} />
+      <InterpolationExtras config={config} edit={edit} />
     </Section>
 
-    <Section title="Point motion">
+    <InfluenceSection config={config} edit={edit} />
+
+    <FieldCompositionSection config={config} edit={edit} />
+
+    <Section title="Animation" aside={MOTION_LABEL[config.motion.type]} testId="procedural-section-animation">
       <Select id="procedural-motion" label="Motion" value={config.motion.type} options={MOTION_TYPES.map(id => ({ id, label: MOTION_LABEL[id] }))} onChange={value => setField('motion', 'type', value)} />
       <Switch label="Give every point its own motion" checked={config.motion.mixed} onChange={value => setField('motion', 'mixed', value)} testId="procedural-mixed" />
       <Num label="Speed" value={config.motion.speed} min={R.motion.speed.min} max={R.motion.speed.max} def={def.motion.speed} onChange={value => setField('motion', 'speed', value)} testId="procedural-speed" />
@@ -267,6 +291,7 @@ export default function ProceduralPanel() {
       <Num label="Smoothness" value={config.motion.smoothness} min={0} max={1} def={def.motion.smoothness} onChange={value => setField('motion', 'smoothness', value)} />
       <Num label="Randomness" value={config.motion.randomness} min={0} max={1} def={def.motion.randomness} onChange={value => setField('motion', 'randomness', value)} />
       <Num label="Motion influence" value={config.motion.influence} min={0} max={1} def={def.motion.influence} onChange={value => setField('motion', 'influence', value)} />
+      <AnimationExtras config={config} edit={edit} />
     </Section>
 
     <Section title="Distortion" aside={`${config.distortion.filter(stage => stage.type !== 'none' && stage.enabled).length} of 3 on`}>
@@ -274,16 +299,17 @@ export default function ProceduralPanel() {
         <Select id={`procedural-stage-${index}-type`} label={`Stage ${index + 1}`} value={stage.type} options={DISTORTION_TYPES.map(id => ({ id, label: DIST_LABEL[id] }))} onChange={value => setStage(index, 'type', value)} />
         {stage.type !== 'none' && <>
           <Switch label="Enabled" checked={stage.enabled} onChange={value => setStage(index, 'enabled', value)} testId={`procedural-stage-${index}-enabled`} />
+          <Select id={`procedural-stage-${index}-target`} label={STAGE_LABEL.target} value={stage.target} options={STAGE_TARGETS.map(id => ({ id, label: TARGET_LABEL[id] }))} onChange={value => setStage(index, 'target', value)} />
           {(STAGE_CONTROLS[stage.type] ?? []).map(key => key === 'noise'
             ? <Select key={key} id={`procedural-stage-${index}-noise`} label="Noise" value={stage.noise} options={options(NOISE_KINDS, { gradient: 'Gradient (smooth)', value: 'Value (blocky)' })} onChange={value => setStage(index, 'noise', value)} />
             : <Num key={key} label={STAGE_LABEL[key]} value={stage[key] as number} min={R.stage[key as keyof typeof R.stage].min} max={R.stage[key as keyof typeof R.stage].max}
               step={STAGE_STEP[key] ?? 0.01} def={DEFAULT_PROCEDURAL_STAGE[key] as number} onChange={value => setStage(index, key, value)} />)}
         </>}
       </div>)}
-      <p className="hint">Stages run in order. Octaves are capped automatically when the preview has to lower its quality.</p>
+      <p className="hint">Stages run in order. Octaves are capped automatically when the preview has to lower its quality. “Colour centres” moves the points themselves before the field is measured (the most expensive target); “Colour only” shifts hue and exposure instead of moving anything.</p>
     </Section>
 
-    <Section title="Colour">
+    <Section title="Colour processing" aside={config.color.interpolation === 'oklch' ? 'OKLCH' : undefined} testId="procedural-section-color">
       <Select id="procedural-color-source" label="Colours come from" value={config.color.source} options={[{ id: 'layer', label: 'This layer’s palette' }, { id: 'custom', label: 'Custom colours' }]} onChange={value => setField('color', 'source', value)} />
       {config.color.source === 'custom' && <div className="gs-sh-swatches" data-testid="procedural-colors">
         {config.color.colors.map((color, index) => <input key={index} type="color" value={color} aria-label={`Colour ${index + 1}`}
@@ -291,7 +317,8 @@ export default function ProceduralPanel() {
         {config.color.colors.length < 8 && <button type="button" className="chip" onClick={() => setField('color', 'colors', [...config.color.colors, config.color.colors[config.color.colors.length - 1]])}>+ Add</button>}
         {config.color.colors.length > 2 && <button type="button" className="chip" onClick={() => setField('color', 'colors', config.color.colors.slice(0, -1))}>− Remove</button>}
       </div>}
-      <Select id="procedural-space" label="Blend in" value={config.color.interpolation} options={options(COLOR_SPACES, { srgb: 'sRGB', linear: 'Linear light', oklab: 'OKLab (perceptual)' })} onChange={value => setField('color', 'interpolation', value)} />
+      <Select id="procedural-space" label="Blend in" value={config.color.interpolation} options={options(COLOR_SPACES, { srgb: 'sRGB', linear: 'Linear light', oklab: 'OKLab (perceptual)', oklch: 'OKLCH (perceptual, hue path)' })} onChange={value => setField('color', 'interpolation', value)} />
+      <ColorProcessingExtras config={config} edit={edit} />
       <Switch label="Shuffle colour order" checked={config.color.shuffle} onChange={value => setField('color', 'shuffle', value)} testId="procedural-shuffle" />
       <Num label="Colour variance" value={config.color.variance} min={0} max={1} def={def.color.variance} onChange={value => setField('color', 'variance', value)} />
       <Switch label="Animate between colour stops" checked={config.color.cycleSpeed !== 0} onChange={enabled => setField('color', 'cycleSpeed', enabled ? (def.color.cycleSpeed || 0.5) : 0)} testId="procedural-palette-animation" />
@@ -303,16 +330,21 @@ export default function ProceduralPanel() {
       <Num label="Temperature" value={config.color.temperature} min={-1} max={1} def={def.color.temperature} onChange={value => setField('color', 'temperature', value)} />
     </Section>
 
-    <Section title="Pointer reaction">
+    <Section title="Interaction" aside={FORCE_LABEL[config.interaction.force]} testId="procedural-section-interaction">
       <Select id="procedural-force" label="Points react by" value={config.interaction.force} options={FORCE_TYPES.map(id => ({ id, label: FORCE_LABEL[id] }))} onChange={value => setField('interaction', 'force', value)} />
       {config.interaction.force !== 'none' && <>
         <Num label="Reach" value={config.interaction.radius} min={R.interaction.radius.min} max={R.interaction.radius.max} def={def.interaction.radius} onChange={value => setField('interaction', 'radius', value)} />
         <Num label="Strength" value={config.interaction.strength} min={R.interaction.strength.min} max={R.interaction.strength.max} def={def.interaction.strength} onChange={value => setField('interaction', 'strength', value)} />
         <Select id="procedural-falloff" label="Falloff" value={config.interaction.falloff} options={options(FALLOFFS)} onChange={value => setField('interaction', 'falloff', value)} />
         <Num label="Response speed" value={config.interaction.response} min={R.interaction.response.min} max={R.interaction.response.max} step={0.5} unit="/s" def={def.interaction.response} onChange={value => setField('interaction', 'response', value)} />
+        <InteractionExtras config={config} edit={edit} />
       </>}
       <p className="hint">Uses the same pointer, touch and idle-pointer input as the Interact tab. Turn a layer’s interaction off there to silence it.</p>
     </Section>
+
+    <MaterialSection config={config} edit={edit} />
+
+    <PerformanceSection config={config} />
 
     <Section title="Presets & randomize">
       <div className="gs-sh-chips" data-testid="procedural-presets">
@@ -331,6 +363,10 @@ export default function ProceduralPanel() {
         <button type="button" className="btn small" onClick={() => fileRef.current?.click()} data-testid="procedural-import-preset">Import file</button>
         <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={event => { void importPreset(event.target.files?.[0]); event.target.value = ''; }} />
       </div>
+      {importIssues.length > 0 && <ul className="hint gs-sh-issues" data-testid="procedural-import-issues">
+        {importIssues.slice(0, 8).map((issue, index) => <li key={index}><b>{issue.severity}</b> · {issue.path || 'file'}: {issue.message}</li>)}
+        {importIssues.length > 8 && <li>…and {importIssues.length - 8} more.</li>}
+      </ul>}
       {userPresets.length > 0 && <div className="gs-sh-chips" data-testid="procedural-user-presets">
         {userPresets.map(preset => <span key={preset.name} className="gs-sh-userpreset">
           <button type="button" className="chip" onClick={() => edit(current => applyPreset(current, preset.config))}>{preset.name}</button>

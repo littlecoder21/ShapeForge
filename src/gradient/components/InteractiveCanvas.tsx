@@ -8,7 +8,7 @@ import type { GradientLayer, GradientProject } from '../engine/model';
 import { textMaskDataUri } from '../engine/text';
 import { bleedOf } from '../engine/geom';
 import { resolveProceduralMesh } from '../../procedural/meshSource';
-import { planPointCapacity, proceduralNeed } from '../../procedural/types';
+import { planPointCapacity, proceduralNeed, proceduralVectorsPerPoint } from '../../procedural/types';
 
 interface Props { project: GradientProject; layer: GradientLayer; interactive?: boolean }
 
@@ -79,7 +79,7 @@ function InteractiveCanvasInner({ project, layer, interactive = false }: Props) 
   const resolvedProcedural = useMemo(() => resolveProceduralMesh(storedProcedural, adapted.mesh), [storedProcedural, adapted.mesh]);
   /** Does this device have room for that many points? If not, the procedural layer is not drawn (nothing is deleted) and a note says so. */
   const capacityPlan = useMemo(
-    () => resolvedProcedural && resolvedProcedural.enabled ? planPointCapacity(proceduralNeed(resolvedProcedural), deviceUniformVectors()) : null,
+    () => resolvedProcedural && resolvedProcedural.enabled ? planPointCapacity(proceduralNeed(resolvedProcedural), deviceUniformVectors(), proceduralVectorsPerPoint(resolvedProcedural)) : null,
     [resolvedProcedural],
   );
   const procedural = capacityPlan?.overflow ? null : resolvedProcedural;
