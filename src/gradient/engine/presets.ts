@@ -6,6 +6,7 @@ import { mulberry } from './rng';
 import { meshLayout, newMeshPoint } from './mesh';
 import { normalizeInteractiveSettings, normalizeShaderLayer } from '../interactive/types';
 import { newProcedural } from '../../procedural/types';
+import { DEFAULT_MESH_FIELD } from './meshFieldSettings';
 
 /* ═══════════ Preset library ═══════════
  * A preset is only a *recipe* that builds an ordinary project (layers, stops, effects, animation).
@@ -40,6 +41,7 @@ function proceduralMeshProject(name: string, colors: string[], base: string, see
     base,
     core: 42,
     seed,
+    field: { ...DEFAULT_MESH_FIELD },
   };
   const procedural = newProcedural({
     ...settings,

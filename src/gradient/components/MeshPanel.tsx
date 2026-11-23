@@ -9,6 +9,8 @@ import { mulberry } from '../engine/rng';
 import { useStore } from '../engine/store';
 import { newProcedural, normalizeProcedural } from '../../procedural/types';
 import { normalizeInteractiveSettings, normalizeShaderLayer } from '../interactive/types';
+import { FIELD_SPACES } from '../engine/colorScience';
+import { MESH_EDGES, MESH_EDGE_INFO, MESH_FIELD_METHODS, MESH_FIELD_METHOD_INFO, normalizeMeshField } from '../engine/meshFieldSettings';
 import { ColorInput, useStudio } from './ui';
 
 const PALETTES: [string, string[]][] = [
@@ -41,6 +43,9 @@ const keepPointSettings = (fresh: MeshPoint[], previous: MeshPoint[]) => fresh.m
     alpha: old.alpha,
     size: old.size,
     core: old.core,
+    strength: old.strength,
+    aspect: old.aspect,
+    angle: old.angle,
     locked: old.locked,
     group: old.group,
     transform: old.transform ? { ...old.transform } : undefined,
@@ -79,6 +84,7 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
         });
         return {
           ...current,
+          mesh: enabled ? { ...current.mesh, field: { ...current.mesh.field, enabled: false } } : current.mesh,
           shader: normalizeShaderLayer({ ...current.shader, enabled, procedural }),
         };
       }),
@@ -86,6 +92,25 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
     announce(enabled
       ? 'Mesh is using a single-pass procedural WebGL field. CSS remains the fallback and import source.'
       : 'Procedural mesh rendering is off. The original CSS mesh is visible again.');
+  };
+  const setMeshField = (patch: Partial<GradientLayer['mesh']['field']>) => {
+    store.update(project => ({
+      ...project,
+      layers: project.layers.map(current => {
+        if (current.id !== layerId) return current;
+        const field = normalizeMeshField({ ...current.mesh.field, ...patch });
+        const shader = field.enabled
+          ? normalizeShaderLayer({
+            ...current.shader,
+            enabled: false,
+            procedural: current.shader?.procedural
+              ? { ...current.shader.procedural, enabled: false }
+              : undefined,
+          })
+          : current.shader;
+        return { ...current, mesh: { ...current.mesh, field }, shader };
+      }),
+    }), { coalesce: 'mesh-field' });
   };
   const sliderGesture = { onBegin: () => store.begin(), onCommit: () => store.end() };
   const setPt = (id: string, p: Partial<MeshPoint>, key?: string) => setMesh(m => ({ ...m, points: m.points.map(x => (x.id === id ? { ...x, ...p } : x)) }), key);
@@ -151,7 +176,7 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
         const old = pts[index];
         return {
           id: old?.id ?? uid('m'), ...position, color: sample(position.x, position.y),
-          alpha: 1, size: old?.size ?? 54, core: old?.core, locked: false, group: old?.group,
+          alpha: 1, size: old?.size ?? 54, core: old?.core, strength: old?.strength, aspect: old?.aspect, angle: old?.angle, locked: false, group: old?.group,
           transform: old?.transform ? { ...old.transform } : undefined,
           effects: old?.effects?.map(effect => ({ ...effect, params: { ...effect.params } })),
         };
@@ -183,6 +208,35 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
       />
       <p className="hint">Combines the mesh colors in one shader pass. The original layered CSS mesh stays saved and is used for CSS output and as a WebGL fallback.</p>
     </Section>
+    <Section title="Smooth mesh field">
+      <Switch
+        label="Render with the advanced mesh-field engine"
+        checked={layer.mesh.field.enabled}
+        onChange={enabled => setMeshField({ enabled })}
+        testId="mesh-field-enabled"
+      />
+      {layer.mesh.field.enabled && <>
+        <p className="hint">Uses the new 2D field renderer in the studio preview and PNG output. CSS, HTML and SVG keep the compatible radial-gradient mesh. Enabling this switches off Procedural WebGL for this layer; both settings are preserved.</p>
+        <div className="field-label">Blend method</div>
+        <Seg value={layer.mesh.field.method} label="Mesh-field blend method" options={MESH_FIELD_METHODS.map(id => ({ id, label: MESH_FIELD_METHOD_INFO[id].label }))} onChange={method => setMeshField({ method })} testId="mesh-field-method" />
+        <p className="hint">{MESH_FIELD_METHOD_INFO[layer.mesh.field.method].hint}</p>
+        <div className="field-label">Colour space</div>
+        <Seg value={layer.mesh.field.space} label="Mesh-field colour space" options={FIELD_SPACES.map(space => ({ id: space, label: space === 'linear' ? 'Linear RGB' : space.toUpperCase() }))} onChange={space => setMeshField({ space })} testId="mesh-field-space" />
+        <div className="field-label">Edge behaviour</div>
+        <Seg value={layer.mesh.field.edge} label="Mesh-field edge behaviour" options={MESH_EDGES.map(id => ({ id, label: MESH_EDGE_INFO[id].label }))} onChange={edge => setMeshField({ edge })} testId="mesh-field-edge" />
+        <p className="hint">{MESH_EDGE_INFO[layer.mesh.field.edge].hint}</p>
+        <ValueControl label="Spread" value={layer.mesh.field.spread} min={0.3} max={3} step={0.05} def={1} onChange={spread => setMeshField({ spread })} testId="mesh-field-spread" {...sliderGesture} />
+        <ValueControl label="Sharpness" value={layer.mesh.field.sharpness} min={0} max={1} step={0.01} def={0.42} onChange={sharpness => setMeshField({ sharpness })} testId="mesh-field-sharpness" {...sliderGesture} />
+        <ValueControl label="Organic warp" value={layer.mesh.field.warp} min={0} max={1} step={0.01} def={0} onChange={warp => setMeshField({ warp })} testId="mesh-field-warp" {...sliderGesture} />
+        {layer.mesh.field.warp > 0 && <>
+          <ValueControl label="Warp scale" value={layer.mesh.field.warpScale} min={0.5} max={8} step={0.1} def={2} onChange={warpScale => setMeshField({ warpScale })} testId="mesh-field-warp-scale" {...sliderGesture} />
+          <ValueControl label="Flow speed" value={layer.mesh.field.flow} min={0} max={1} step={0.01} def={0.25} onChange={flow => setMeshField({ flow })} testId="mesh-field-flow" {...sliderGesture} />
+        </>}
+        <ValueControl label="Film grain" value={layer.mesh.field.grain} min={0} max={1} step={0.01} def={0} onChange={grain => setMeshField({ grain })} testId="mesh-field-grain" {...sliderGesture} />
+        <ValueControl label="Saturation" value={layer.mesh.field.saturation} min={0} max={2} step={0.01} def={1} onChange={saturation => setMeshField({ saturation })} testId="mesh-field-saturation" {...sliderGesture} />
+        <ValueControl label="Contrast" value={layer.mesh.field.contrast} min={0.5} max={1.8} step={0.01} def={1} onChange={contrast => setMeshField({ contrast })} testId="mesh-field-contrast" {...sliderGesture} />
+      </>}
+    </Section>
     <Section title="Colour points" hint={`${pts.length} points`}>
       <p className="hint">Drag points on the canvas. Drag the square handle to resize. Double-tap empty canvas to add a point.</p>
       <div className="gs-chips" role="listbox" aria-label="Mesh points">
@@ -196,6 +250,11 @@ export default function MeshPanel({ layerId }: { layerId: string }) {
         <ValueControl label="Position Y" value={sel.y} min={-20} max={120} step={0.5} unit="%" onChange={v => setPt(sel.id, { y: v }, `my-${sel.id}`)} testId="mesh-y" {...sliderGesture} />
         <ValueControl label="Size" value={sel.size} min={4} max={160} step={0.5} unit="%" def={48} onChange={v => setPt(sel.id, { size: v }, `ms-${sel.id}`)} testId="mesh-size" {...sliderGesture} />
         <ValueControl label="Point falloff" value={sel.core ?? layer.mesh.core} min={0} max={100} unit="%" def={layer.mesh.core} onChange={v => setPt(sel.id, { core: v }, `mf-${sel.id}`)} testId="mesh-point-falloff" {...sliderGesture} />
+        {layer.mesh.field.enabled && <Section title="Field shape">
+          <ValueControl label="Field strength" value={sel.strength ?? 1} min={0} max={2} step={0.01} def={1} onChange={v => setPt(sel.id, { strength: v }, `mstrength-${sel.id}`)} testId="mesh-point-strength" {...sliderGesture} />
+          <ValueControl label="Ellipse aspect" value={sel.aspect ?? 1} min={0.25} max={4} step={0.01} def={1} onChange={v => setPt(sel.id, { aspect: v }, `maspect-${sel.id}`)} testId="mesh-point-aspect" {...sliderGesture} />
+          <ValueControl label="Ellipse angle" value={sel.angle ?? 0} min={-180} max={180} step={1} unit="°" def={0} onChange={v => setPt(sel.id, { angle: v }, `mangle-${sel.id}`)} testId="mesh-point-angle" {...sliderGesture} />
+        </Section>}
         <div className="gs-btnrow"><button type="button" className="btn" onClick={() => setPt(sel.id, { locked: !sel.locked })} aria-pressed={!!sel.locked} data-testid="mesh-lock">{sel.locked ? <Unlock /> : <Lock />}{sel.locked ? 'Unlock point' : 'Lock point'}</button><button type="button" className="btn" onClick={dup}><Copy />Duplicate</button><button type="button" className="btn danger" onClick={remove} data-testid="mesh-delete"><Trash2 />Delete</button></div>
         <Section title="Point transform" hint="Adjust this point without changing the rest of the mesh">
           {(['x', 'y', 'scale', 'rotate', 'skewX', 'skewY'] as const).map(key => {

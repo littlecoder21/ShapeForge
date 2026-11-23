@@ -71,6 +71,14 @@ describe('mesh → anchors', () => {
   it('caps at the 128-point maximum', () => {
     expect(meshToAnchors(meshOf(200))).toHaveLength(PROC_MAX_MESH_POINTS);
   });
+  it('bridges per-point field weight and ellipse controls into procedural anchors', () => {
+    const [anchor] = meshToAnchors({
+      points: [{ x: 50, y: 50, color: '#ff3366', alpha: 0.6, size: 24, strength: 1.5, aspect: 2.4, angle: -32 }],
+    });
+    expect(anchor.weight).toBeCloseTo(0.9, 6);
+    expect(anchor.anisotropy).toBe(2.4);
+    expect(anchor.rotation).toBe(-32);
+  });
   it('folds translate and scale transforms in, and round-trips positions', () => {
     const [a] = meshToAnchors({ points: [{ x: 40, y: 60, color: '#112233', alpha: 1, size: 20, transform: { x: 10, y: -10, scale: 2 } }], core: 40 });
     expect(a.x).toBeCloseTo(0.5, 6);

@@ -37,7 +37,12 @@ export function needsSvgFilters(project: GradientProject): boolean {
 export async function rasterizeProject(project: GradientProject, scale: number): Promise<RenderResult> {
   if (!needsSvgFilters(project)) return renderProject(project, scale);
   try {
-    return { canvas: await renderFilteredSvg(project, scale), notes: [] };
+    return {
+      canvas: await renderFilteredSvg(project, scale),
+      notes: project.layers
+        .filter(layer => layer.visible && layer.type === 'mesh' && layer.mesh.field.enabled)
+        .map(layer => `“${layer.name}”: image export used the SVG fallback, so the smooth mesh field is shown as its CSS-compatible mesh`),
+    };
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';
     if (project.layers.some(layer => layer.visible && layer.text)) throw new Error(`Text layer rendering failed: ${reason}`);

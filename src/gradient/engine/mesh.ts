@@ -2,6 +2,7 @@ import { rgbaString } from './color';
 import type { GradientParts } from './css';
 import { uid, type GradientLayer, type GradientProject, type MeshData, type MeshPoint } from './model';
 import { mulberry } from './rng';
+import { DEFAULT_MESH_FIELD } from './meshFieldSettings';
 
 /* ═══════════ Mesh gradients ═══════════
  * A mesh layer is a set of soft colour points. Each point renders as a radial gradient that fades to transparent;
@@ -97,7 +98,7 @@ export function meshLayout(count: number, pattern: MeshPattern, seed: number): {
 export function generateMesh(colors: string[], count: number, pattern: MeshPattern, seed: number, base = '', size = 48): MeshData {
   const palette = colors.length ? colors : ['#7c5cff', '#22d3ee'];
   const rnd = mulberry(seed * 977 + 3), pts = meshLayout(count, pattern, seed);
-  return { base, core: 40, seed, points: pts.map((p, i) => newMeshPoint(p.x, p.y, palette[i % palette.length], 1, size * (0.85 + rnd() * 0.35))) };
+  return { base, core: 40, seed, field: { ...DEFAULT_MESH_FIELD }, points: pts.map((p, i) => newMeshPoint(p.x, p.y, palette[i % palette.length], 1, size * (0.85 + rnd() * 0.35))) };
 }
 
 /** Radii of a point in % of the canvas — ry compensates the aspect ratio so points look round. */

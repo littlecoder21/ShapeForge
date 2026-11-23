@@ -1,6 +1,7 @@
 import { clamp } from './color';
 import { TEXTURE_DEFAULTS, normalizeTexture, type TextureParams } from './textureControls';
 import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_LAYER, normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type ShaderLayerConfig } from '../interactive/types';
+import { DEFAULT_MESH_FIELD, normalizeMeshField, normalizePointField, type MeshFieldSettings } from './meshFieldSettings';
 
 /* ═══════════════════════════ Gradient Studio data model ═══════════════════════════
  * The project is the source of truth. CSS, SVG, PNG and keyframes are all *generated* from it,
@@ -90,6 +91,7 @@ export interface LayerAnimation { enabled: boolean; duration: number; delay: num
 export interface MeshPoint {
   id: string; x: number; y: number; color: string; alpha: number; size: number;
   core?: number; locked?: boolean; group?: string; transform?: Transform; effects?: EffectInstance[];
+  strength?: number; aspect?: number; angle?: number;
 }
 export interface MeshData {
   points: MeshPoint[];
@@ -99,6 +101,8 @@ export interface MeshData {
   core: number;
   /** Reproduces generated positions and mesh effects. */
   seed: number;
+  /** Optional smooth field renderer; absent or disabled preserves the legacy radial-gradient mesh. */
+  field: MeshFieldSettings;
 }
 export interface CurvePoint { x: number; y: number }
 export interface CurveData { p0: CurvePoint; p1: CurvePoint; p2: CurvePoint; p3: CurvePoint }
@@ -122,7 +126,7 @@ export const DEFAULT_LAYER_MASK: LayerMask = {
 };
 /** Grain / noise overlay (SVG feTurbulence, tiled). */
 export interface NoiseData { frequency: number; octaves: number; seed: number; mono: boolean; contrast: number; tile: number }
-export const DEFAULT_MESH: MeshData = { points: [], base: '', core: 40, seed: 7 };
+export const DEFAULT_MESH: MeshData = { points: [], base: '', core: 40, seed: 7, field: { ...DEFAULT_MESH_FIELD } };
 export const DEFAULT_NOISE: NoiseData = { frequency: 80, octaves: 3, seed: 4, mono: true, contrast: 120, tile: 220 };
 /** The one authoritative default texture (defined next to the control metadata in textureControls.ts; frozen — always copy it). */
 export const DEFAULT_TEXTURE: TextureData = TEXTURE_DEFAULTS;
@@ -230,6 +234,12 @@ export function newLayer(type: GradientKind = 'linear', over: Partial<GradientLa
   };
   const defined = Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) as Partial<GradientLayer>;
   const layer = { ...base, ...defined };
+  layer.mesh = {
+    ...DEFAULT_MESH,
+    ...(defined.mesh ?? {}),
+    field: normalizeMeshField(defined.mesh?.field),
+    points: defined.mesh?.points ?? [],
+  };
   if (!layer.name) layer.name = defaultName(layer);
   return layer;
 }
@@ -333,20 +343,26 @@ export function normalizeProject(raw: unknown): GradientProject {
         params: effect.params && typeof effect.params === 'object' ? effect.params : {},
       })),
     }));
-    merged.mesh = { ...DEFAULT_MESH, ...(l.mesh ?? {}), points: (l.mesh?.points ?? []).map(p => ({
-      ...p,
-      id: p.id || uid('m'),
-      core: p.core === undefined ? undefined : clamp(Number(p.core), 0, 100),
-      locked: p.locked ?? false,
-      group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
-      transform: normalizePointTransform(p.transform),
-      effects: (p.effects ?? []).filter(effect => effect && typeof effect.type === 'string').map(effect => ({
-        ...effect,
-        id: effect.id || uid('e'),
-        enabled: effect.enabled !== false,
-        params: effect.params && typeof effect.params === 'object' ? effect.params : {},
+    merged.mesh = {
+      ...DEFAULT_MESH,
+      ...(l.mesh ?? {}),
+      field: normalizeMeshField(l.mesh?.field),
+      points: (l.mesh?.points ?? []).map(p => ({
+        ...p,
+        ...normalizePointField(p),
+        id: p.id || uid('m'),
+        core: p.core === undefined ? undefined : clamp(Number(p.core), 0, 100),
+        locked: p.locked ?? false,
+        group: typeof p.group === 'string' && p.group.trim() ? p.group.trim() : undefined,
+        transform: normalizePointTransform(p.transform),
+        effects: (p.effects ?? []).filter(effect => effect && typeof effect.type === 'string').map(effect => ({
+          ...effect,
+          id: effect.id || uid('e'),
+          enabled: effect.enabled !== false,
+          params: effect.params && typeof effect.params === 'object' ? effect.params : {},
+        })),
       })),
-    })) };
+    };
     merged.noise = { ...DEFAULT_NOISE, ...(l.noise ?? {}) };
     const curve = l.curve ?? DEFAULT_CURVE;
     const curveValue = (value: number | undefined, fallback: number) => {

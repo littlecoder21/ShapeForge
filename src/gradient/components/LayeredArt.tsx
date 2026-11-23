@@ -5,6 +5,7 @@ import { planSingleLayer, resolveRenderProject } from '../interactive/singleLaye
 import { normalizeInteractiveSettings } from '../interactive/types';
 import InteractiveCanvas from './InteractiveCanvas';
 import TrailFxOverlay from './TrailFxOverlay';
+import MeshFieldCanvas from './MeshFieldCanvas';
 
 /** One <style> per layer: React only rewrites the style of the layer that actually changed, so dragging a handle on one
  *  layer never forces the browser to re-rasterise (blur!) the others. */
@@ -30,15 +31,23 @@ function LayeredArt({ project: source, rootClass, playing = false, interactiveSh
   const trailFx = useMemo(() => normalizeInteractiveSettings(source.shader), [source.shader]);
   return <div className={`${rootClass} gs-art-root${playing ? ' gs-play' : ''} ${className}`} style={{ backgroundColor: project.background || undefined }} data-testid={testId} data-single-layer={project !== source ? 'on' : undefined}>
     {visible.map(l => <LayerStyle key={l.id} layer={l} canvas={project.canvas} rootSel={rootSel} scope={rootClass} />)}
-    {[...visible].reverse().map(l => <i key={l.id} className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}>
+    {[...visible].reverse().map(l => {
+      const meshFieldEnabled = l.type === 'mesh' && l.mesh.field.enabled && !l.text;
+      return <i
+        key={l.id}
+        className={`g-layer g-${l.id}${project.shader?.enabled && l.shader?.enabled ? ' gs-layer-shader' : ''}`}
+        style={meshFieldEnabled ? { backgroundImage: 'none', backgroundColor: 'transparent' } : undefined}
+      >
       {project.shader?.enabled && l.shader?.enabled && (project.shader.renderBackend !== 'css'
         || (l.shader.procedural?.enabled && l.shader.procedural.mode === 'full' && l.shader.procedural.mesh.render === 'unified-field'))
         && (!singleLayer.active || l.id === singleLayer.hostId)
         && <InteractiveCanvas project={project} layer={l} interactive={interactiveShaders} />}
+      {meshFieldEnabled && <MeshFieldCanvas layer={l} canvas={project.canvas} />}
       {l.text
         ? <span className="g-text">{l.text.content}</span>
-        : l.type === 'mesh' && [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ point, index }) => <i key={point.id} className={`mesh-point-${index}`} />)}
-    </i>)}
+        : l.type === 'mesh' && !meshFieldEnabled && [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ point, index }) => <i key={point.id} className={`mesh-point-${index}`} />)}
+      </i>;
+    })}
     {rootClass === 'gs-art' && trailFx.trailFx?.enabled && <TrailFxOverlay config={trailFx.trailFx} touch={trailFx.touchEnabled} />}
     {defs && <svg width="0" height="0" style={{ position: 'absolute' }}><defs dangerouslySetInnerHTML={{ __html: defs }} /></svg>}
   </div>;

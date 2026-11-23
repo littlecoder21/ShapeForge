@@ -8,6 +8,7 @@ import { noiseCanvas } from './noise';
 import { clipLayerMask } from './layerMask';
 import { IDENTITY, type BlendMode, type GradientLayer, type GradientProject } from './model';
 import { projectSvg } from './svg';
+import { renderMeshField } from './meshField';
 
 /* ═══════════ PNG / canvas renderer ═══════════
  * Draws the same geometry as the CSS output with the 2D canvas API. Each layer is rendered to its own
@@ -32,6 +33,35 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   ctx.beginPath(); ctx.rect(-bx, -by, w + 2 * bx, h + 2 * by); ctx.clip();
   if (layer.mask.enabled) clipLayerMask(ctx, layer.mask, project.canvas);
   if (layer.type === 'mesh') {
+    if (layer.mesh.field.enabled) {
+      const points = layer.mesh.points.map(point => ({
+        x: point.x, y: point.y, color: point.color, alpha: point.alpha, size: point.size,
+        core: point.core, strength: point.strength, aspect: point.aspect, angle: point.angle,
+        transform: point.transform,
+      }));
+      const pixelBudget = 1_500_000 / Math.max(1, points.length);
+      const resolutionScale = Math.min(1, 1024 / Math.max(w, h), Math.sqrt(pixelBudget / (w * h)));
+      const fieldWidth = Math.max(1, Math.round(w * resolutionScale));
+      const fieldHeight = Math.max(1, Math.round(h * resolutionScale));
+      const pixels = renderMeshField(
+        { points, base: layer.mesh.base || undefined, seed: layer.mesh.seed },
+        layer.mesh.field,
+        fieldWidth,
+        fieldHeight,
+        { aspect: w / h },
+      );
+      const fieldCanvas = document.createElement('canvas');
+      fieldCanvas.width = fieldWidth;
+      fieldCanvas.height = fieldHeight;
+      const fieldContext = fieldCanvas.getContext('2d');
+      if (!fieldContext) throw new Error('Could not create a mesh-field canvas context');
+      const image = fieldContext.createImageData(fieldWidth, fieldHeight);
+      image.data.set(pixels);
+      fieldContext.putImageData(image, 0, 0);
+      ctx.drawImage(fieldCanvas, 0, 0, w, h);
+      ctx.restore();
+      return true;
+    }
     if (layer.mesh.base) { ctx.fillStyle = layer.mesh.base; ctx.fillRect(-bx, -by, w + 2 * bx, h + 2 * by); }
     ctx.globalCompositeOperation = 'screen';
     [...layer.mesh.points].reverse().forEach(p => {
@@ -148,6 +178,8 @@ export function renderProject(project: GradientProject, scale = 1): RenderResult
       ? layer.mesh.points.flatMap(point => activeEffects(point.effects ?? []).filter(effect => EFFECTS[effect.type].rasterUnsupported))
       : [];
     if (pointRasterSkipped.length) notes.push(`“${layer.name}”: point ${[...new Set(pointRasterSkipped.map(effect => EFFECTS[effect.type].label))].join(', ')} effects are not included in PNG; SVG/CSS keeps the effect`);
+    if (layer.type === 'mesh' && layer.mesh.field.enabled && layer.mesh.points.some(point => activeEffects(point.effects ?? []).length))
+      notes.push(`“${layer.name}”: per-point effects are not applied by the smooth mesh-field renderer`);
     const fstr = fx.map(e => EFFECTS[e.type].canvas(e.params)).filter(Boolean).join(' ');
     ctx.save();
     ctx.globalAlpha = layer.opacity; ctx.globalCompositeOperation = COMPOSITE[layer.blend];
@@ -193,7 +225,12 @@ export async function exportPng(project: GradientProject, scale = 1): Promise<{ 
   let rendered: RenderResult;
   if (needsSvgFilters) {
     try {
-      rendered = { canvas: await renderFilteredSvg(project, scale), notes: [] };
+      rendered = {
+        canvas: await renderFilteredSvg(project, scale),
+        notes: project.layers
+          .filter(layer => layer.visible && layer.type === 'mesh' && layer.mesh.field.enabled)
+          .map(layer => `“${layer.name}”: PNG used the SVG fallback, so the smooth mesh field is shown as its CSS-compatible mesh`),
+      };
     } catch (error) {
       if (project.layers.some(layer => layer.visible && layer.text)) {
         const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';

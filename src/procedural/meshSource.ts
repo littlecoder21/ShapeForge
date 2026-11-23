@@ -21,6 +21,9 @@ export interface MeshPointLike {
   /** radius, % of the canvas width */
   size: number;
   core?: number;
+  strength?: number;
+  aspect?: number;
+  angle?: number;
   transform?: Partial<{ x: number; y: number; scale: number; rotate: number; skewX: number; skewY: number }>;
   effects?: ReadonlyArray<{ enabled?: boolean }>;
 }
@@ -51,6 +54,9 @@ export function effectivePoint(point: MeshPointLike, meshCore = 40) {
     size: point.size * finite(t.scale, 1),
     alpha: clamp(finite(point.alpha, 1), 0, 1),
     core: clamp(finite(point.core, meshCore), 0, 100),
+    strength: clamp(finite(point.strength, 1), 0, 2),
+    aspect: clamp(finite(point.aspect, 1), 0.25, 4),
+    angle: clamp(finite(point.angle, 0), -180, 180),
     color: HEX.test(point.color) ? point.color.toLowerCase() : '#ffffff',
   };
 }
@@ -65,10 +71,12 @@ export function meshToAnchors(mesh: MeshLike, max = PROC_MAX_MESH_POINTS): Proce
       y: clamp(1 - p.y / 100, -0.5, 1.5),
       color: p.color,
       radius: clamp((p.size / 100) * 1.1, 0.08, 1.2),
-      weight: clamp(p.alpha, 0, 3),
+      weight: clamp(p.alpha * p.strength, 0, 3),
       alpha: p.alpha,
       core: p.core,
       size: clamp(p.size, 0.5, 200),
+      ...(point.aspect !== undefined ? { anisotropy: p.aspect } : {}),
+      ...(point.angle !== undefined ? { rotation: p.angle } : {}),
     };
   });
 }

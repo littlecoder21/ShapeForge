@@ -6,6 +6,7 @@ import { SHADER_STYLE_GROUPS, SHADER_STYLE_LIST, SHADER_STYLE_MAP, defaultStyleP
 import { Num, Section } from './parts';
 import { useShader } from './context';
 import { useStudio } from '../ui';
+import { DEFAULT_MESH_FIELD } from '../../engine/meshFieldSettings';
 
 /** All shader styles live here and only here, with the customisable parameters of the selected one underneath. */
 export default function StylePanel() {
@@ -29,6 +30,7 @@ export default function StylePanel() {
         base: '#05060f',
         core: 40,
         seed: 7,
+        field: { ...DEFAULT_MESH_FIELD },
         points: [
           { id: uid('m'), x: 18, y: 22, color: '#b5caff', alpha: 1, size: 74 },
           { id: uid('m'), x: 50, y: 42, color: '#141a52', alpha: 1, size: 76 },
