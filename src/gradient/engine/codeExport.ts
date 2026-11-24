@@ -181,6 +181,8 @@ ${css}`;
   const javascript = [
     staged?.runtime,
     interactive?.runtime,
+    // live repaint of smooth mesh fields when neither the stage nor the shader runtime already carries it
+    !staged && !interactive && 'script' in base ? base.script : '',
     activeTrailFx && project.shader?.trailFx
       ? buildTrailFxRuntime(project.shader.trailFx, rootSelector, project.shader.touchEnabled)
       : '',

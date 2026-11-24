@@ -1,3 +1,4 @@
+import type { EasingName } from '../gradient/engine/transitions';
 import { normalizePointerMode, type PointerMode } from '../gradient/interactive/pointerModes';
 import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type InteractiveStyle } from '../gradient/interactive/styles';
 import { instantiateRig, normalizeRig, type InteractionRig } from '../gradient/interactive/rig/model';
@@ -53,6 +54,8 @@ export interface ShaderStop {
   hard?: boolean;
   mid?: number;
   curve?: { x1: number; y1: number; x2: number; y2: number };
+  /** named easing for the transition to the next stop (ignored when `curve` is set) */
+  ease?: EasingName;
 }
 
 export interface ShaderMeshPoint {

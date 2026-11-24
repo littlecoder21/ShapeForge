@@ -1,8 +1,9 @@
 import { rgbaCss, type RGBA } from './color';
 import { EFFECTS, activeEffects, blurOf } from './effects';
 import { bleedOf, layerMatrix, linearLine, normDeg, periodOf, offsetOf, radii, rad, isIdentityTransform } from './geom';
-import { rampRange, rampStops, colorAtPos } from './ramp';
+import { rampRange, rampStops, shapedColorAt } from './ramp';
 import { meshCoord as _mc, pointRadii } from './mesh';
+import { meshFieldBakeUri, usesMeshField } from './meshFieldExport';
 import { noiseFilterMarkup } from './noise';
 import { curveBands } from './curve';
 import { layerMaskPath } from './layerMask';
@@ -50,7 +51,7 @@ function conicWedges(layer: GradientLayer, w: number, h: number, bx: number, by:
   let run: { a: number; b: number; col: string } | null = null;
   const flush = () => { if (run) { const large = run.b - run.a > 180 ? 1 : 0; paths.push(`<path d="M${r2(cx)} ${r2(cy)}L${pt(run.a)}A${r2(R)} ${r2(R)} 0 ${large} 1 ${pt(run.b)}Z" fill="${run.col}"/>`); run = null; } };
   segs.forEach(([a, b]) => {
-    const mid = (a + b) / 2, c = colorAtPos(layer, posAtDeg(mid)), col = rgbaCss(c);
+    const mid = (a + b) / 2, c = shapedColorAt(layer, posAtDeg(mid)), col = rgbaCss(c);
     if (run && run.col === col && run.b - run.a + (b - a) <= 180) run.b = b; else { flush(); run = { a, b, col }; }
   });
   flush();
@@ -68,6 +69,10 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
 
   if (layer.solidColor !== undefined) {
     inner = `<rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" fill="${layer.solidColor}"/>`;
+  } else if (usesMeshField(layer)) {
+    // the smooth mesh field as its baked image: the same picture the studio and PNG show, instead of the stacked radial points
+    const fieldUri = meshFieldBakeUri(layer, project.canvas);
+    inner = `<image x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}" preserveAspectRatio="none" href="${fieldUri}" xlink:href="${fieldUri}"/>`;
   } else if (layer.type === 'mesh') {
     const tag = (c: string, a: number, off: number) => `<stop offset="${r2(off, 4)}" stop-color="${c}"${a < 0.999 ? ` stop-opacity="${r2(a, 3)}"` : ''}/>`;
     const sq: string[] = [];
@@ -120,7 +125,7 @@ export function layerSvg(layer: GradientLayer, project: GradientProject, id: str
     defs.push(`<radialGradient id="${id}-g" gradientUnits="userSpaceOnUse" cx="${r2(cx)}" cy="${r2(cy)}" fx="${r2(cx)}" fy="${r2(cy)}" r="${r2(Math.max(0.01, r1))}"${r0 > 0 ? ` fr="${r2(r0)}"` : ''} gradientTransform="translate(${r2(cx)} ${r2(cy)}) scale(1 ${r2(scaleY, 4)}) translate(${r2(-cx)} ${r2(-cy)})"${spread}>${stops()}</radialGradient>`);
     fill = `url(#${id}-g)`;
   } else if (layer.type === 'curve') {
-    inner = curveBands(layer.curve, project.canvas).map(band => `<path d="${band.d}" fill="${rgbaCss(colorAtPos(layer, band.progress * 100))}"/>`).join('');
+    inner = curveBands(layer.curve, project.canvas).map(band => `<path d="${band.d}" fill="${rgbaCss(shapedColorAt(layer, band.progress * 100))}"/>`).join('');
   } else {
     defs.push(`<clipPath id="${id}-c"><rect x="${r2(-bx)}" y="${r2(-by)}" width="${r2(w + 2 * bx)}" height="${r2(h + 2 * by)}"/></clipPath>`);
     inner = `<g clip-path="url(#${id}-c)">${conicWedges(layer, w, h, bx, by)}</g>`;

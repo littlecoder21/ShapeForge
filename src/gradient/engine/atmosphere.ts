@@ -2,6 +2,7 @@ import { hslToHex } from './color';
 import { newEffect } from './effects';
 import { newLayer, stop, type GradientLayer } from './model';
 import { mulberry } from './rng';
+import { bandStops, glow } from './sceneMath';
 
 /* ═══════════ Atmosphere builder ═══════════
  * Like Aurora, this only *assembles ordinary layers*: a sky ramp, a sun glow, horizon haze, soft clouds, optional god-rays
@@ -54,35 +55,42 @@ export function buildAtmosphere(o: AtmosphereOptions): GradientLayer[] {
     name: 'Atmospheric vignette', cx: 50, cy: 50, rx: 76, ry: 88, opacity: (o.vignette ?? 0) / 100, blend: 'multiply',
     stops: [stop('#101522', 42, 0), stop('#101522', 100, 0.72)],
   }));
-  if (o.rays) layers.push(newLayer('conic', {
-    name: 'Light rays', cx: o.sunX, cy: o.sunY, angle: 0, blend: 'screen', opacity: (o.rayIntensity ?? 45) / 100, repeating: true, repeat: { size: 360 / rayCount, unit: 'deg', offset: 0 },
-    stops: [stop(o.sunColor, 0, 0.5, { hard: true }), stop(o.sunColor, 45, 0.5, { hard: true }), stop(o.sunColor, 45, 0), stop(o.sunColor, 100, 0)],
-    effects: [newEffect('blur', { radius: 5 })],
-    anim: { enabled: true, duration: 90, delay: 0, easing: 'linear', direction: 'normal', tracks: [{ id: 'rays-spin', prop: 'rotate', from: 0, to: 360 }] },
-  }));
+  // Light shafts are soft lobes with smootherstep edges (no hard-stop fans). A second, sparser set at a different count and angle breaks
+  // up the mechanical repetition of a single repeating cone.
+  if (o.rays) {
+    const intensity = (o.rayIntensity ?? 45) / 100;
+    const shaft = (name: string, count: number, offset: number, alpha: number, spin: number) => newLayer('conic', {
+      name, cx: o.sunX, cy: o.sunY, angle: offset, blend: 'screen', opacity: alpha, space: 'oklab', repeating: true, repeat: { size: 360 / count, unit: 'deg', offset: 0 },
+      stops: bandStops(o.sunColor, 50, 22, 0.55),
+      effects: [newEffect('blur', { radius: 5 })],
+      anim: { enabled: true, duration: spin, delay: 0, easing: 'linear', direction: 'normal', tracks: [{ id: 'rays-spin', prop: 'rotate', from: 0, to: 360 }] },
+    });
+    layers.push(shaft('Light rays', rayCount, 0, intensity, 90));
+    layers.push(shaft('Light rays · fine', Math.max(3, Math.round(rayCount * 1.7)), 360 / (rayCount * 3.4), intensity * 0.45, 140));
+  }
   for (let i = 0; i < o.clouds; i++) {
     const cx = 8 + (84 * (i + 0.5)) / Math.max(1, o.clouds) + (rnd() - 0.5) * 14, cy = 28 + rnd() * 34;
     layers.push(newLayer('radial', {
       name: `Cloud ${i + 1}`, cx, cy, rx: 22 + rnd() * 18, ry: 8 + rnd() * 7, opacity: (0.35 + rnd() * 0.3) * ((o.cloudDensity ?? 70) / 70),
-      stops: [stop(o.hazeColor, 0, 0.9), stop(o.hazeColor, 100, 0, { mid: 45 })], effects: [newEffect('blur', { radius: 32 + Math.round(rnd() * 26) })],
+      space: 'oklab', stops: [stop(o.hazeColor, 0, 0.9, { ease: 'smootherstep' }), stop(o.hazeColor, 100, 0)], shaping: { falloff: 'smooth', falloffStrength: 20 }, effects: [newEffect('blur', { radius: 32 + Math.round(rnd() * 26) })],
       anim: { enabled: true, duration: 40 + Math.round(rnd() * 30), delay: -Math.round(rnd() * 20), easing: 'ease-in-out', direction: 'alternate', tracks: [{ id: `cloud${i}`, prop: 'x', from: -6, to: 6 }] },
     }));
   }
-  if (o.haze > 0) layers.push(newLayer('linear', { name: 'Horizon haze', angle: 180, opacity: 1, stops: [stop(o.hazeColor, 45, 0), stop(o.hazeColor, 100, (o.haze / 100) * 0.75)] }));
+  if (o.haze > 0) layers.push(newLayer('linear', { name: 'Horizon haze', angle: 180, opacity: 1, stops: [stop(o.hazeColor, 40, 0, { ease: 'smootherstep' }), stop(o.hazeColor, 100, (o.haze / 100) * 0.75)] }));
   if ((o.fog ?? 0) > 0) layers.push(newLayer('linear', {
     name: 'Distance fog', angle: 180, opacity: 1, blend: 'screen',
-    stops: [stop(o.hazeColor, 42, 0), stop(o.hazeColor, 100, (o.fog! / 100) * 0.42)],
+    stops: [stop(o.hazeColor, 38, 0, { ease: 'smootherstep' }), stop(o.hazeColor, 100, (o.fog! / 100) * 0.42)],
   }));
   const lightColor = o.moon ? o.moonColor ?? o.sunColor : o.sunColor;
-  if (o.glow > 0) layers.push(newLayer('radial', {
-    name: o.moon ? 'Moon halo' : 'Sun glow', cx: o.sunX, cy: o.sunY, rx: o.sunSize, ry: o.sunSize * 1.35, blend: 'screen', opacity: 1,
-    stops: [stop(lightColor, 0, o.glow / 100), stop(lightColor, 28, (o.glow / 100) * 0.45), stop(lightColor, 100, 0)], effects: [newEffect('blur', { radius: o.glowSoftness ?? 16 })],
+  if (o.glow > 0) layers.push(glow({
+    name: o.moon ? 'Moon halo' : 'Sun glow', color: lightColor, cx: o.sunX, cy: o.sunY, rx: o.sunSize * 1.15, ry: o.sunSize * 1.5, alpha: 1, core: o.glow / 100,
+    blur: o.glowSoftness ?? 16, falloff: 'inverse-square', tight: 28,
   }));
   if (o.sunDisc) {
     const size = Math.max(0.5, Math.min(20, o.sunDiscSize ?? 4));
     layers.push(newLayer('radial', {
       name: o.moon ? 'Moon disc' : 'Sun disc', cx: o.sunX, cy: o.sunY, rx: size, ry: size * (o.moon ? 1 : 0.94), blend: 'screen',
-      stops: [stop(lightColor, 0, 1), stop(lightColor, 86, 1), stop(lightColor, 100, 0)],
+      stops: [stop(lightColor, 0, 1), stop(lightColor, 82, 1, { ease: 'smoothstep' }), stop(lightColor, 100, 0)],
     }));
   }
   const sky = o.sky?.length ? o.sky : DEFAULT_ATMOSPHERE.sky;

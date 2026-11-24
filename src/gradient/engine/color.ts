@@ -1,4 +1,5 @@
-/* Colour helpers: parsing, HSL, OKLab/OKLCH interpolation. Pure functions, no dependencies. */
+/* Colour helpers: parsing, HSL, OKLab/OKLCH interpolation. Pure functions; the colour-space maths comes from colorScience.ts. */
+import { decodeColor, linearToOklab, linearToSrgb, mixHue, srgbToLinear } from './colorScience';
 
 export type RGB = { r: number; g: number; b: number };
 export type RGBA = RGB & { a: number };
@@ -58,24 +59,19 @@ export function hexToHsl(hex: string) {
   return { h, s: s * 100, l: l * 100 };
 }
 
-/* ───────── OKLab / OKLCH ───────── */
-const toLin = (c: number) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
-const fromLin = (c: number) => 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+/* ───────── OKLab / OKLCH ─────────
+ * The conversions live in colorScience.ts (one implementation for the whole studio). Colours that leave the sRGB gamut when mixed are
+ * brought back by reducing chroma at constant lightness and hue — never by clipping each channel, which shifts the hue. */
+const toLin = (c: number) => srgbToLinear(c / 255);
+const fromLin = (c: number) => 255 * linearToSrgb(c);
 export type Lab = { L: number; a: number; b: number };
 export function rgbToOklab({ r, g, b }: RGB): Lab {
-  const R = toLin(r), G = toLin(g), B = toLin(b);
-  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
-  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
-  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
-  return { L: 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, a: 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, b: 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s };
+  const [L, a, bb] = linearToOklab(toLin(r), toLin(g), toLin(b));
+  return { L, a, b: bb };
 }
 export function oklabToRgb({ L, a, b }: Lab): RGB {
-  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-  return {
-    r: clamp(fromLin(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s), 0, 255),
-    g: clamp(fromLin(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s), 0, 255),
-    b: clamp(fromLin(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s), 0, 255),
-  };
+  const [r, g, bb] = decodeColor([L, a, b], 'oklab');
+  return { r: r * 255, g: g * 255, b: bb * 255 };
 }
 
 export type Space = 'srgb' | 'srgb-linear' | 'oklab' | 'oklch';
@@ -94,10 +90,7 @@ export function mixColors(c1: RGBA, c2: RGBA, t: number, space: Space = 'srgb'):
   const l1 = rgbToOklab(c1), l2 = rgbToOklab(c2);
   if (space === 'oklab') return { ...oklabToRgb({ L: l1.L * q1 + l2.L * q2, a: l1.a * q1 + l2.a * q2, b: l1.b * q1 + l2.b * q2 }), a };
   const C1 = Math.hypot(l1.a, l1.b), C2 = Math.hypot(l2.a, l2.b);
-  let h1 = Math.atan2(l1.b, l1.a), h2 = Math.atan2(l2.b, l2.a);
-  if (C1 < 1e-4) h1 = h2; if (C2 < 1e-4) h2 = h1;
-  let dh = h2 - h1; if (dh > Math.PI) dh -= 2 * Math.PI; if (dh < -Math.PI) dh += 2 * Math.PI;
-  const C = C1 * q1 + C2 * q2, h = h1 + dh * t;
+  const C = C1 * q1 + C2 * q2, h = mixHue(Math.atan2(l1.b, l1.a), C1, Math.atan2(l2.b, l2.a), C2, t);
   return { ...oklabToRgb({ L: l1.L * q1 + l2.L * q2, a: C * Math.cos(h), b: C * Math.sin(h) }), a };
 }
 

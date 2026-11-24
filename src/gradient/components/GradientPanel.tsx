@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Section, Seg, Switch, ValueControl } from '../../shared/controls';
-import { DEFAULT_CURVE, sortedStops, stop as makeStop, type GradientKind, type GradientLayer } from '../engine/model';
+import { DEFAULT_CURVE, normalizeShaping, sortedStops, stop as makeStop, type GradientKind, type GradientLayer, type RampShaping } from '../engine/model';
+import { FALLOFFS, FALLOFF_LABEL } from '../engine/transitions';
 import { curveFromGradient } from '../engine/curve';
 import { useStore } from '../engine/store';
 import MeshPanel from './MeshPanel';
@@ -64,6 +65,10 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
     anim: { ...layer.anim, tracks: t === 'radial' ? layer.anim.tracks.filter(x => x.prop !== 'angle') : layer.anim.tracks },
   });
   const t = layer.type;
+  const shaping: RampShaping = layer.shaping ?? {};
+  // zero / "off" values are dropped so an untouched ramp keeps the exact output it always had
+  const setShaping = (patch: Partial<RampShaping>, key: string) => set({ shaping: normalizeShaping({ ...shaping, ...patch }) }, key);
+  const shapingActive = Object.keys(shaping).filter(k => k !== 'falloffStrength').length;
   const spin = spinTrack(layer);
   const setSpin = (on: boolean) => store.updateLayer(layerId, l => ({ ...l, anim: on
     ? { ...l.anim, enabled: true, easing: 'linear', direction: 'normal', duration: l.anim.tracks.length ? l.anim.duration : 16, tracks: [...l.anim.tracks.filter(x => x.prop !== 'angle'), { id: uid('t'), prop: 'angle', from: l.angle, to: l.angle + 360 }] }
@@ -107,6 +112,21 @@ export default function GradientPanel({ layerId }: { layerId: string }) {
       <ValueControl label={layer.shape === 'circle' ? 'Radius' : 'Radius X'} value={layer.rx} min={1} max={200} step={0.5} unit="%" def={50} onChange={v => set({ rx: v }, 'rx')} testId="gradient-rx" />
       {layer.shape === 'ellipse' && <ValueControl label="Radius Y" value={layer.ry} min={1} max={200} step={0.5} unit="%" def={50} onChange={v => set({ ry: v }, 'ry')} testId="gradient-ry" />}
     </Section>}
+    <Section title="Shaping" open={shapingActive > 0} hint={shapingActive ? `${shapingActive} active` : 'distribution & falloff'}>
+      <ValueControl label="Colour distribution" value={shaping.distribution ?? 0} min={-100} max={100} unit="" def={0} onChange={v => setShaping({ distribution: v }, 'shape-dist')} testId="shaping-distribution" />
+      <p className="hint">Moves where the colours sit along the whole ramp without moving the stops: positive keeps the first colours for longer, negative brings the last colours in earlier.</p>
+      {t !== 'conic' && <ValueControl label="Edge softness" value={shaping.edge ?? 0} min={0} max={100} unit="%" def={0} onChange={v => setShaping({ edge: v }, 'shape-edge')} testId="shaping-edge" />}
+      {t === 'radial' && <>
+        <div className="field-label">Light falloff</div>
+        <Seg value={shaping.falloff ?? 'none'} label="Light falloff" options={FALLOFFS.map(id => ({ id, label: FALLOFF_LABEL[id] }))} onChange={v => setShaping({ falloff: v }, 'shape-falloff')} testId="shaping-falloff" />
+        {shaping.falloff && <ValueControl label="Falloff tightness" value={shaping.falloffStrength ?? 50} min={0} max={100} unit="%" def={50} onChange={v => setShaping({ falloffStrength: v }, 'shape-falloff-strength')} testId="shaping-falloff-strength" />}
+        <p className="hint">Replaces the straight colour ramp with a light-like intensity curve over the radius: bright core, natural roll-off, no hard circle.</p>
+      </>}
+      {t === 'conic' && <>
+        <ValueControl label="Seam blend" value={shaping.seam ?? 0} min={0} max={100} unit="%" def={0} onChange={v => setShaping({ seam: v }, 'shape-seam')} testId="shaping-seam" />
+        <p className="hint">Blends the last colour back into the first across this share of the turn, so the start angle has no visible seam.</p>
+      </>}
+    </Section>
     {layer.repeating && <Section title="Repeat">
       <ValueControl label="Repeat size" value={layer.repeat.size} min={1} max={layer.repeat.unit === 'deg' ? 360 : layer.repeat.unit === '%' ? 100 : 600} step={layer.repeat.unit === 'px' ? 1 : 0.5} unit={layer.repeat.unit} def={layer.repeat.unit === 'deg' ? 45 : 40} onChange={v => set({ repeat: { ...layer.repeat, size: v } }, 'rsize')} testId="repeat-size" />
       <ValueControl label="Offset" value={layer.repeat.offset} min={-200} max={layer.repeat.unit === 'deg' ? 360 : 200} step={0.5} unit={layer.repeat.unit} def={0} onChange={v => set({ repeat: { ...layer.repeat, offset: v } }, 'roff')} testId="repeat-offset" />

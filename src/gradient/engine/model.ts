@@ -2,6 +2,7 @@ import { clamp } from './color';
 import { TEXTURE_DEFAULTS, normalizeTexture, type TextureParams } from './textureControls';
 import { DEFAULT_INTERACTIVE_SETTINGS, DEFAULT_SHADER_LAYER, normalizeInteractiveSettings, normalizeShaderLayer, type InteractiveSettings, type ShaderLayerConfig } from '../interactive/types';
 import { DEFAULT_MESH_FIELD, normalizeMeshField, normalizePointField, type MeshFieldSettings } from './meshFieldSettings';
+import { isEasing, isFalloff, type EasingName, type FalloffKind } from './transitions';
 
 /* ═══════════════════════════ Gradient Studio data model ═══════════════════════════
  * The project is the source of truth. CSS, SVG, PNG and keyframes are all *generated* from it,
@@ -33,6 +34,23 @@ export interface ColorStop {
   hard?: boolean;
   /** Transition midpoint toward the next stop, 0…100 (50 = linear). Emitted as a CSS colour hint. */
   mid?: number;
+  /** Named easing for the transition from this stop to the next (smoothstep, sine, cubic …). Ignored when a custom `curve` is set. */
+  ease?: EasingName;
+}
+
+/** Ramp-wide shaping, applied to the baked ramp so CSS, SVG, PNG and WebGL all show the same result. Every field is optional and
+ *  absent/zero means "unchanged", so projects saved before these controls existed render exactly as before. */
+export interface RampShaping {
+  /** −100…100. Positive keeps the first colours for longer, negative brings the last colours in earlier. */
+  distribution?: number;
+  /** 0…100. Fades the last part of the ramp to transparent with a smootherstep, so a glow or a linear end has no hard boundary. */
+  edge?: number;
+  /** Light-like intensity falloff over the radius (radial gradients). */
+  falloff?: FalloffKind;
+  /** 0…100. How tight the falloff core is. */
+  falloffStrength?: number;
+  /** 0…100 (conic gradients). Share of the turn used to blend the last colour back into the first, so the start angle has no seam. */
+  seam?: number;
 }
 
 export interface RepeatSpec { size: number; unit: 'px' | '%' | 'deg'; offset: number }
@@ -164,6 +182,8 @@ export interface GradientLayer {
   curve: CurveData;
   /** Optional freeform clipping boundary. Applies to the whole layer, including texture overlays. */
   mask: LayerMask;
+  /** Optional ramp shaping (distribution, soft edge, light falloff, conic seam). Absent = the ramp exactly as its stops define it. */
+  shaping?: RampShaping;
   /** Optional shader overlay for this layer; all existing layer controls continue to apply. */
   shader?: Partial<ShaderLayerConfig>;
   /** A non-gradient base layer. The matching stops keep it compatible with image-only outputs. */
@@ -312,6 +332,22 @@ export function freshIds(p: GradientProject): GradientProject {
   return { ...p, layers: p.layers.map(l => cloneLayer(l)) };
 }
 
+export function normalizeShaping(raw: unknown): RampShaping | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const bounded = (value: unknown, min: number, max: number) => { const n = Number(value); return Number.isFinite(n) ? clamp(n, min, max) : 0; };
+  const out: RampShaping = {};
+  const distribution = bounded(r.distribution, -100, 100), edge = bounded(r.edge, 0, 100), seam = bounded(r.seam, 0, 100);
+  if (distribution) out.distribution = distribution;
+  if (edge) out.edge = edge;
+  if (isFalloff(r.falloff) && r.falloff !== 'none') {
+    out.falloff = r.falloff;
+    out.falloffStrength = r.falloffStrength === undefined ? 50 : bounded(r.falloffStrength, 0, 100);
+  }
+  if (seam) out.seam = seam;
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Validate / repair an imported project. Throws a readable error when it is not usable. */
 export function normalizeProject(raw: unknown): GradientProject {
   if (!raw || typeof raw !== 'object') throw new Error('Not a gradient project');
@@ -417,13 +453,15 @@ export function normalizeProject(raw: unknown): GradientProject {
       const validCurve = curve && [curve.x1, curve.y1, curve.x2, curve.y2].every(Number.isFinite)
         ? { x1: clamp(curve.x1, 0, 1), y1: clamp(curve.y1, 0, 1), x2: clamp(curve.x2, 0, 1), y2: clamp(curve.y2, 0, 1) }
         : undefined;
-      return { ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100), curve: validCurve };
+      return { ...s, id: s.id || uid('s'), alpha: clamp(Number(s.alpha ?? 1), 0, 1), pos: clamp(Number(s.pos ?? 0), 0, 100), curve: validCurve, ease: isEasing(s.ease) && s.ease !== 'linear' ? s.ease : undefined };
     });
     if (merged.solidColor !== undefined) {
       merged.stops = merged.stops.slice(0, 2);
       while (merged.stops.length < 2) merged.stops.push(stop(merged.solidColor, 100));
       merged.stops = merged.stops.map((s, index) => ({ ...s, color: merged.solidColor!, alpha: 1, pos: index === 0 ? 0 : 100 }));
     }
+    merged.shaping = normalizeShaping(l.shaping);
+    if (!merged.shaping) delete merged.shaping;
     if (!merged.name) merged.name = `Layer ${i + 1}`;
     return merged;
   });

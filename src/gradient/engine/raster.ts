@@ -1,7 +1,7 @@
 import { hexToRgb as hexRgb, rgbaCss, type RGBA } from './color';
 import { EFFECTS, activeEffects, blurOf } from './effects';
 import { bleedOf, layerMatrix, linearLine, offsetOf, periodOf, radii, rad } from './geom';
-import { colorAtPos, rampRange, rampStops } from './ramp';
+import { rampRange, rampStops, shapedColorAt } from './ramp';
 import { pointRadii } from './mesh';
 import { curveBands } from './curve';
 import { noiseCanvas } from './noise';
@@ -90,7 +90,7 @@ function fillLayer(ctx: CanvasRenderingContext2D, layer: GradientLayer, project:
   }
   if (layer.type === 'curve') {
     curveBands(layer.curve, project.canvas).forEach(band => {
-      ctx.fillStyle = rgbaCss(colorAtPos(layer, band.progress * 100));
+      ctx.fillStyle = rgbaCss(shapedColorAt(layer, band.progress * 100));
       ctx.beginPath();
       ctx.moveTo(band.points[0].x, band.points[0].y);
       band.points.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
@@ -229,7 +229,7 @@ export async function exportPng(project: GradientProject, scale = 1): Promise<{ 
         canvas: await renderFilteredSvg(project, scale),
         notes: project.layers
           .filter(layer => layer.visible && layer.type === 'mesh' && layer.mesh.field.enabled)
-          .map(layer => `“${layer.name}”: PNG used the SVG fallback, so the smooth mesh field is shown as its CSS-compatible mesh`),
+          .map(layer => `“${layer.name}”: PNG used the SVG fallback, so the smooth mesh field is embedded as a 160 px baked image (smooth, but without film grain)`),
       };
     } catch (error) {
       if (project.layers.some(layer => layer.visible && layer.text)) {

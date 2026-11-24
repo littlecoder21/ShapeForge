@@ -41,7 +41,7 @@ export async function rasterizeProject(project: GradientProject, scale: number):
       canvas: await renderFilteredSvg(project, scale),
       notes: project.layers
         .filter(layer => layer.visible && layer.type === 'mesh' && layer.mesh.field.enabled)
-        .map(layer => `“${layer.name}”: image export used the SVG fallback, so the smooth mesh field is shown as its CSS-compatible mesh`),
+        .map(layer => `“${layer.name}”: image export used the SVG fallback, so the smooth mesh field is embedded as a 160 px baked image (smooth, but without film grain)`),
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'unknown SVG rendering error';

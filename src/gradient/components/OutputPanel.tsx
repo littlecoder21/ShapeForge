@@ -150,6 +150,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
         <summary className="btn small">Show separate HTML and CSS</summary>
         <CodeBlock title="HTML fragment" text={out.layered.html} lang="html" testId="code-html-fragment" copyLabel="Copy HTML" />
         <CodeBlock title="CSS" text={out.layered.css} testId="code-layered-css" copyLabel="Copy CSS" />
+        {out.layered.script && <CodeBlock title="Mesh field script (repaints the field live; the CSS already shows it without JavaScript)" text={out.layered.script} lang="js" testId="code-mesh-field-script" copyLabel="Copy script" />}
       </details>
     </>}
     {fmt === 'vars' && <CodeBlock title="CSS variables" text={out.vars} testId="code-vars" actions={downloadButton('css', out.vars)} />}

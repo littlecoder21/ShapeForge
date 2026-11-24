@@ -195,7 +195,7 @@ test('multi-layer shader exports keep each gradient palette and mesh colors with
   assert.deepEqual(interactionColorsForLayer(meshAdapter.palette), ['#00ff00', '#ff00ff']);
   assert.deepEqual(meshAdapter.meshPoints, meshPoints.map(({ color, x, y, size, alpha }) => ({ color, x, y, size, alpha })));
   const fragmentShader = readFileSync(new URL('./shaders/gradient.frag.glsl', import.meta.url), 'utf8');
-  assert.match(fragmentShader, /color\.rgb = mix\(color\.rgb, meshColor\.rgb, 0\.82\)/);
+  assert.match(fragmentShader, /color\.rgb = mix\(color\.rgb, meshColor\.rgb, clamp\(uMeshBlend, 0\.0, 1\.0\)\)/);
 
   const canvases = [...interactiveHtmlExport(project).matchAll(/<canvas data-shader-canvas ([^>]+)>/g)];
   assert.equal(canvases.length, 2);

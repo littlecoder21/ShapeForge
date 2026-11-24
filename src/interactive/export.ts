@@ -8,6 +8,7 @@ import { UNIFORM_NAMES } from './uniforms';
 import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from '../gradient/interactive/styles';
 import { assembleProceduralShader } from '../procedural/glsl';
 import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../procedural/types';
+import { resolveProceduralMesh, type MeshLike } from '../procedural/meshSource';
 import { ruleTextureAtlasDataUri } from '../gradient/interactive/rig/textureAtlas';
 import { shapeCellsBase64 } from '../gradient/interactive/rig/shapeField';
 import fragmentShaderTemplate from '../gradient/interactive/shaders/gradient.frag.glsl?raw';
@@ -140,6 +141,23 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     const number = parseInt((stop.color || '#000000').replace('#', ''), 16);
     return [((number >> 16) & 255) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255, stop.alpha == null ? 1 : stop.alpha];
   };
+  const easings = {
+    smoothstep: x => x * x * (3 - 2 * x),
+    smootherstep: x => x * x * x * (x * (x * 6 - 15) + 10),
+    'sine-in': x => 1 - Math.cos(x * Math.PI / 2),
+    'sine-out': x => Math.sin(x * Math.PI / 2),
+    'sine-in-out': x => (1 - Math.cos(Math.PI * x)) / 2,
+    'quad-in': x => x * x,
+    'quad-out': x => x * (2 - x),
+    'cubic-in': x => x * x * x,
+    'cubic-out': x => 1 - Math.pow(1 - x, 3),
+    'cubic-in-out': x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2,
+    'expo-in': x => (Math.pow(2, 10 * x) - 1) / 1023,
+    'expo-out': x => (1 - Math.pow(2, -10 * x)) / (1 - Math.pow(2, -10)),
+    'circ-in': x => 1 - Math.sqrt(1 - x * x),
+    'circ-out': x => Math.sqrt(1 - (x - 1) * (x - 1)),
+  };
+  const bezierEases = { 'ease-in': { x1: 0.42, y1: 0, x2: 1, y2: 1 }, 'ease-out': { x1: 0, y1: 0, x2: 0.58, y2: 1 }, 'ease-in-out': { x1: 0.42, y1: 0, x2: 0.58, y2: 1 } };
   const sampleFallback = (t) => {
     if (t <= palette[0].position) return colorAt(palette[0]);
     let index = 0;
@@ -147,12 +165,14 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     const from = palette[index], to = palette[index + 1];
     if (!to || t >= palette[palette.length - 1].position) return colorAt(palette[palette.length - 1]);
     let f = from.hard ? 0 : clamp((t - from.position) / Math.max(1e-9, to.position - from.position), 0, 1);
-    if (!from.hard && from.mid != null && !from.curve && Math.abs(from.mid - 50) > 0.5) f = Math.pow(f, Math.log(0.5) / Math.log(clamp(from.mid / 100, 0.005, 0.995)));
-    if (!from.hard && from.curve) {
+    const curve = from.curve || (from.ease && bezierEases[from.ease]);
+    if (!from.hard && !from.curve && from.ease && easings[from.ease]) f = easings[from.ease](f);
+    if (!from.hard && from.mid != null && !curve && Math.abs(from.mid - 50) > 0.5) f = Math.pow(f, Math.log(0.5) / Math.log(clamp(from.mid / 100, 0.005, 0.995)));
+    if (!from.hard && curve) {
       const bezier = (x, a, b) => 3 * (1 - x) * (1 - x) * x * a + 3 * (1 - x) * x * x * b + x * x * x;
       let lo = 0, hi = 1;
-      for (let k = 0; k < 18; k++) { const at = (lo + hi) / 2; if (bezier(at, from.curve.x1, from.curve.x2) < f) lo = at; else hi = at; }
-      f = bezier((lo + hi) / 2, from.curve.y1, from.curve.y2);
+      for (let k = 0; k < 18; k++) { const at = (lo + hi) / 2; if (bezier(at, curve.x1, curve.x2) < f) lo = at; else hi = at; }
+      f = bezier((lo + hi) / 2, curve.y1, curve.y2);
     }
     const a = colorAt(from), b = colorAt(to);
     return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];
@@ -550,10 +570,13 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
 `;
 }
 
-/** The layer's procedural engine when it is switched on, else null. */
+/** The layer's procedural engine when it is switched on, else null. A mesh-linked config (`mesh.source === 'layer'`) carries no
+ *  points of its own, so it is resolved against the layer's live mesh exactly like the editor preview does. Without this the
+ *  exported runtime has no anchors and falls back to the palette ramp (the mesh's colours sorted by x) instead of the mesh. */
 function proceduralOf(layer: GradientLayer | null): ProceduralConfig | null {
   const config = layer?.shader?.procedural;
-  return config && isProceduralActive(config) ? config : null;
+  if (!layer || !config || !isProceduralActive(config)) return null;
+  return layer.type === 'mesh' ? resolveProceduralMesh(config, layer.mesh as unknown as MeshLike) : config;
 }
 
 /** Settings as the runtime reads them: the layer's shader settings plus its procedural config (when it has one), the CSS
@@ -680,9 +703,10 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     `<style>${stylesheet}</style>`,
     `</head><body>${html}`,
     `<script>${shaderRuntime(fragmentSources)}</script>`,
+    ...(layers.script ? [`<script>${layers.script.replace(/<\/script/gi, '<\\/script')}</script>`] : []),
     '</body></html>',
   ].join('\n');
-  return { body, markup, stylesheet, palette: paletteAdapter, entries, fragmentSource: fragmentSources[0], fragmentSources, defaultSettings };
+  return { body, markup, stylesheet, palette: paletteAdapter, entries, fragmentSource: fragmentSources[0], fragmentSources, defaultSettings, fieldScript: layers.script };
 }
 
 export function interactiveHtmlExport(project: GradientProject) {
@@ -692,10 +716,11 @@ export function interactiveHtmlExport(project: GradientProject) {
 }
 
 export function interactiveJavaScriptExport(project: GradientProject) {
-  const { markup, stylesheet, fragmentSources } = makeDocument(project);
+  const { markup, stylesheet, fragmentSources, fieldScript } = makeDocument(project);
   return `const SHAPEFORGE_GRADIENT_MARKUP = ${JSON.stringify(markup)};
 const SHAPEFORGE_GRADIENT_STYLES = ${JSON.stringify(stylesheet)};
 const SHAPEFORGE_SHADER_RUNTIME = ${JSON.stringify(shaderRuntime(fragmentSources, 'document.currentScript.parentElement'))};
+const SHAPEFORGE_FIELD_RUNTIME = ${JSON.stringify(fieldScript)};
 
 function mountShapeForgeGradient(target = document.body) {
   const host = typeof target === 'string' ? document.querySelector(target) : target;
@@ -712,6 +737,11 @@ function mountShapeForgeGradient(target = document.body) {
   const runtime = document.createElement('script');
   runtime.textContent = SHAPEFORGE_SHADER_RUNTIME;
   host.appendChild(runtime);
+  if (SHAPEFORGE_FIELD_RUNTIME) {
+    const field = document.createElement('script');
+    field.textContent = SHAPEFORGE_FIELD_RUNTIME;
+    host.appendChild(field);
+  }
   return host;
 }
 
@@ -903,7 +933,7 @@ export function interactiveExports(project: GradientProject, rootExpression = 'd
     html: `${note ? `${note}\n` : ''}${built.body}`,
     markup: `${note ? `${note}\n` : ''}${built.markup}`,
     stylesheet: built.stylesheet,
-    runtime: shaderRuntime(built.fragmentSources, rootExpression),
+    runtime: [shaderRuntime(built.fragmentSources, rootExpression), built.fieldScript].filter(Boolean).join('\n\n'),
     javascript: interactiveJavaScriptExport(project),
     glsl: interactiveGlslExport(project),
     react: interactiveReactExport(project),

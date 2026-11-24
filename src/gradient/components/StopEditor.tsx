@@ -4,6 +4,7 @@ import { ValueControl, Switch, Seg, Section } from '../../shared/controls';
 import { STOP_EFFECTS, STOP_EFFECT_LIST, newStopEffect, reachOf } from '../engine/stopEffects';
 import { gradientFn } from '../engine/css';
 import { colorAtPos, CURVE_PRESETS, curvePreset, curveProgress, type CurvePreset } from '../engine/ramp';
+import { EASINGS, EASING_LABEL, isEasing } from '../engine/transitions';
 import { rgbToHex } from '../engine/color';
 import { sortedStops, stop as makeStop, uid, type ColorStop, type GradientLayer, type GradientProject } from '../engine/model';
 import { useStore } from '../engine/store';
@@ -56,8 +57,10 @@ export default function StopEditor({ layerId }: { layerId: string }) {
   }).join(' ') : '';
   const setCurvePreset = (preset: CurvePreset) => {
     if (!sel) return;
-    const nextCurve = preset === 'linear' || preset === 'midpoint' ? undefined : preset === 'custom' ? (sel.curve ?? CURVE_PRESETS.ease) : CURVE_PRESETS[preset];
-    patchStop(sel.id, { curve: nextCurve, mid: preset === 'midpoint' ? (sel.mid ?? 65) : undefined }, `stop-curve-${sel.id}`);
+    // named easings that are not one of the five cubic-bezier presets (smoothstep, smootherstep, sine, quad, cubic, expo, circ) are stored by name
+    const named = preset !== 'custom' && preset !== 'midpoint' && !(preset in CURVE_PRESETS) && isEasing(preset) ? preset : undefined;
+    const nextCurve = preset === 'linear' || preset === 'midpoint' || named ? undefined : preset === 'custom' ? (sel.curve ?? CURVE_PRESETS.ease) : CURVE_PRESETS[preset as keyof typeof CURVE_PRESETS];
+    patchStop(sel.id, { curve: nextCurve, ease: named, mid: preset === 'midpoint' ? (sel.mid ?? 65) : undefined }, `stop-curve-${sel.id}`);
   };
 
   const addAt = (pos: number) => {
@@ -157,8 +160,15 @@ export default function StopEditor({ layerId }: { layerId: string }) {
         <div className="field-label">Transition curve</div>
         <Seg value={curveMode} label="Transition curve" options={[
           { id: 'linear', label: 'Linear' }, { id: 'ease-in', label: 'Ease in' }, { id: 'ease-out', label: 'Ease out' },
-          { id: 'ease-in-out', label: 'In / out' }, { id: 'ease', label: 'Ease' }, { id: 'custom', label: 'Custom' }, { id: 'midpoint', label: 'Midpoint' },
+          { id: 'ease-in-out', label: 'In / out' }, { id: 'ease', label: 'Ease' }, { id: 'smoothstep', label: 'Smooth' }, { id: 'smootherstep', label: 'Smoother' },
+          { id: 'custom', label: 'Custom' }, { id: 'midpoint', label: 'Midpoint' },
         ]} onChange={v => setCurvePreset(v as CurvePreset)} testId="stop-curve-preset" />
+        <label className="nf"><span className="nf-label">More easings</span>
+          <select className="generate-select" aria-label="More easings" data-testid="stop-ease-select" value={sel.ease && !(sel.ease in { smoothstep: 1, smootherstep: 1 }) ? sel.ease : ''} onChange={e => e.target.value && setCurvePreset(e.target.value as CurvePreset)}>
+            <option value="">Choose…</option>
+            {EASINGS.filter(name => name !== 'linear' && !(name in CURVE_PRESETS) && name !== 'smoothstep' && name !== 'smootherstep').map(name => <option key={name} value={name}>{EASING_LABEL[name]}</option>)}
+          </select>
+        </label>
         <svg viewBox="0 0 100 100" role="img" aria-label="Transition curve preview" style={{ width: '100%', height: 64, borderRadius: 6, background: '#11151a' }}>
           <path d="M0 100L100 0" fill="none" stroke="#59616c" strokeDasharray="3 3" />
           <path d={curvePath} fill="none" stroke="#75e4bc" strokeWidth="3" />
@@ -171,7 +181,7 @@ export default function StopEditor({ layerId }: { layerId: string }) {
           <ValueControl label="Control 2 X" value={curve.x2} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, x2: v } }, `stop-curve-x2-${sel.id}`)} testId="stop-curve-x2" {...sliderGesture} />
           <ValueControl label="Control 2 Y" value={curve.y2} min={0} max={1} step={0.01} onChange={v => patchStop(sel.id, { curve: { ...curve, y2: v } }, `stop-curve-y2-${sel.id}`)} testId="stop-curve-y2" {...sliderGesture} />
         </>}
-        <p className="hint">Custom curves are approximated with sampled CSS colour mixes and rendered directly for PNG/SVG.</p>
+        <p className="hint">Smooth / Smoother remove the hard start and end of a transition (smoothstep and smootherstep); the other easings and custom curves are sampled into the CSS gradient and rendered exactly for PNG, SVG and the shader.</p>
       </div>}
       <Section title="Stop effects" hint={`${(sel.effects ?? []).filter(effect => effect.enabled).length} active`}>
         <p className="hint">Effects act on this stop only. Smooth effects soften the blend with its neighbours; Colour effects change the stop’s own colour.</p>

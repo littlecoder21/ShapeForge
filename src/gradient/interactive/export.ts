@@ -110,6 +110,23 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     const number = parseInt((stop.color || '#000000').replace('#', ''), 16);
     return [((number >> 16) & 255) / 255, ((number >> 8) & 255) / 255, (number & 255) / 255, stop.alpha == null ? 1 : stop.alpha];
   };
+  const easings = {
+    smoothstep: x => x * x * (3 - 2 * x),
+    smootherstep: x => x * x * x * (x * (x * 6 - 15) + 10),
+    'sine-in': x => 1 - Math.cos(x * Math.PI / 2),
+    'sine-out': x => Math.sin(x * Math.PI / 2),
+    'sine-in-out': x => (1 - Math.cos(Math.PI * x)) / 2,
+    'quad-in': x => x * x,
+    'quad-out': x => x * (2 - x),
+    'cubic-in': x => x * x * x,
+    'cubic-out': x => 1 - Math.pow(1 - x, 3),
+    'cubic-in-out': x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2,
+    'expo-in': x => (Math.pow(2, 10 * x) - 1) / 1023,
+    'expo-out': x => (1 - Math.pow(2, -10 * x)) / (1 - Math.pow(2, -10)),
+    'circ-in': x => 1 - Math.sqrt(1 - x * x),
+    'circ-out': x => Math.sqrt(1 - (x - 1) * (x - 1)),
+  };
+  const bezierEases = { 'ease-in': { x1: 0.42, y1: 0, x2: 1, y2: 1 }, 'ease-out': { x1: 0, y1: 0, x2: 0.58, y2: 1 }, 'ease-in-out': { x1: 0.42, y1: 0, x2: 0.58, y2: 1 } };
   const sampleFallback = (t) => {
     if (t <= palette[0].position) return colorAt(palette[0]);
     let index = 0;
@@ -117,12 +134,14 @@ export function shaderRuntime(fragmentSource: string, rootExpression = 'document
     const from = palette[index], to = palette[index + 1];
     if (!to || t >= palette[palette.length - 1].position) return colorAt(palette[palette.length - 1]);
     let f = from.hard ? 0 : clamp((t - from.position) / Math.max(1e-9, to.position - from.position), 0, 1);
-    if (!from.hard && from.mid != null && !from.curve && Math.abs(from.mid - 50) > 0.5) f = Math.pow(f, Math.log(0.5) / Math.log(clamp(from.mid / 100, 0.005, 0.995)));
-    if (!from.hard && from.curve) {
+    const curve = from.curve || (from.ease && bezierEases[from.ease]);
+    if (!from.hard && !from.curve && from.ease && easings[from.ease]) f = easings[from.ease](f);
+    if (!from.hard && from.mid != null && !curve && Math.abs(from.mid - 50) > 0.5) f = Math.pow(f, Math.log(0.5) / Math.log(clamp(from.mid / 100, 0.005, 0.995)));
+    if (!from.hard && curve) {
       const bezier = (x, a, b) => 3 * (1 - x) * (1 - x) * x * a + 3 * (1 - x) * x * x * b + x * x * x;
       let lo = 0, hi = 1;
-      for (let k = 0; k < 18; k++) { const at = (lo + hi) / 2; if (bezier(at, from.curve.x1, from.curve.x2) < f) lo = at; else hi = at; }
-      f = bezier((lo + hi) / 2, from.curve.y1, from.curve.y2);
+      for (let k = 0; k < 18; k++) { const at = (lo + hi) / 2; if (bezier(at, curve.x1, curve.x2) < f) lo = at; else hi = at; }
+      f = bezier((lo + hi) / 2, curve.y1, curve.y2);
     }
     const a = colorAt(from), b = colorAt(to);
     return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];

@@ -1,4 +1,6 @@
 import { sortedStops, type GradientLayer, type GradientProject } from '../engine/model';
+import { rgbToHex } from '../engine/color';
+import { rampRange, smoothedRamp } from '../engine/ramp';
 import { bleedOf, radii } from '../engine/geom';
 import type { ShaderGeometry, ShaderMeshPoint, ShaderStop } from './types';
 import type { MeshLike } from '../../procedural/meshSource';
@@ -46,6 +48,9 @@ function layerPalette(layer: GradientLayer): ShaderStop[] {
     ];
   }
   if (layer.type === 'noise') return [];
+  // stop smoothing effects and ramp shaping are baked into plain colour stops, so the shader's palette LUT shows what CSS shows
+  const baked = smoothedRamp(layer);
+  if (baked) return baked.map(sample => ({ color: rgbToHex(sample.color), position: sample.pos / 100, alpha: sample.color.a }));
   return sortedStops(layer.stops).map(stop => ({
     color: stop.color,
     position: stop.pos / 100,
@@ -53,6 +58,7 @@ function layerPalette(layer: GradientLayer): ShaderStop[] {
     hard: stop.hard,
     mid: stop.mid,
     curve: stop.curve,
+    ease: stop.ease,
   }));
 }
 

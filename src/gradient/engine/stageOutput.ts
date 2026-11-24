@@ -1,5 +1,6 @@
-import { effectDefs, layerCss, ordinalNames, selectorFor, sizeDecls, type LayeredOptions } from './css';
+import { effectDefs, layerCss, layerInnerHtml, ordinalNames, selectorFor, sizeDecls, type LayeredOptions } from './css';
 import { outputOf, type GradientProject } from './model';
+import { meshFieldScript } from './meshFieldExport';
 
 /* ═══════════════════════════ Scaled-stage output ═══════════════════════════
  * The studio preview draws the gradient at its native canvas size (e.g. 1200 × 800 px) and scales that whole picture with
@@ -91,7 +92,7 @@ export function stagedLayeredOutput(project: GradientProject) {
   const anyAnim = visible.some(l => l.anim.enabled && l.anim.tracks.length);
   const stage = `${root.sel} > [${STAGE_ATTRIBUTE}]`;
 
-  const rows = [...visible].reverse().map(l => `    <i class="${prefix} ${names.cls(l)}">${l.text ? `<span class="g-text">${htmlEscape(l.text.content)}</span>` : l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
+  const rows = [...visible].reverse().map(l => `    <i class="${prefix} ${names.cls(l)}">${layerInnerHtml(l, project)}</i>`);
   const html = `<div ${root.attr} aria-hidden="true">\n  <div ${STAGE_ATTRIBUTE}>\n${rows.join('\n')}${defs ? `\n    <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n  </div>\n</div>`;
 
   const comment = (text: string) => (out.comments ? `/* ${text} */\n` : '');
@@ -121,9 +122,11 @@ export function stagedLayeredOutput(project: GradientProject) {
     ...(anyAnim ? [`${comment('Respect reduced-motion preferences')}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : []),
   ].filter(Boolean).join('\n\n');
 
+  const fieldScript = meshFieldScript(project);
+  const runtime = [buildStageRuntime(root.sel, w), fieldScript].filter(Boolean).join('\n\n');
   return {
     html, css,
-    runtime: buildStageRuntime(root.sel, w),
-    all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>\n\n<script>\n${buildStageRuntime(root.sel, w)}\n</script>`,
+    runtime,
+    all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>\n\n<script>\n${runtime}\n</script>`,
   };
 }

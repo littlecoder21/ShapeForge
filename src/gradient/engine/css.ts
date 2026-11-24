@@ -2,11 +2,12 @@ import { rgbaCss, rgbaString } from './color';
 import { EFFECTS, activeEffects } from './effects';
 import { bleedOf, isIdentityTransform, linearLine, radii, rad, type Canvas } from './geom';
 import { meshCoord, meshParts } from './mesh';
+import { meshFieldBakeUri, meshFieldBackgroundDecls, meshFieldCanvasCss, meshFieldCanvasHtml, meshFieldScript, usesMeshField } from './meshFieldExport';
 import { IDENTITY, outputOf, sortedStops, type AnimTrack, type ColorStop, type GradientLayer, type GradientProject } from './model';
 import { noiseDataUri } from './noise';
 import { curveSvgDataUri } from './curve';
 import { layerMaskPolygon, layerMaskSvgDataUri } from './layerMask';
-import { curveProgress, smoothedRamp, stopRgba } from './ramp';
+import { curveProgress, isShapedTransition, smoothedRamp, stopRgba } from './ramp';
 import { textureDataUri, textureOverlay } from './textures';
 import { textMaskDataUri } from './text';
 
@@ -73,8 +74,8 @@ export function stopTokens(layer: GradientLayer, ctx: Ctx): string[] {
     out.push(`${colorOf(x)} ${posOf(x)}`);
     if (!nx) return;
     if (x.hard) out.push(`${colorOf(x)} ${posOf(nx)}`);
-    else if (x.curve && nx.pos - x.pos > 0.01) {
-      const steps = 24;
+    else if (isShapedTransition(x) && nx.pos - x.pos > 0.01) {
+      const steps = 32;
       for (let k = 1; k < steps; k++) {
         const progress = k / steps, eased = curveProgress(x, progress);
         const p = x.pos + (nx.pos - x.pos) * progress;
@@ -132,6 +133,7 @@ export function gradientFn(layer: GradientLayer, project: GradientProject, o: { 
 export interface ImageItem { text: string; parts?: GradientParts; label: string; size?: string; position?: string }
 
 export function layerImages(layer: GradientLayer, project: GradientProject, o: { alphaMul?: number; flat?: boolean; cls?: string } = {}): ImageItem[] {
+  if (o.flat && usesMeshField(layer)) return [{ text: `url("${meshFieldBakeUri(layer, project.canvas)}")`, size: '100% 100%', label: 'Smooth mesh field (baked image)' }];
   const line = (g: GradientParts) => `${g.fn}(${[g.head, ...g.stops].join(', ')})`;
   if (layer.type === 'noise') return [{ text: noiseDataUri(layer.noise), label: 'Grain', size: `${Math.round(layer.noise.tile)}px ${Math.round(layer.noise.tile)}px` }];
   if (layer.type === 'curve') return [{ text: curveSvgDataUri(layer, project.canvas), label: `${layer.name} (curve)` }];
@@ -290,6 +292,8 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   else if (layer.type !== 'mesh' && o.pretty) decls.push(`background-image:\n${items.map((it, i) => `${o.comments && items.length > 1 ? `    /* ${i + 1} · ${it.label} */\n` : ''}    ${it.parts ? formatGradient(it.parts, '    ') : it.text}`).join(',\n')}`);
   else if (layer.type !== 'mesh') decls.push(`background-image: ${items.map(i => i.text).join(', ')}`);
   if (items[0]?.size) decls.push(`background-size: ${items[0].size}`);
+  // smooth mesh field: the layer shows the baked field (what the live canvas will repaint), not the stacked radial points
+  if (usesMeshField(layer) && layer.solidColor === undefined) decls.push(...meshFieldBackgroundDecls(layer, project.canvas));
   if (layer.opacity < 1) decls.push(`opacity: ${r2(layer.opacity, 3)}`);
   if (layer.blend !== 'normal') decls.push(`mix-blend-mode: ${layer.blend}`);
   const f = filterCss(layer, key); if (f) decls.push(`filter: ${f}`);
@@ -301,7 +305,8 @@ export function layerCss(layer: GradientLayer, project: GradientProject, o: Laye
   }
   const head = o.pretty && o.comments ? `/* ${cls.replace(/^.*-(\d+)$/, '$1')} · ${layer.name}${bleed > 0 ? ' (blurred layers extend past the edge so the blur stays full)' : ''} */\n` : '';
   let css = `${head}${o.rootSel} .${cls} {\n${decls.map(d => `  ${d};`).join('\n')}\n}`;
-  if (layer.type === 'mesh' && meshCtx && !layer.text) {
+  if (usesMeshField(layer)) css += `\n\n${meshFieldCanvasCss(`${o.rootSel} .${cls}`)}`;
+  else if (layer.type === 'mesh' && meshCtx && !layer.text) {
     const points = layer.mesh.points.map((point, index) => {
       const { x: animatedX, y: animatedY } = meshCtx.ptVar.get(point.id) ?? {};
       const transform = { ...IDENTITY, ...(point.transform ?? {}) };
@@ -403,19 +408,28 @@ export function selectorFor(project: GradientProject) {
   return { sel: `.${clean}`, attr: `class="${clean}"`, scope: clean };
 }
 
+/** What goes inside a layer's element in exported markup: text, the mesh-field canvas, or the stacked mesh points. */
+export function layerInnerHtml(l: GradientLayer, project: GradientProject): string {
+  if (l.text) return `<span class="g-text">${htmlEscape(l.text.content)}</span>`;
+  if (usesMeshField(l)) return meshFieldCanvasHtml(l, project.canvas);
+  if (l.type === 'mesh') return [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('');
+  return '';
+}
+
 export function layeredOutput(project: GradientProject) {
   const out = outputOf(project), root = selectorFor(project), prefix = cssIdentifier(out.layerPrefix.trim(), 'layer');
   const names = ordinalNames(project, prefix, root.scope), o: LayeredOptions = { rootSel: root.sel, names, pretty: true, comments: out.comments };
   const visible = project.layers.filter(l => l.visible);
   const defs = effectDefs(project, names);
   const anyAnim = visible.some(l => l.anim.enabled && l.anim.tracks.length);
-  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${l.text ? `<span class="g-text">${htmlEscape(l.text.content)}</span>` : l.type === 'mesh' ? [...l.mesh.points].map((point, index) => ({ point, index })).reverse().map(({ index }) => `<i class="mesh-point-${index}"></i>`).join('') : ''}</i>`);
+  const rows = [...visible].reverse().map(l => `  <i class="${prefix} ${names.cls(l)}">${layerInnerHtml(l, project)}</i>`);
   const html = `<div ${root.attr} aria-hidden="true">\n${rows.join('\n')}${defs ? `\n  <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n</div>`;
   const percentHeightHost = out.includeSize && !out.responsive && out.height.unit === '%'
     ? 'html, body { height: 100%; margin: 0; }'
     : '';
   const css = [percentHeightHost, rootCss(project, o), ...[...visible].reverse().map(l => layerCss(l, project, o)), ...(anyAnim ? [`${out.comments ? '/* Respect reduced-motion preferences */\n' : ''}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : [])].filter(Boolean).join('\n\n');
-  return { html, css, all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>` };
+  const script = meshFieldScript(project);
+  return { html, css, script, all: `${html}\n\n<style>\n${css.split('\n').map(x => (x ? `  ${x}` : x)).join('\n')}\n</style>${script ? `\n\n<script>\n${script}\n</script>` : ''}` };
 }
 
 /* ───────────────────────── flat output ───────────────────────── */
@@ -427,6 +441,7 @@ function flatten(layer: GradientLayer, warnings: string[], flatTexture: boolean)
   if (l.mask.enabled) warnings.push(`${name}: custom layer shape needs layered output`);
   if (activeEffects(l.effects).length) warnings.push(`${name}: effects (blur/filters) need layered output`);
   if (l.text) warnings.push(`${name}: text needs layered output`);
+  if (usesMeshField(l)) warnings.push(`${name}: the smooth mesh field is a baked image here; layered output also repaints it live and keeps the warp animation`);
   if (l.texture.enabled && !flatTexture) warnings.push(`${name}: texture overlay needs layered output`);
   if (l.anim.enabled && l.anim.tracks.length) warnings.push(`${name}: animation needs layered output`);
   if (t.skewX || t.skewY) warnings.push(`${name}: skew needs layered output`);

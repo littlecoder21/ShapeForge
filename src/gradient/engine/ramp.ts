@@ -1,6 +1,7 @@
 import { clamp01, hexToHsl, hslToHex, hexToRgb, mixColors, rgbToHex, toRgba, type RGBA } from './color';
-import { sortedStops, type ColorStop, type GradientLayer } from './model';
+import { sortedStops, type ColorStop, type GradientLayer, type RampShaping } from './model';
 import { activeEffects } from './effects';
+import { distributionWarp, edgeFade, falloff as lightFalloff, seamWeight, shapeTransition, type EasingName } from './transitions';
 
 /* Colour ramp evaluation with CSS semantics (hard stops, colour hints, curves, interpolation space).
  * SVG and canvas have no equivalent of hints / custom curves / oklab, so they sample this ramp. */
@@ -48,30 +49,25 @@ export const CURVE_PRESETS = {
   ease: { x1: 0.25, y1: 0.1, x2: 0.25, y2: 1 },
 } as const;
 
-export type CurvePreset = keyof typeof CURVE_PRESETS | 'custom' | 'midpoint';
+export type CurvePreset = keyof typeof CURVE_PRESETS | 'custom' | 'midpoint' | EasingName;
 
-const bezier = (t: number, p1: number, p2: number) => 3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t ** 2 * p2 + t ** 3;
-
-/** Evaluate a CSS cubic-bezier curve by solving its x coordinate for the input progress. */
+/** Progress 0…1 from one stop to the next after its transition shape: a custom cubic-bezier (which wins over everything, as it always
+ *  has), or a named easing, then the midpoint bias. Every renderer — CSS sampling, SVG, canvas, the WebGL palette LUT — calls this. */
 export function curveProgress(stop: ColorStop, progress: number): number {
   const t = Math.max(0, Math.min(1, progress));
-  if (!stop.curve) {
-    if (stop.mid === undefined || Math.abs(stop.mid - 50) < 0.5) return t;
-    const midpoint = Math.min(0.995, Math.max(0.005, stop.mid / 100));
-    return t ** (Math.log(0.5) / Math.log(midpoint));
-  }
-  const { x1, y1, x2, y2 } = stop.curve;
-  let low = 0, high = 1;
-  for (let i = 0; i < 18; i++) {
-    const at = (low + high) / 2;
-    if (bezier(at, x1, x2) < t) low = at;
-    else high = at;
-  }
-  return bezier((low + high) / 2, y1, y2);
+  if (stop.curve) return shapeTransition(t, { bezier: stop.curve });
+  const mid = stop.mid !== undefined && Math.abs(stop.mid - 50) >= 0.5 ? Math.min(0.995, Math.max(0.005, stop.mid / 100)) : undefined;
+  return shapeTransition(t, { easing: stop.ease, mid });
 }
 
+/** True when the transition out of this stop is anything other than a straight, unbiased mix. */
+export const isShapedTransition = (stop: ColorStop) => !!stop.curve || (!!stop.ease && stop.ease !== 'linear');
+
 export function curvePreset(stop: ColorStop): CurvePreset {
-  if (!stop.curve) return stop.mid !== undefined && Math.abs(stop.mid - 50) >= 0.5 ? 'midpoint' : 'linear';
+  if (!stop.curve) {
+    if (stop.ease && stop.ease !== 'linear') return stop.ease;
+    return stop.mid !== undefined && Math.abs(stop.mid - 50) >= 0.5 ? 'midpoint' : 'linear';
+  }
   for (const [name, curve] of Object.entries(CURVE_PRESETS)) {
     if (Object.keys(curve).every(key => Math.abs(curve[key as keyof typeof curve] - stop.curve![key as keyof typeof stop.curve]) < 0.005)) return name as CurvePreset;
   }
@@ -88,6 +84,20 @@ export function colorAtPos(layer: GradientLayer, pos: number): RGBA {
   if (a.hard) return stopRgba(a);
   const t = curveProgress(a, (pos - a.pos) / Math.max(1e-9, b.pos - a.pos));
   return mixColors(stopRgba(a), stopRgba(b), t, layer.space);
+}
+
+/** The colour a renderer should paint at `pos`: the raw ramp, or — when stop effects or ramp shaping apply — the baked ramp. SVG conic
+ *  wedges and curve bands read this so they agree with the CSS, canvas and WebGL output. (`colorAtPos` stays the raw ramp for editing.) */
+export function shapedColorAt(layer: GradientLayer, pos: number): RGBA {
+  const ramp = smoothedRamp(layer);
+  if (!ramp) return colorAtPos(layer, pos);
+  if (pos <= ramp[0].pos) return ramp[0].color;
+  const last = ramp[ramp.length - 1];
+  if (pos >= last.pos) return last.color;
+  let lo = 0, hi = ramp.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (ramp[mid].pos <= pos) lo = mid; else hi = mid; }
+  const a = ramp[lo], b = ramp[hi];
+  return mixColors(a.color, b.color, (pos - a.pos) / Math.max(1e-9, b.pos - a.pos), 'srgb');
 }
 
 /* ═══════════════════════════ Stop smoothing ═══════════════════════════
@@ -133,17 +143,35 @@ function sampler(layer: GradientLayer) {
   };
 }
 
+/** The ramp shaping that applies to this kind of gradient. A leftover value that does not fit (a conic seam on a radial gradient)
+ *  is inert, so switching a layer's type never leaves a hidden effect behind. */
+export function activeShaping(layer: Pick<GradientLayer, 'type' | 'shaping'>): RampShaping | null {
+  const s = layer.shaping;
+  if (!s) return null;
+  const out: RampShaping = {};
+  if (s.distribution) out.distribution = s.distribution;
+  if (s.edge && layer.type !== 'conic') out.edge = s.edge;
+  if (s.falloff && s.falloff !== 'none' && layer.type === 'radial') { out.falloff = s.falloff; out.falloffStrength = s.falloffStrength ?? 50; }
+  if (s.seam && layer.type === 'conic') out.seam = s.seam;
+  return Object.keys(out).length ? out : null;
+}
+
 function bakeSmoothedRamp(layer: GradientLayer): RampSample[] | null {
-  const reaches = stopReaches(layer.stops);
-  if (!reaches.length) return null;
+  const reaches = stopReaches(layer.stops), shaping = activeShaping(layer);
+  if (!reaches.length && !shaping) return null;
   const st = sortedStops(layer.stops), lo = st[0].pos, hi = st[st.length - 1].pos, span = hi - lo;
   if (span < 1e-6) return null;
   const base = sampler(layer), spatial = reaches.filter(r => r.kind !== 'bleed');
-  // Sample density follows the narrowest radius so a tight blur is not under-sampled (≈ 80–120 stops at most).
-  const step = Math.max(span / 120, Math.min(span / 80, Math.min(...reaches.map(r => r.radius)) / 4));
+  // Sample density follows the narrowest radius so a tight blur is not under-sampled (≈ 80–120 stops at most; shaped ramps use ≥ 128
+  // samples so a long soft falloff never shows steps).
+  const narrow = reaches.length ? Math.min(...reaches.map(r => r.radius)) : Infinity;
+  const step = shaping
+    ? Math.max(span / 192, Math.min(span / 128, narrow / 4))
+    : Math.max(span / 120, Math.min(span / 80, narrow / 4));
   const sigmaAt = (p: number) => spatial.reduce((sigma, r) => Math.max(sigma, r.radius * (r.kind === 'blur' ? 0.4 : 0.3) * falloff(p - r.pos, r.radius)), 0);
 
-  const at = (p: number): RGBA => {
+  // the stop-effect smoothing (blur / bleed / glow), evaluated at a ramp position
+  const smoothAt = (p: number): RGBA => {
     const sigma = sigmaAt(p);
     let c: RGBA;
     if (sigma < 0.02) c = base(Math.min(hi, Math.max(lo, p)));
@@ -165,6 +193,20 @@ function bakeSmoothedRamp(layer: GradientLayer): RampSample[] | null {
     return c;
   };
 
+  const seamWidth = (shaping?.seam ?? 0) / 100;
+  const startColor = seamWidth > 0 ? smoothAt(lo) : null;
+  const at = (p: number): RGBA => {
+    if (!shaping) return smoothAt(p);
+    const u = (p - lo) / span;
+    let c = smoothAt(lo + span * distributionWarp(u, shaping.distribution ?? 0));
+    if (startColor) {
+      const w = seamWeight(u, seamWidth);
+      if (w > 0) c = mixColors(c, startColor, w, layer.space);
+    }
+    const factor = edgeFade(u, ((shaping.edge ?? 0) / 100) * 0.7) * (shaping.falloff ? lightFalloff(shaping.falloff, u, (shaping.falloffStrength ?? 50) / 100) : 1);
+    return factor < 1 ? { ...c, a: c.a * factor } : c;
+  };
+
   const round = (v: number) => Math.round(v * 1e4) / 1e4;
   const positions = new Set<number>([round(hi)]);
   for (let p = lo; p < hi - 1e-9; p += step) positions.add(round(p));
@@ -172,19 +214,20 @@ function bakeSmoothedRamp(layer: GradientLayer): RampSample[] | null {
     positions.add(round(s.pos));
     const next = st[i + 1];
     // a hard edge that no blur touches stays a hard edge: sample just before it so the colour does not ramp across the gap
-    if (s.hard && next && next.pos - s.pos > 1e-3 && sigmaAt(next.pos) < 0.02) positions.add(round(next.pos - 1e-4));
+    if (s.hard && next && next.pos - s.pos > 1e-3 && sigmaAt(next.pos) < 0.02 && !shaping?.distribution) positions.add(round(next.pos - 1e-4));
   });
   return [...positions].sort((a, b) => a - b).map(pos => ({ pos, color: at(pos) }));
 }
 
-const smoothCache = new WeakMap<ColorStop[], { space: string; ramp: RampSample[] | null }>();
+const smoothCache = new WeakMap<ColorStop[], { key: string; ramp: RampSample[] | null }>();
 
-/** The baked, smoothed ramp — or null when no stop carries a smoothing effect (the ramp is then used exactly as it is). */
+/** The baked ramp — stop smoothing effects and ramp shaping applied — or null when there are none (the ramp is then used exactly as it is). */
 export function smoothedRamp(layer: GradientLayer): RampSample[] | null {
+  const key = `${layer.space}|${layer.type}|${JSON.stringify(activeShaping(layer))}`;
   const hit = smoothCache.get(layer.stops);
-  if (hit && hit.space === layer.space) return hit.ramp;
+  if (hit && hit.key === key) return hit.ramp;
   const ramp = bakeSmoothedRamp(layer);
-  smoothCache.set(layer.stops, { space: layer.space, ramp });
+  smoothCache.set(layer.stops, { key, ramp });
   return ramp;
 }
 
@@ -205,7 +248,7 @@ export function rampStops(layer: GradientLayer): RampStop[] {
     out.push({ offset: off(s.pos), color: c });
     if (!nx) return;
     if (s.hard) { out.push({ offset: off(nx.pos), color: c }); return; }
-    const curved = !!s.curve;
+    const curved = isShapedTransition(s);
     if (curved || layer.space !== 'srgb' || Math.abs((s.mid ?? 50) - 50) > 0.5) {
       const steps = Math.max(3, Math.ceil(((nx.pos - s.pos) / span) * (curved ? 48 : 24)));
       for (let k = 1; k < steps; k++) { const p = s.pos + ((nx.pos - s.pos) * k) / steps; out.push({ offset: off(p), color: colorAtPos(layer, p) }); }

@@ -22,6 +22,7 @@ function samplePalette(stops: ShaderStop[], t: number, space: Space) {
     hard: from.hard,
     mid: from.mid,
     curve: from.curve,
+    ease: from.ease,
   }, progress);
   return mixColors(
     { ...hexToRgb(from.color), a: from.alpha ?? 1 },

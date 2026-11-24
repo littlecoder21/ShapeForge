@@ -43,6 +43,7 @@ function normalizePalette(stops: ShaderStop[]): ShaderStop[] {
       hard: stop.hard,
       mid: stop.mid,
       curve: stop.curve,
+      ease: stop.ease,
     }))
     .sort((a, b) => a.position - b.position);
   return valid.length ? valid : [

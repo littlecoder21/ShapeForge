@@ -1,6 +1,6 @@
 import { rgbaCss } from './color';
 import { linearLine, type Canvas, type Pt } from './geom';
-import { colorAtPos } from './ramp';
+import { shapedColorAt } from './ramp';
 import type { CurveData, GradientLayer } from './model';
 
 /** Places a new curve on the gradient's existing colour-flow axis instead of using a fixed default path. */
@@ -56,7 +56,7 @@ export function curveBands(curve: CurveData, canvas: Canvas, count = 256): Curve
 
 export function curveSvgDataUri(layer: GradientLayer, canvas: Canvas): string {
   const bands = curveBands(layer.curve, canvas);
-  const paths = bands.map(band => `<path d="${band.d}" fill="${rgbaCss(colorAtPos(layer, band.progress * 100))}"/>`).join('');
+  const paths = bands.map(band => `<path d="${band.d}" fill="${rgbaCss(shapedColorAt(layer, band.progress * 100))}"/>`).join('');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.w}" height="${canvas.h}" viewBox="0 0 ${canvas.w} ${canvas.h}">${paths}</svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
