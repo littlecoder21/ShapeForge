@@ -18,6 +18,20 @@ export default function EffectsPanel({ layerId }: { layerId: string }) {
       <button type="button" className="chip" onClick={() => store.updateLayer(layerId, l => ({ ...l, blend: 'screen', effects: [newEffect('blur', { radius: 48 }), ...l.effects.filter(e => e.type !== 'blur')] }))} data-testid="fx-soft-glow">Soft glow</button>
       <button type="button" className="chip" onClick={() => store.updateLayer(layerId, l => ({ ...l, opacity: Math.min(l.opacity, 0.65), effects: [newEffect('blur', { radius: 90 }), ...l.effects.filter(e => e.type !== 'blur')] }))}>Haze</button>
       <button type="button" className="chip" onClick={() => store.updateLayer(layerId, l => ({ ...l, effects: [...l.effects, newEffect('saturate', { amount: 150 }), newEffect('contrast', { amount: 115 })] }))}>Vivid</button>
+      <button
+        type="button"
+        className="chip"
+        title="Bends the gradient into a softly lit, iridescent wave surface. SVG/CSS keeps the effect; PNG does not."
+        onClick={() => store.updateLayer(layerId, l => ({
+          ...l,
+          effects: [
+            ...l.effects.filter(effect => effect.type !== 'displacement' && effect.type !== 'iridescence'),
+            newEffect('displacement', { scale: 34, frequency: 14, seed: 41 }),
+            newEffect('iridescence', { hue: 0, intensity: 34, angle: 35, sheen: 72 }),
+          ],
+        }))}
+        data-testid="fx-wave-depth"
+      >Wave depth</button>
     </div>
     {!layer.effects.length && <Empty>No effects yet. Add Blur for glows, colour filters to grade a layer, or Distortion to bend its edges.</Empty>}
     {layer.effects.map(e => {
