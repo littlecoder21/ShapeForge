@@ -400,10 +400,16 @@ describe('presets and profiles', () => {
       expect(normalizeMotion(config, report)).toEqual(config);
       expect(report.warnings).toEqual([]);
     }
-    expect(FLOW_PRESETS.length).toBe(14);
+    expect(FLOW_PRESETS.length).toBe(30);
     expect(MOTION_PROFILES.length).toBe(13);
     expect(INTERACTION_PRESETS.length).toBe(10);
     for (const preset of FLOW_PRESETS) expect(isMotionActive(preset.apply(base))).toBe(true);
+  });
+
+  it('gives every flow scene a unique id and a distinct starting field', () => {
+    const configs = FLOW_PRESETS.map(preset => preset.apply(defaultMotion()));
+    expect(new Set(FLOW_PRESETS.map(preset => preset.id)).size).toBe(30);
+    expect(new Set(configs.map(config => JSON.stringify(config))).size).toBe(30);
   });
 
   it('a motion profile keeps the sources; a flow preset replaces them', () => {

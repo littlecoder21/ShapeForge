@@ -80,6 +80,151 @@ export const FLOW_PRESETS: Preset[] = [
     d.turbulence = { ...d.turbulence, enabled: true, kind: 'warped', strength: 0.3, speed: 1 };
     d.global = { ...d.global, speed: 1.4 };
   }) },
+  { id: 'jetstream', label: 'Jetstream', description: 'A fast, broad upper-air current with a softly bending lower layer.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [src('directional', { angle: 8, strength: 0.55, params: [0.18, 0.12, 0.1, 0] }, t), src('curved', { x: 0.5, y: 0.72, angle: -8, strength: 0.28, radius: 0.8, params: [-0.8, 0.08, 0.12, 0.2] }, t)];
+    d.global = { ...d.global, speed: 1.25 };
+  }) },
+  { id: 'braided-current', label: 'Braided current', description: 'Three offset curved streams weave together into a layered flow.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('curved', { x: 0.22, y: 0.5, angle: 12, strength: 0.42, radius: 0.9, params: [1.8, 0.16, 0.18, 0.28] }, t),
+      src('curved', { x: 0.5, y: 0.5, angle: 0, strength: 0.34, radius: 0.9, params: [-1.6, 0.12, 0.22, 0.35] }, t),
+      src('curved', { x: 0.78, y: 0.5, angle: -12, strength: 0.42, radius: 0.9, params: [1.8, 0.16, 0.18, 0.28] }, t),
+    ];
+  }) },
+  { id: 'tidal-estuary', label: 'Tidal estuary', description: 'Alternating inward and outward tides meet under a slow diagonal swell.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('radial', { x: 0.28, y: 0.52, strength: 0.62, radius: 0.72, params: [0.12, 0.32, 0.12, 1] }, t),
+      src('radial', { x: 0.72, y: 0.48, strength: 0.62, radius: 0.72, params: [0.12, 0.32, 0.12, -1] }, t),
+      src('wave', { angle: 15, strength: 0.2, params: [1.5, 2, 0.12, 0.08] }, t),
+    ];
+    d.composition = { ...d.composition, mode: 'soft', balance: 0.58 };
+  }) },
+  { id: 'pinwheel-array', label: 'Pinwheel array', description: 'Three expanding spiral arms rotate around separate, offset centers.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('spiral', { x: 0.26, y: 0.34, strength: 0.58, radius: 0.58, params: [0.72, 0.04, 0.42, 1] }, t),
+      src('spiral', { x: 0.72, y: 0.4, strength: 0.58, radius: 0.58, params: [0.72, 0.04, 0.42, -1] }, t),
+      src('spiral', { x: 0.5, y: 0.78, strength: 0.5, radius: 0.56, params: [0.58, 0.08, 0.34, 1] }, t),
+    ];
+  }) },
+  { id: 'vortex-lattice', label: 'Vortex lattice', description: 'Four counter-rotating cells create a balanced, repeating eddy field.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('vortex', { x: 0.3, y: 0.32, strength: 0.62, radius: 0.48, params: [0.16, 0.08, 0.12, 1] }, t),
+      src('vortex', { x: 0.7, y: 0.32, strength: 0.62, radius: 0.48, params: [0.16, -0.08, -0.12, -1] }, t),
+      src('vortex', { x: 0.3, y: 0.7, strength: 0.62, radius: 0.48, params: [0.16, -0.08, 0.12, -1] }, t),
+      src('vortex', { x: 0.7, y: 0.7, strength: 0.62, radius: 0.48, params: [0.16, 0.08, -0.12, 1] }, t),
+    ];
+  }) },
+  { id: 'wave-interference', label: 'Wave interference', description: 'Circular and diagonal wave trains overlap to form a moving interference field.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('wave', { angle: 25, strength: 0.4, params: [2.4, 6, 0.62, 0.12] }, t),
+      src('wave', { x: 0.5, y: 0.5, angle: -35, strength: 0.32, params: [3.2, 3, 0.34, 0.08] }, t),
+    ];
+    d.composition = { ...d.composition, mode: 'average', cycle: 14 };
+  }) },
+  { id: 'rain-curtain', label: 'Rain curtain', description: 'Fine vertical traveling bands break into a gently turbulent downpour.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('wave', { angle: 90, strength: 0.46, params: [5.2, 1, 0.18, 0.18] }, t),
+      src('noise', { strength: 0.2, scale: 2.8, params: [4, 0.62, 0.22, 1], blend: 'screen' }, t),
+    ];
+    d.turbulence = { ...d.turbulence, enabled: true, kind: 'directional', angle: 90, strength: 0.12, scale: 2.4, speed: 0.7 };
+  }) },
+  { id: 'ridgeline-drift', label: 'Ridgeline drift', description: 'Crisp ridged noise rides over smooth curl for a terrain-like current.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('noise', { strength: 0.42, scale: 0.8, params: [5, 0.56, 0.34, 2] }, t),
+      src('curl', { strength: 0.4, scale: 2.1, params: [2, 0.76, 0.14, 0] }, t),
+    ];
+    d.organic = { ...d.organic, enabled: true, intensity: 0.22, scale: 0.7, speed: 0.28 };
+  }) },
+  { id: 'thermal-plumes', label: 'Thermal plumes', description: 'Three rising currents pulse at different rates like warm air over sunlit ground.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('radial', { x: 0.22, y: 0.78, angle: -90, strength: 0.58, radius: 0.52, params: [0.22, 0.2, 0.12, 1] }, t),
+      src('radial', { x: 0.5, y: 0.82, angle: -90, strength: 0.68, radius: 0.58, params: [0.15, 0.34, 0.1, 1] }, t),
+      src('radial', { x: 0.78, y: 0.76, angle: -90, strength: 0.52, radius: 0.5, params: [0.28, 0.18, 0.12, 1] }, t),
+    ];
+    d.global = { ...d.global, speed: 0.72 };
+  }) },
+  { id: 'magnetic-switchyard', label: 'Magnetic switchyard', description: 'Offset attracting and repelling poles split and redirect nearby streams.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('magnetic', { x: 0.24, y: 0.5, strength: 0.72, radius: 0.62, params: [0.62, 1, 0.16, 1.8] }, t),
+      src('magnetic', { x: 0.52, y: 0.34, strength: 0.64, radius: 0.58, params: [-0.35, -1, 0.14, 1.4] }, t),
+      src('magnetic', { x: 0.76, y: 0.58, strength: 0.72, radius: 0.62, params: [0.62, 1, 0.16, 1.8] }, t),
+    ];
+    d.composition = { ...d.composition, mode: 'priority' };
+  }) },
+  { id: 's-curve-express', label: 'S-curve express', description: 'A smooth open channel pulls the field along an S-shaped route.', apply: base => make(base, d => {
+    const path = newPath({ name: 'S-curve', kind: 'bezier', points: [
+      { x: 0.08, y: 0.76, ix: 0, iy: 0, ox: 0.18, oy: -0.04 },
+      { x: 0.38, y: 0.26, ix: -0.16, iy: 0.06, ox: 0.16, oy: 0.06 },
+      { x: 0.66, y: 0.74, ix: -0.16, iy: -0.06, ox: 0.16, oy: -0.06 },
+      { x: 0.92, y: 0.3, ix: -0.16, iy: 0.04, ox: 0, oy: 0 },
+    ] });
+    d.enabled = true; d.paths = [path]; d.sources = [newFlowSource('path', { strength: 0.78, radius: 0.38, params: [0, 0.82, 1, 0.12] })];
+  }) },
+  { id: 'figure-eight-current', label: 'Figure-eight current', description: 'A closed lemniscate carries flow through two linked, continuous loops.', apply: base => make(base, d => {
+    const path = newPath({ name: 'Lemniscate', closed: true, kind: 'catmull', points: [
+      { x: 0.16, y: 0.5, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.3, y: 0.28, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.5, y: 0.5, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.7, y: 0.72, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.84, y: 0.5, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.7, y: 0.28, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.5, y: 0.5, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.3, y: 0.72, ix: 0, iy: 0, ox: 0, oy: 0 },
+    ] });
+    d.enabled = true; d.paths = [path]; d.sources = [newFlowSource('path', { strength: 0.68, radius: 0.34, params: [0, 0.48, 1, 0.08] })];
+  }) },
+  { id: 'twin-track', label: 'Twin track', description: 'Two parallel routes carry opposing currents for a clean, reusable conveyor flow.', apply: base => make(base, d => {
+    const first = newPath({ name: 'Upper track', kind: 'polyline', points: [
+      { x: 0.08, y: 0.34, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.36, y: 0.34, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.64, y: 0.34, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.92, y: 0.34, ix: 0, iy: 0, ox: 0, oy: 0 },
+    ] });
+    const second = newPath({ name: 'Lower track', kind: 'polyline', points: [
+      { x: 0.08, y: 0.68, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.36, y: 0.68, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.64, y: 0.68, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.92, y: 0.68, ix: 0, iy: 0, ox: 0, oy: 0 },
+    ] }, [first.id]);
+    const t: string[] = [];
+    d.enabled = true; d.paths = [first, second]; d.sources = [
+      src('path', { name: 'Upper lane', strength: 0.7, radius: 0.28, params: [0, 0.2, 1, 0] }, t),
+      src('path', { name: 'Lower lane', strength: 0.7, radius: 0.28, params: [1, 0.2, -1, 0] }, t),
+    ];
+  }) },
+  { id: 'orbiting-beacon', label: 'Orbiting beacon', description: 'A moving vortex travels a rounded route, leaving an evolving orbital current.', apply: base => make(base, d => {
+    const path = newPath({ name: 'Beacon orbit', closed: true, kind: 'catmull', points: [
+      { x: 0.5, y: 0.18, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.76, y: 0.3, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.82, y: 0.56, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.64, y: 0.78, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.36, y: 0.78, ix: 0, iy: 0, ox: 0, oy: 0 }, { x: 0.18, y: 0.56, ix: 0, iy: 0, ox: 0, oy: 0 },
+      { x: 0.24, y: 0.3, ix: 0, iy: 0, ox: 0, oy: 0 },
+    ] });
+    d.enabled = true; d.paths = [path]; d.sources = [newFlowSource('vortex', {
+      x: 0.5, y: 0.18, strength: 0.68, radius: 0.52, params: [0.18, 0.08, 0.18, 1],
+      follow: { enabled: true, pathId: path.id, speed: 0.075, acceleration: 0, offset: 0, mode: 'loop', orient: 'tangent' },
+    })];
+    d.global = { ...d.global, speed: 0.8 };
+  }) },
+  { id: 'boundary-shear', label: 'Boundary shear', description: 'Two localized counterflows slide past each other to form a stable shear boundary.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('directional', { x: 0.5, y: 0.28, angle: 0, strength: 0.68, radius: 0.58, global: false, params: [0.05, 0, 0.05, 0] }, t),
+      src('directional', { x: 0.5, y: 0.72, angle: 180, strength: 0.68, radius: 0.58, global: false, params: [-0.05, 0, 0.05, 0], blend: 'difference' }, t),
+    ];
+    d.composition = { ...d.composition, mode: 'dominant', smoothing: 0.78 };
+  }) },
+  { id: 'monsoon-front', label: 'Monsoon front', description: 'A broad humid current folds around a moving low-pressure core with restrained turbulence.', apply: base => make(base, d => {
+    const t: string[] = [];
+    d.enabled = true; d.sources = [
+      src('curved', { angle: 18, strength: 0.42, radius: 1.35, params: [1.25, 0.18, 0.26, 0.62] }, t),
+      src('vortex', { x: 0.72, y: 0.43, strength: 0.62, radius: 0.68, params: [0.24, -0.18, 0.24, 1] }, t),
+      src('curl', { strength: 0.22, scale: 1.7, params: [2, 0.68, 0.18, 0] }, t),
+    ];
+    d.turbulence = { ...d.turbulence, enabled: true, kind: 'multiscale', strength: 0.18, detail: 4, warp: 0.34, speed: 0.55 };
+    d.organic = { ...d.organic, enabled: true, intensity: 0.32, variation: 0.48, speed: 0.42 };
+  }) },
 ];
 
 /* ───────────── motion profiles (character) ───────────── */
