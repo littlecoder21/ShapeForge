@@ -11,6 +11,8 @@ import { UNIFORM_NAMES } from '../uniforms';
 import { assembleProceduralShader } from '../../procedural/glsl';
 import { createProceduralState, uploadProceduralUniforms, type ProceduralState } from '../../procedural/proceduralRuntime';
 import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../../procedural/types';
+import { injectMotionGlsl, isMotionActive, motionSignature } from '../../motion/glsl';
+import { createMotionState, effectiveMotionQuality, qualityDualPhase, qualityOctaves, stepMotion, uploadMotionUniforms, type MotionState } from '../../motion/motionRuntime';
 import { ruleTextureAtlasDataUri } from '../../gradient/interactive/rig/textureAtlas';
 import { bakeShapeAtlas, shapeAtlasKey, SHAPE_ATLAS_HEIGHT, SHAPE_ATLAS_WIDTH } from '../../gradient/interactive/rig/shapeField';
 import { getFrameScheduler } from './FrameScheduler';
@@ -139,6 +141,8 @@ interface PendingBuild {
   withRig: boolean;
   /** true when the procedural engine is compiled into this program */
   withProcedural: boolean;
+  /** true when the motion engine's GPU code is compiled into this program */
+  withMotion: boolean;
 }
 
 /* One shader layer.
@@ -208,6 +212,10 @@ export class InteractiveRenderer implements RenderClient {
   /** the procedural simulation only advances when something can have changed */
   private proceduralDirty = true;
   private lastOctaveCap = -1;
+  /** the motion engine's per-frame state (time, physics, modulators, pointer echoes); created when the engine is first on */
+  private motionState: MotionState | null = null;
+  /** true while the program in use has the motion engine's GPU code compiled in */
+  private motionBuilt = false;
   /** settings-derived uniforms are uploaded only when they changed (or another layer used the shared program since) */
   private staticDirty = true;
   private resizeObserver: ResizeObserver | null = null;
@@ -574,10 +582,12 @@ export class InteractiveRenderer implements RenderClient {
   }
 
   /** What the shader is built from: interaction rules, quality, and which procedural distortion types exist. */
-  private desiredKey(withRig: boolean, withProcedural = withRig) {
+  private desiredKey(withRig: boolean, withProcedural = withRig, withMotion = withRig) {
     const { octaves, warpDepth } = QUALITY_PRESETS[this.settings.quality];
     const procedural = withProcedural ? proceduralSignature(this.procedural) : 'off';
-    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${warpDepth}#${procedural}`;
+    // appended only when the motion engine has GPU code, so projects without it keep the keys (and shared programs) they always had
+    const motion = withMotion ? motionSignature(this.settings.motion) : 'off';
+    return `${withRig ? rigSignature(this.settings.rig) : 'base'}#${octaves}#${warpDepth}#${procedural}${motion === 'off' ? '' : `#${motion}`}`;
   }
 
   /** Starts a new compile when the structure of the interaction (or the quality) changed. */
@@ -593,20 +603,21 @@ export class InteractiveRenderer implements RenderClient {
     this.beginBuild(true);
   }
 
-  private beginBuild(withRig: boolean, withProcedural = withRig) {
+  private beginBuild(withRig: boolean, withProcedural = withRig, withMotion = withRig) {
     this.discardPending();
     const rig: InteractionRig | null = withRig ? this.settings.rig : null;
     const procedural = withProcedural && isProceduralActive(this.procedural) ? this.procedural : null;
     const { octaves, warpDepth } = QUALITY_PRESETS[this.settings.quality];
     const webgl2 = this.hub.gpu.webgl2;
-    const key = this.desiredKey(withRig, withProcedural);
+    const motion = withMotion && isMotionActive(this.settings.motion) ? this.settings.motion : null;
+    const key = this.desiredKey(withRig, withProcedural, withMotion);
     // layers whose key matches share this program: it is compiled (and its source assembled) once
     const entry = this.hub.programs.acquire(`${webgl2 ? 'gl2' : 'gl1'}|${key}`, () => ({
       vertex: shaderSource(vertexShaderSource, 'vertex', webgl2),
-      fragment: shaderSource(assembleProceduralShader(fragmentShaderTemplate, rig, { octaves, warpDepth }, procedural), 'fragment', webgl2),
+      fragment: shaderSource(assembleProceduralShader(injectMotionGlsl(fragmentShaderTemplate, motion), rig, { octaves, warpDepth }, procedural), 'fragment', webgl2),
     }), UNIFORM_NAMES);
     if (!entry) throw new Error('Could not allocate the WebGL shader program.');
-    this.pending = { entry, key, withRig, withProcedural: procedural !== null };
+    this.pending = { entry, key, withRig, withProcedural: procedural !== null, withMotion: motion !== null };
   }
 
   private discardPending() {
@@ -625,6 +636,13 @@ export class InteractiveRenderer implements RenderClient {
       const detail = pending.entry.error;
       this.discardPending();
       this.failedKeys.add(pending.key);
+      if (pending.withMotion) {
+        // Fallback ladder, step 0: keep everything else, drop only the motion engine's GPU code (its CPU side keeps driving
+        // the legacy sliders such as zoom and rotation).
+        this.beginBuild(true, pending.withProcedural, false);
+        this.message = `The motion engine could not compile on this device${detail ? `: ${detail}` : '.'} Showing the shader without flow motion.`;
+        return true;
+      }
       if (pending.withProcedural) {
         // Fallback ladder, step 1: keep the interaction rig, drop only the procedural engine.
         this.beginBuild(true, false);
@@ -644,13 +662,14 @@ export class InteractiveRenderer implements RenderClient {
     this.entry = pending.entry;
     this.builtKey = pending.key;
     this.proceduralBuilt = pending.withProcedural;
+    this.motionBuilt = pending.withMotion;
     this.pending = null;
     this.suppressRigWhileBuilding = false;
     this.hub.programs.release(previous);
     this.hub.programs.locate(pending.entry);
     this.proceduralDirty = true;
     this.staticDirty = true;
-    const message = this.failedKeys.size && (!pending.withRig || (!pending.withProcedural && isProceduralActive(this.procedural))) ? this.message : this.paletteNotice();
+    const message = this.failedKeys.size && (!pending.withRig || (!pending.withProcedural && isProceduralActive(this.procedural)) || (!pending.withMotion && isMotionActive(this.settings.motion))) ? this.message : this.paletteNotice();
     this.setStatus('ready', message);
     return false;
   }
@@ -815,8 +834,9 @@ export class InteractiveRenderer implements RenderClient {
     const hovering = this.rigRuleCount() > 0 && pointer.active > 0.003;
     const proceduralSettling = this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isSettling();
     const proceduralAnimating = motionEnabled && this.proceduralBuilt && !!this.proceduralState && this.proceduralState.isAnimated();
-    this.animating = animated || idleMotion || ambient || proceduralAnimating;
-    return animated || idleMotion || ambient || hovering || proceduralSettling || proceduralAnimating || this.pointer.hasActivity() || this.pending !== null;
+    const motionActive = !!this.settings.motion?.enabled && !this.paused && !this.reducedMotion && !!this.motionState && this.motionState.animating;
+    this.animating = animated || idleMotion || ambient || proceduralAnimating || motionActive;
+    return animated || idleMotion || ambient || hovering || proceduralSettling || proceduralAnimating || motionActive || this.pointer.hasActivity() || this.pending !== null;
   }
 
   private rigRuleCount() {
@@ -936,6 +956,32 @@ export class InteractiveRenderer implements RenderClient {
       gl.uniform4fv(loc['uRuleK[0]'] ?? null, rig.k);
       gl.uniform4fv(loc['uTrail[0]'] ?? null, rig.trail);
       gl.uniform3f(loc.uTouch2 ?? null, pointer.t2x, pointer.t2y, reacts ? pointer.t2active : 0);
+    }
+    // motion engine: time, physics, modulators, paths, organic drift and the pointer's flow are advanced on the CPU; the shader only
+    // receives packed numbers. The same runtime (motionRuntime.js) steps the exported page, so preview and export cannot drift apart.
+    const motion = settings.motion;
+    if (motion?.enabled) {
+      const state = this.motionState ?? (this.motionState = createMotionState());
+      const frame = this.rigFrame;
+      Object.assign(frame, pointer);
+      if (idle) { frame.x = idle.x; frame.y = idle.y; frame.active = pointerActive; }
+      if (!reacts && !idlePointer) { frame.active = 0; frame.down = 0; frame.t2active = 0; }
+      const quality = effectiveMotionQuality(motion.performance.quality, this.hub.isCoarsePointer, motion.interaction.enabled);
+      // a device that is already shedding shader effort gives up the second cross-fade pass first (the shader skips it, no recompile)
+      const dual = qualityDualPhase(quality, settings.quality) && (quality !== 'auto' || this.hub.budget.effort < 2);
+      stepMotion(state, motion, frame, delta, {
+        aspect: width / Math.max(1, height), shaderDt: motionScale > 0 ? delta * settings.speed * motionScale : 0, animate: motionEnabled, timeScale: motionScale > 0 ? motionScale : 1,
+        projectQuality: settings.quality, octaveCap: Math.max(1, qualityOctaves(quality, settings.quality) - (quality === 'auto' ? this.hub.budget.effort : 0)), dual, clock: this.clock,
+      });
+      if (this.motionBuilt) uploadMotionUniforms(gl, loc, state);
+      // the legacy sliders the modulators can drive, and the engine's own clock (loop / ping-pong / reverse / freeze / offset)
+      const legacy = state.legacy;
+      set1f('uTime', settings.animate ? state.time : 0);
+      set1f('uDistortion', settings.distortion * legacy.distortion);
+      set1f('uZoom', settings.zoom * legacy.zoom);
+      set1f('uBreath', settings.breath * legacy.breath);
+      set1f('uFlowAngle', settings.flowAngle * Math.PI / 180 + legacy.rotation);
+      set1f('uTimeOffset', settings.timeOffset + legacy.timeOffset);
     }
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     // copy this layer's rectangle into its own canvas right away: the shared buffer is reused by the next layer

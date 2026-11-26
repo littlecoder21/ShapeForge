@@ -7,6 +7,7 @@ import { bakePaletteLut, encodePaletteLut } from '../gradient/interactive/palett
 import { UNIFORM_NAMES } from './uniforms';
 import { resolveStyleParams, SHADER_STYLE_IDS, SHADER_STYLE_INDEX } from '../gradient/interactive/styles';
 import { assembleProceduralShader } from '../procedural/glsl';
+import { injectMotionGlsl } from '../motion/glsl';
 import { isProceduralActive, proceduralSignature, type ProceduralConfig } from '../procedural/types';
 import { resolveProceduralMesh, type MeshLike } from '../procedural/meshSource';
 import { ruleTextureAtlasDataUri } from '../gradient/interactive/rig/textureAtlas';
@@ -15,6 +16,7 @@ import fragmentShaderTemplate from '../gradient/interactive/shaders/gradient.fra
 import vertexShaderSource from '../gradient/interactive/shaders/gradient.vert.glsl?raw';
 import rigRuntimeSource from '../gradient/interactive/rigRuntime.js?raw';
 import proceduralRuntimeSource from '../procedural/proceduralRuntime.js?raw';
+import motionRuntimeSource from '../motion/motionRuntime.js?raw';
 
 const escapeJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 const escapeAttributeValue = (value: unknown) => escapeJson(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -37,13 +39,18 @@ function proceduralRuntimeExpression() {
   return runtimeExpression(proceduralRuntimeSource);
 }
 
+/** The motion engine's runtime (time, physics, modulation, paths, pointer, uniform packing): the same file the editor preview runs. */
+function motionRuntimeExpression() {
+  return runtimeExpression(motionRuntimeSource);
+}
+
 /** The fragment shader for a project: the template plus exactly the interaction rules (and, when a layer uses it, the
- *  procedural distortion types) the project uses. */
+ *  procedural distortion types, and when the project turns it on, the motion engine's flow-field code) the project uses. */
 export function projectFragmentSource(
-  settings: Pick<InteractiveSettings, 'rig' | 'quality'>,
+  settings: Pick<InteractiveSettings, 'rig' | 'quality'> & Partial<Pick<InteractiveSettings, 'motion'>>,
   procedural: ProceduralConfig | null = null,
 ) {
-  return assembleProceduralShader(fragmentShaderTemplate, settings.rig, {
+  return assembleProceduralShader(injectMotionGlsl(fragmentShaderTemplate, settings.motion), settings.rig, {
     octaves: QUALITY_OCTAVES[settings.quality],
     warpDepth: settings.quality === 'low' ? 1 : 2,
   }, procedural);
@@ -57,6 +64,7 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
 (function (root) {
   const RigRuntime = ${rigRuntimeExpression()};
   const ProcRuntime = ${proceduralRuntimeExpression()};
+  const MotionRuntime = ${motionRuntimeExpression()};
   const vertexSource = ${escapeJson(vertexShaderSource)};
   const fragmentSources = ${escapeJson(sources)};
   const maxStops = 8, maxRipples = 8, maxRenderPixels = 1200000, maxRenderScale = 1.25;
@@ -119,7 +127,11 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
   const proceduralState = settings.procedural && settings.procedural.enabled
     ? ProcRuntime.createProceduralState(settings.procedural, { lut: paletteLut && paletteLut.length === 512 * 4 ? paletteLut : null, octaveCap: { low: 3, medium: 4, high: 5, ultra: 6 }[settings.quality] || 4 })
     : null;
+  // motion engine: the same runtime the editor uses, stepped once per frame; the shader (compiled with the engine's code) only receives numbers
+  const motionState = settings.motion && settings.motion.enabled ? MotionRuntime.createMotionState() : null;
+  const motionFrame = {};
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const coarsePointer = window.matchMedia('(pointer: coarse)').matches;
   const convertShader = (source, vertex) => {
     if (!isWebGL2) return source;
     if (vertex) return '#version 300 es\\n' + source.replace(/\\battribute\\b/g, 'in').replace(/\\bvarying\\b/g, 'out');
@@ -447,6 +459,26 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
       proceduralState.step(delta, procFrame, canvas.width / Math.max(1, canvas.height), animated ? 1 : 0);
       ProcRuntime.uploadProceduralUniforms(gl, locations, proceduralState.buffers);
     }
+    if (motionState) {
+      Object.assign(motionFrame, pointer);
+      if (idle) { motionFrame.x = idle.x; motionFrame.y = idle.y; motionFrame.active = pointerActive; }
+      if (!(reacts || idlePointer)) { motionFrame.active = 0; motionFrame.down = 0; motionFrame.t2active = 0; }
+      const configuredMotionQuality = settings.motion.performance ? settings.motion.performance.quality : 'auto';
+      const motionQuality = MotionRuntime.effectiveMotionQuality(configuredMotionQuality, coarsePointer, settings.motion.interaction.enabled);
+      MotionRuntime.stepMotion(motionState, settings.motion, motionFrame, delta, {
+        aspect: canvas.width / Math.max(1, canvas.height), shaderDt: animated ? delta * settings.speed : 0, animate: animated, timeScale: 1,
+        projectQuality: settings.quality, octaveCap: MotionRuntime.qualityOctaves(motionQuality, settings.quality),
+        dual: MotionRuntime.qualityDualPhase(motionQuality, settings.quality) && (motionQuality !== 'auto' || adaptiveScale > 0.6), clock: clock,
+      });
+      MotionRuntime.uploadMotionUniforms(gl, locations, motionState);
+      const legacy = motionState.legacy;
+      gl.uniform1f(locations.uTime, settings.animate ? motionState.time : 0);
+      gl.uniform1f(locations.uDistortion, settings.distortion * legacy.distortion);
+      gl.uniform1f(locations.uZoom, (settings.zoom == null ? 1 : settings.zoom) * legacy.zoom);
+      gl.uniform1f(locations.uBreath, (settings.breath || 0) * legacy.breath);
+      gl.uniform1f(locations.uFlowAngle, (settings.flowAngle || 0) * Math.PI / 180 + legacy.rotation);
+      gl.uniform1f(locations.uTimeOffset, (settings.timeOffset || 0) + legacy.timeOffset);
+    }
     if (activeRules.length) {
       Object.assign(rigFrame, pointer);
       rigFrame.clock = clock;
@@ -494,7 +526,7 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     }
     const pointer = draw(delta);
     const calm = reducedMotion.matches;
-    if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003) || (proceduralState && (proceduralState.isSettling() || (settings.animate && !calm && proceduralState.isAnimated())))) schedule();
+    if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003) || (proceduralState && (proceduralState.isSettling() || (settings.animate && !calm && proceduralState.isAnimated()))) || (motionState && !calm && motionState.animating)) schedule();
   };
   const position = event => {
     const rect = canvas.getBoundingClientRect();
@@ -771,6 +803,8 @@ export function interactiveGlslExport(project?: GradientProject) {
     '// uRuleB .. uRuleK hold the packed numbers of each rule (fade, texture motion, CSS FX …), uTrail the pointer trail, uTouch2 the second finger.',
     '// uRuleTextureAtlas (unit 2) holds the CSS textures of the rules, uRuleShapeAtlas (unit 3) the distance fields of custom shapes.',
     '// Motion: uTimeOffset, uFlowAngle, uFlowDrift, uBreath, uBreathRate, uRotation, uZoom, uMeshDrift, uMeshSpread, uMeshBlend.',
+    '// Motion engine (only when the project turns it on): uMotA..uMotF[] (flow sources), uMotCount, uMotG0..G2, uMotPhase, uMotPal, uMotQ, uMotO0..O2 (organic),',
+    '// uMotT0..T3 (turbulence), uMotI0/I1 + uMotPtrP/Q[] (pointer), uMotPath[] (paths). They are filled by motion/motionRuntime.js, which the exported page embeds.',
     '// uGradientKind (linear/radial/conic), uGradientAngle, uGradientOrigin, uGradientRadius, uInteractionColor, uStopCount,',
     '// uPalette[8], uPaletteAlpha[8], uMeshCount, uMeshPoints[8], uMeshColors[8], uMeshBase, and uRipples[8].',
     '// Finishing: uToneMap, uVignette, uSheen, uGrain; palette texture: uPaletteLut.',
@@ -842,6 +876,8 @@ export interface ShaderSettings {
   rig?: unknown;
   /** the layer's procedural gradient engine config, when it uses one */
   procedural?: unknown;
+  /** the motion engine's config (see the exported shaderRuntime); optional */
+  motion?: unknown;
   /** CSS textures of the interaction rules (an SVG data URI) */
   ruleAtlas?: string;
   /** distance fields of custom interaction shapes (rule index → base64) */

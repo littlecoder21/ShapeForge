@@ -5,12 +5,14 @@ import { instantiateRig, normalizeRig, type InteractionRig } from './rig/model';
 import { defaultRig, rigFromLegacyMode } from './rig/presets';
 import { normalizeProcedural, type ProceduralConfig } from '../../procedural/types';
 import { normalizeTrailFx, type TrailFxConfig } from './trailfx/model';
+import { normalizeMotion, type MotionConfig } from '../../motion/types';
 
 export type { InteractiveStyle } from './styles';
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type { PointerMode } from './pointerModes';
 export type { InteractionRig } from './rig/model';
 export type { TrailFxConfig } from './trailfx/model';
+export type { MotionConfig } from '../../motion/types';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 export type ShaderLayerColorBlend = 'mix' | 'multiply' | 'screen' | 'overlay' | 'add';
 export type IdlePath = 'drift' | 'circle' | 'figure8' | 'scan' | 'wander';
@@ -132,6 +134,9 @@ export interface InteractiveSettings {
   singleLayer?: boolean;
   /** Trail FX: the multi-pass pointer effect (see trailfx/model.ts). Additive and optional: absent = the project has none. */
   trailFx?: TrailFxConfig;
+  /** The motion engine (flow sources, physics, organic drift, turbulence, modulation, pointer flow; see motion/types.ts).
+   *  Additive and optional: absent = the project renders exactly as before. */
+  motion?: MotionConfig;
 }
 
 /** Values that belong to one layer rather than the whole project. */
@@ -294,6 +299,7 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
   const rig = normalizeRig(value.rig)
     ?? (value.pointerMode !== undefined ? rigFromLegacyMode(pointerMode) : instantiateRig(DEFAULT_INTERACTIVE_SETTINGS.rig));
   const trailFx = normalizeTrailFx(value.trailFx);
+  const motionConfig = normalizeMotion(value.motion);
   return {
     enabled: value.enabled === true,
     style: choice('style', SHADER_STYLE_IDS, DEFAULT_INTERACTIVE_SETTINGS.style),
@@ -364,5 +370,6 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     // written only when on, so projects that never used it serialise exactly as before
     ...(value.singleLayer === true ? { singleLayer: true } : {}),
     ...(trailFx ? { trailFx } : {}),
+    ...(motionConfig ? { motion: motionConfig } : {}),
   };
 }

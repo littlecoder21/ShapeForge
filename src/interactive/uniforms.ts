@@ -1,4 +1,5 @@
 import { PROCEDURAL_UNIFORM_NAMES } from '../procedural/types';
+import { MOTION_UNIFORM_NAMES } from '../motion/motionRuntime';
 
 /** Every uniform the fragment shader declares. `uOctaves`, `uWarpDepth` and the old `uPointerMode` are gone:
  *  quality is a compile-time constant now and the pointer reaction is generated from the interaction rig.
@@ -25,4 +26,6 @@ export const UNIFORM_NAMES = [
   'uRuleB[0]', 'uRuleC[0]', 'uRuleD[0]', 'uRuleE[0]', 'uRuleF[0]', 'uRuleG[0]', 'uRuleH[0]', 'uRuleI[0]', 'uRuleJ[0]', 'uRuleK[0]',
   'uRuleTextureAtlas', 'uRuleShapeAtlas', 'uTrail[0]', 'uTouch2',
   ...PROCEDURAL_UNIFORM_NAMES,
+  /* the motion engine's uniforms exist in the shader only while a project uses it (a missing location is null) */
+  ...MOTION_UNIFORM_NAMES,
 ] as const;

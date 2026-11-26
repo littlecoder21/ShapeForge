@@ -95,6 +95,7 @@ export class SharedRenderer {
 
   get available() { return this.gpu.available; }
   get clientCount() { return this.clients.size; }
+  get isCoarsePointer() { return this.coarse; }
 
   /* ───────────── layers ───────────── */
 

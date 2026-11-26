@@ -4,12 +4,14 @@ import { isInteractiveStyle, normalizeStyleParamsFor, SHADER_STYLE_IDS, type Int
 import { instantiateRig, normalizeRig, type InteractionRig } from '../gradient/interactive/rig/model';
 import { defaultRig, rigFromLegacyMode } from '../gradient/interactive/rig/presets';
 import { normalizeProcedural, type ProceduralConfig } from '../procedural/types';
+import { normalizeMotion, type MotionConfig } from '../motion/types';
 
 export type { InteractiveStyle } from '../gradient/interactive/styles';
 export type ShaderQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type { PointerMode } from '../gradient/interactive/pointerModes';
 export type { InteractionRig } from '../gradient/interactive/rig/model';
 export type { ProceduralConfig } from '../procedural/types';
+export type { MotionConfig } from '../motion/types';
 export type ShaderGradientGeometry = 'linear' | 'radial' | 'conic' | 'curve' | 'mesh' | 'noise';
 export type ShaderLayerColorBlend = 'mix' | 'multiply' | 'screen' | 'overlay' | 'add';
 export type IdlePath = 'drift' | 'circle' | 'figure8' | 'scan' | 'wander';
@@ -127,6 +129,8 @@ export interface InteractiveSettings {
   idleSize: number;
   paletteWrap: 'mirror' | 'repeat';
   renderBackend: 'css' | 'webgl' | 'overlay';
+  /** The motion engine (see motion/types.ts). Optional: absent = no engine, the shader is unchanged. */
+  motion?: MotionConfig;
 }
 
 /** Values that belong to one layer rather than the whole project. */
@@ -288,6 +292,7 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
   };
   const motion = (key: keyof typeof MOTION_RANGES) => finite(key, MOTION_RANGES[key].min, MOTION_RANGES[key].max);
   const pointerMode = normalizePointerMode(value.pointerMode);
+  const motionConfig = normalizeMotion(value.motion);
   const rig = normalizeRig(value.rig)
     ?? (value.pointerMode !== undefined ? rigFromLegacyMode(pointerMode) : instantiateRig(DEFAULT_INTERACTIVE_SETTINGS.rig));
   return {
@@ -357,5 +362,6 @@ export function normalizeInteractiveSettings(raw: unknown): InteractiveSettings 
     idleSize: finite('idleSize', 0.05, 0.48),
     paletteWrap: choice('paletteWrap', ['mirror', 'repeat'], DEFAULT_INTERACTIVE_SETTINGS.paletteWrap),
     renderBackend: choice('renderBackend', ['css', 'webgl', 'overlay'], DEFAULT_INTERACTIVE_SETTINGS.renderBackend),
+    ...(motionConfig ? { motion: motionConfig } : {}),
   };
 }

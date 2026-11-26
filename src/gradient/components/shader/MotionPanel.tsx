@@ -1,13 +1,15 @@
+import { useState } from 'react';
 import { Switch } from '../../../shared/controls';
 import { DEFAULT_INTERACTIVE_SETTINGS, IDLE_PATHS, MOTION_RANGES, type IdlePath, type ShaderLayerControls } from '../../interactive/types';
 import { Num, Section, Select } from './parts';
 import { useShader } from './context';
+import MotionEngine from './motion/MotionEngine';
 
 type MotionKey = keyof ShaderLayerControls;
 const IDLE_LABEL: Record<IdlePath, string> = { drift: 'Slow drift', circle: 'Circle', figure8: 'Figure eight', scan: 'Scan sweep', wander: 'Wander' };
 
-/** Advanced motion: playback, fluid distortion, flow direction & spin, breathing, time offset and the idle pointer. */
-export default function MotionPanel() {
+/** Basic motion: playback, fluid distortion, flow direction & spin, breathing, time offset and the idle pointer. */
+function BasicMotion() {
   const { settings, update, primary, targets, patchLayers } = useShader();
   const independent = !!primary?.shader?.controls;
   const values: ShaderLayerControls = primary?.shader?.controls ?? {
@@ -71,5 +73,18 @@ export default function MotionPanel() {
         <p className="hint">The interaction builder reacts to this virtual pointer, so your effects keep playing while nobody touches the canvas.</p>
       </>}
     </Section>
+  </div>;
+}
+
+/** The motion panel: the original quick controls ("Basic") and the motion engine ("Engine": flow sources, field editor, physics, pointer, modulation). */
+export default function MotionPanel() {
+  const { settings } = useShader();
+  const [mode, setMode] = useState<'basic' | 'engine'>('basic');
+  return <div data-testid="shader-panel-motion-root">
+    <div className="gs-chip-row gs-mot-mode" role="tablist" aria-label="Motion controls">
+      <button type="button" role="tab" aria-selected={mode === 'basic'} className={`chip ${mode === 'basic' ? 'active' : ''}`} onClick={() => setMode('basic')} data-testid="motion-mode-basic">Basic</button>
+      <button type="button" role="tab" aria-selected={mode === 'engine'} className={`chip ${mode === 'engine' ? 'active' : ''}`} onClick={() => setMode('engine')} data-testid="motion-mode-engine">Engine{settings.motion?.enabled ? ' · on' : ''}</button>
+    </div>
+    {mode === 'basic' ? <BasicMotion /> : <MotionEngine />}
   </div>;
 }
