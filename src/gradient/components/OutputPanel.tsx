@@ -23,6 +23,7 @@ import { useStore } from '../engine/store';
 import CodeBlock from './CodeBlock';
 import OutputSettingsForm from './OutputSettingsForm';
 import WebsiteExportPanel from './WebsiteExportPanel';
+import BackgroundExportPanel from './BackgroundExportPanel';
 import { useStudio } from './ui';
 
 type Fmt = 'css' | 'html' | 'interactive' | 'vars' | 'svg' | 'keyframes' | 'json';
@@ -49,7 +50,7 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
   const [recoveryWarnings, setRecoveryWarnings] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [system, setSystem] = useState<'custom' | 'website'>('custom');
+  const [system, setSystem] = useState<'custom' | 'website' | 'background'>('custom');
   const [includeTrailFx, setIncludeTrailFx] = useState(true);
   const configuredName = outputOf(project).downloadName.trim();
   const slug = (configuredName || project.name || 'gradient').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'gradient';
@@ -117,8 +118,9 @@ export default function OutputPanel({ fmt, setFmt }: { fmt: Fmt; setFmt: (f: Fmt
     <div className="gs-fmt" role="tablist" aria-label="Export system">
       <button type="button" role="tab" aria-selected={system === 'custom'} className={`ptab ${system === 'custom' ? 'active' : ''}`} onClick={() => setSystem('custom')} data-testid="export-system-custom">Custom</button>
       <button type="button" role="tab" aria-selected={system === 'website'} className={`ptab ${system === 'website' ? 'active' : ''}`} onClick={() => setSystem('website')} data-testid="export-system-website">Website integration</button>
+      <button type="button" role="tab" aria-selected={system === 'background'} className={`ptab ${system === 'background' ? 'active' : ''}`} onClick={() => setSystem('background')} data-testid="export-system-background">Section background</button>
     </div>
-    {system === 'website' ? <WebsiteExportPanel /> : <>
+    {system === 'website' ? <WebsiteExportPanel /> : system === 'background' ? <BackgroundExportPanel /> : <>
     {hasTrailFx && <Switch label="Include Trail FX from the project preview" checked={includeTrailFx} onChange={setIncludeTrailFx} testId="custom-include-trailfx" />}
     <div className="gs-copyrow" role="group" aria-label="Custom export downloads">
       <button type="button" className="btn primary" onClick={() => { void downloadCodeZip(); }} data-testid="custom-download-all"><Download />Download all files ZIP</button>

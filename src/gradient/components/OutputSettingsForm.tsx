@@ -7,7 +7,7 @@ const W_UNITS = ['%', 'px', 'vw', 'rem', 'em', 'auto'] as const;
 const H_UNITS = ['px', 'vh', '%', 'rem', 'em', 'auto'] as const;
 
 /** Manual naming and sizing for the generated code — nothing is hard-coded. */
-export default function OutputSettingsForm() {
+export default function OutputSettingsForm({ variant = 'full' }: { variant?: 'full' | 'names' } = {}) {
   const { store } = useStudio();
   const project = useStore(store, s => s.project);
   const o = outputOf(project);
@@ -22,7 +22,8 @@ export default function OutputSettingsForm() {
       {o.selectorType === 'attribute' && <label className="nf"><span className="nf-label">Value</span><input className="generate-select" value={o.attrValue} spellCheck={false} onChange={e => set({ attrValue: e.target.value }, 'out-val')} data-testid="out-attrvalue" /></label>}
       <label className="nf"><span className="nf-label">Layer class prefix</span><input className="generate-select" value={o.layerPrefix} spellCheck={false} onChange={e => set({ layerPrefix: e.target.value }, 'out-prefix')} data-testid="out-prefix" /></label>
     </div>
-    <label className="nf"><span className="nf-label">Download filename</span><input className="generate-select" value={o.downloadName} spellCheck={false} onChange={e => set({ downloadName: e.target.value }, 'out-download-name')} data-testid="out-download-name" placeholder="gradient" /><small className="gs-bar-hint">The extension is added automatically.</small></label>
+    {variant === 'full' && <label className="nf"><span className="nf-label">Download filename</span><input className="generate-select" value={o.downloadName} spellCheck={false} onChange={e => set({ downloadName: e.target.value }, 'out-download-name')} data-testid="out-download-name" placeholder="gradient" /><small className="gs-bar-hint">The extension is added automatically.</small></label>}
+    {variant === 'full' && <>
     <Switch label="Include width / height in the code" checked={o.includeSize} onChange={v => set({ includeSize: v, previewOutputSize: v ? o.previewOutputSize : false })} testId="out-include-size" />
     <div>
       <Switch label="Preserve preview proportions when resized" checked={o.responsive} onChange={v => set({ responsive: v, previewOutputSize: v ? false : o.previewOutputSize })} testId="out-responsive" />
@@ -63,7 +64,8 @@ export default function OutputSettingsForm() {
       </div>
       {!o.responsive && <Seg value={o.height.prop} label="Height property" options={[{ id: 'min-height', label: 'min-height' }, { id: 'height', label: 'height' }]} onChange={v => set({ height: { ...o.height, prop: v } })} testId="out-heightprop" />}
     </>}
+    </>}
     <Switch label="Comments in code" checked={o.comments} onChange={v => set({ comments: v })} testId="out-comments" />
-    <button type="button" className="btn wide" onClick={() => set({ ...DEFAULT_OUTPUT }, 'out-reset')}>Reset naming &amp; size</button>
+    <button type="button" className="btn wide" onClick={() => set({ ...DEFAULT_OUTPUT }, 'out-reset')}>{variant === 'full' ? 'Reset naming &amp; size' : 'Reset names'}</button>
   </div>;
 }
