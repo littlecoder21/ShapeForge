@@ -119,6 +119,7 @@ export interface TextureSupport {
 
 const KIND_NOTES: Partial<Record<TextureKind, string>> = {
   noise: 'Noise fields are already procedural, so distribution, spacing and distortion are not offered — use Grain size, Fine / coarse detail and Threshold.',
+  relief: 'Relief surfaces are lit height fields: shape them with Ridges per tile, Depth, Valley shadow, Light direction and Gloss, and set the highlight / shadow colours below.',
 };
 
 export function textureSupport(texture: TextureData): TextureSupport {
@@ -137,6 +138,16 @@ export function textureSupport(texture: TextureData): TextureSupport {
     if (control.id === 'angleVariation' && info.kind === 'scatter' && (shape === 'circle' || shape === 'ring') && Math.abs(P.aspectRatio - 100) < 1) continue;
     if (control.id === 'symmetry' && !(info.kind === 'scatter' && (shape === 'polygon' || shape === 'star'))) continue;
     if (control.id === 'cornerRadius' && info.kind === 'scatter' && shape !== 'square') continue;
+    if (info.kind === 'relief') {
+      const form = info.relief?.form ?? 'ridges', profile = P.reliefProfile === 'auto' ? info.relief?.profile ?? 'sine' : P.reliefProfile;
+      if (control.id === 'reliefProfile' && form !== 'ridges') continue;
+      if (control.id === 'strokeWidth' && form === 'ridges' && profile === 'sine') continue;
+      if (control.id === 'strokeWidth' && profile === 'sheet') { controls.push({ control, label: 'Bright crest width' }); continue; }
+      if (control.id === 'reliefSoft' && form === 'ridges' && profile === 'sine') continue;
+      if (control.id === 'reliefSoft' && form === 'bumps') continue;
+      if (control.id === 'phase' && form === 'bumps') continue;
+      if (control.id === 'strokeWidth' && form === 'bumps') { controls.push({ control, label: 'Gap between bumps' }); continue; }
+    }
     let options = control.options;
     if (control.id === 'distribution') options = DISTRIBUTION_OPTIONS.filter(o => o.id === 'auto' || info.dists.includes(o.id as never));
     if (control.id === 'falloffTarget') options = FALLOFF_TARGET_OPTIONS.filter(o => info.falloffTargets.includes(o.id));
@@ -147,6 +158,28 @@ export function textureSupport(texture: TextureData): TextureSupport {
   if (!caps.has('warp')) notes.push('Distortion is not offered for this texture.');
   if (!caps.has('dist')) notes.push('This texture is a fixed pattern, so there is no distribution mode — use Spacing and Phase.');
   return { kind: info.kind, controls, notes };
+}
+
+/* ───────────── relief helpers (used by the panel and the scene builder) ───────────── */
+
+/**
+ * Starting values for a relief preset. Relief is shaded with plain alpha (black = shadow, white = light), so it wants
+ * Normal blending at full strength: the gradient underneath keeps its colour in the shadows, like paint on a metal sheet.
+ */
+export function reliefDefaults(patternId: string): Partial<TextureData> | undefined {
+  const preset = findTexture(patternId);
+  if (!preset || preset.family !== 'relief') return undefined;
+  const info = presetInfo(preset).relief;
+  return { blend: 'normal', opacity: 100, color: '#ffffff', shadowColor: '#000000', scale: Math.round((info?.count ?? 2) * 70) };
+}
+
+/** Ridges (or bumps per row) in one tile and the width of one of them in px; undefined for non-relief textures. */
+export function reliefGeometry(texture: TextureData): { form: 'ridges' | 'bumps'; count: number; width: number; max: number } | undefined {
+  const P = normalizeTexture(texture), preset = findTexture(P.pattern);
+  if (!preset || preset.family !== 'relief') return undefined;
+  const info = presetInfo(preset).relief, form = info?.form ?? 'ridges', max = form === 'bumps' ? 10 : 12;
+  const count = clamp(Math.round(P.ridgeCount > 0 ? P.ridgeCount : info?.count ?? 2), 1, max);
+  return { form, count, width: Math.max(1, P.scale) / count, max };
 }
 
 export const textureControlsFor = (texture: TextureData): ResolvedControl[] => textureSupport(texture).controls;

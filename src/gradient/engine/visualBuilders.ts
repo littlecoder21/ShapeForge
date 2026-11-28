@@ -1,9 +1,11 @@
 import { newEffect } from './effects';
-import { BLEND_MODES, newLayer, stop, type BlendMode, type ColorStop, type GradientLayer, type TextureData } from './model';
+import { BLEND_MODES, DEFAULT_MESH, DEFAULT_TEXTURE, newLayer, stop, type BlendMode, type ColorStop, type GradientLayer, type TextureData } from './model';
+import { newMeshPoint } from './mesh';
+import { TEXTURES, reliefGeometry } from './textures';
 import { mulberry } from './rng';
 import { bandStops, clamp, darken, glow, lighten, mixHex, pick, pickFalloff, softenStops, spectrumStops, streamline } from './sceneMath';
 
-export type VisualBuilderId = 'fluid' | 'light' | 'ink' | 'halftone' | 'prism' | 'metallic' | 'glass' | 'holographic';
+export type VisualBuilderId = 'fluid' | 'light' | 'ink' | 'halftone' | 'prism' | 'metallic' | 'glass' | 'holographic' | 'relief';
 export type VisualValue = number | string | boolean | string[];
 export type VisualConfig = Record<string, VisualValue>;
 export interface VisualPreset { id: string; name: string; values: Partial<VisualConfig> }
@@ -91,6 +93,26 @@ const holoPresets: VisualPreset[] = [
 ];
 
 const ctrl = (key: string, label: string, min: number, max: number, unit = '%', step = 1): VisualControl => ({ key, label, min, max, unit, step });
+const reliefPresets: VisualPreset[] = [
+  { id: 'roofing', name: 'Painted roofing sheet', values: { palette: ['#f78009', '#db1523', '#1fe088', '#088be2'], pattern: 'relief-painted-roofing', ridgeWidth: 79, ridgeCount: 0, angle: 0, depth: 55, occlusion: 0, light: -35, gloss: 40, softness: 50, strength: 100, shadowTint: 0, colorSize: 100, split: 50, tilt: -13, leftChange: 33, rightChange: 68, sheen: 0, grain: 0 } },
+  { id: 'trapezoid', name: 'Trapezoid tin roof', values: { palette: ['#ffb347', '#ff5e62', '#8e54e9', '#2b2d8f'], pattern: 'relief-trapezoid-roofing', ridgeWidth: 90, ridgeCount: 0, angle: 0, depth: 70, occlusion: 40, light: -45, gloss: 55, strength: 100, shadowTint: 40, colorSize: 100, sheen: 20, grain: 10 } },
+  { id: 'diagonal', name: 'Diagonal corrugation', values: { palette: ['#fde047', '#fb7185', '#6366f1', '#0ea5e9'], pattern: 'relief-corrugated-sheet', ridgeWidth: 60, ridgeCount: 0, angle: 32, depth: 65, occlusion: 40, light: -30, gloss: 60, strength: 100, shadowTint: 35, colorSize: 100, sheen: 0, grain: 6 } },
+  { id: 'fluted', name: 'Fluted glass', values: { palette: ['#d9f99d', '#5eead4', '#38bdf8', '#818cf8'], pattern: 'relief-fluted-glass', ridgeWidth: 26, ridgeCount: 0, angle: 0, depth: 70, occlusion: 35, light: 20, gloss: 120, strength: 90, shadowTint: 45, colorSize: 100, sheen: 35, grain: 0 } },
+  { id: 'ribs', name: 'Dark metal ribs', values: { palette: ['#1e293b', '#1d4ed8', '#be185d', '#f97316'], pattern: 'relief-round-ribs', ridgeWidth: 54, ridgeCount: 0, angle: 0, depth: 80, occlusion: 50, light: -50, gloss: 100, strength: 100, shadowTint: 20, colorSize: 100, sheen: 25, grain: 12 } },
+  { id: 'pleats', name: 'Silk pleats', values: { palette: ['#fbcfe8', '#fde68a', '#a5f3fc', '#c4b5fd'], pattern: 'relief-pleated-fold', ridgeWidth: 48, ridgeCount: 0, angle: 0, depth: 60, occlusion: 40, light: -40, gloss: 90, strength: 85, shadowTint: 55, colorSize: 100, sheen: 30, grain: 0 } },
+  { id: 'sawtooth', name: 'Sawtooth panel', values: { palette: ['#f97316', '#facc15', '#22c55e', '#06b6d4'], pattern: 'relief-sawtooth-ridges', ridgeWidth: 56, ridgeCount: 0, angle: 0, depth: 70, occlusion: 40, light: -40, gloss: 70, strength: 100, shadowTint: 40, colorSize: 100, sheen: 0, grain: 8 } },
+  { id: 'dunes', name: 'Wide dunes', values: { palette: ['#fbbf24', '#f97316', '#be123c', '#4c1d95'], pattern: 'relief-wide-swell', ridgeWidth: 260, ridgeCount: 0, angle: 0, depth: 60, occlusion: 35, light: -35, gloss: 60, strength: 95, shadowTint: 50, colorSize: 100, sheen: 15, grain: 6 } },
+  { id: 'pillows', name: 'Pillow quilt', values: { palette: ['#fda4af', '#fcd34d', '#a78bfa', '#38bdf8'], pattern: 'relief-pillow-bumps', ridgeWidth: 70, ridgeCount: 0, angle: 0, depth: 100, occlusion: 90, light: -35, gloss: 110, strength: 90, shadowTint: 50, colorSize: 100, sheen: 0, grain: 0 } },
+  { id: 'hobnail', name: 'Hobnail glass', values: { palette: ['#a5f3fc', '#e9d5ff', '#fbcfe8', '#bbf7d0'], pattern: 'relief-hobnail', ridgeWidth: 40, ridgeCount: 0, angle: 0, depth: 95, occlusion: 80, light: -30, gloss: 180, strength: 90, shadowTint: 60, colorSize: 100, sheen: 20, grain: 0 } },
+];
+const reliefPatternOptions = TEXTURES.filter(t => t.family === 'relief').map(t => ({ id: t.id, label: t.label }));
+const reliefControls: VisualControl[] = [
+  { key: 'pattern', label: 'Surface pattern', min: 0, max: 0, options: reliefPatternOptions },
+  ctrl('ridgeWidth', 'Ridge width', 12, 300, 'px'), ctrl('ridgeCount', 'Ridges per tile (0 = pattern default)', 0, 12, '', 1), ctrl('angle', 'Ridge direction', 0, 360, '°'),
+  ctrl('depth', 'Relief depth', 0, 200), ctrl('occlusion', 'Valley shadow', 0, 200), ctrl('light', 'Light direction', -90, 90, '°'), ctrl('gloss', 'Gloss', 0, 300), ctrl('softness', 'Edge softness', 0, 100),
+  ctrl('strength', 'Relief strength', 0, 100), ctrl('shadowTint', 'Shadow tint', 0, 100), ctrl('colorSize', 'Colour blend width', 30, 160), ctrl('split', 'Colour split position', 10, 90), ctrl('tilt', 'Colour split tilt', -60, 60), ctrl('leftChange', 'Left colour change height', 10, 90), ctrl('rightChange', 'Right colour change height', 10, 90), ctrl('sheen', 'Sheen', 0, 100), ctrl('grain', 'Paint grain', 0, 100),
+];
+
 const fluidControls = [ctrl('flowAngle', 'Flow direction', 0, 360, '°'), ctrl('flow', 'Flow intensity', 0, 100), ctrl('turbulence', 'Turbulence', 0, 100), ctrl('viscosity', 'Viscosity', 0, 100), ctrl('swirl', 'Swirl', 0, 100), ctrl('warp', 'Warp amplitude', 0, 100), ctrl('diffusion', 'Diffusion', 0, 100), ctrl('scale', 'Flow scale', 10, 100), ctrl('eddies', 'Eddies', 2, 8, '', 1)];
 const lightControls = [ctrl('sourceCount', 'Light sources', 1, 6, '', 1), ctrl('sourceX', 'Source position X', 0, 100), ctrl('sourceY', 'Source position Y', 0, 100), ctrl('radius', 'Source radius', 12, 100), ctrl('intensity', 'Intensity', 5, 100), ctrl('falloff', 'Light falloff', 0, 100), ctrl('coreBrightness', 'Core brightness', 0, 100), ctrl('beamLength', 'Beam length', 20, 100), ctrl('angle', 'Beam direction', 0, 360, '°'), ctrl('spread', 'Beam spread', 4, 80), ctrl('glow', 'Glow radius', 0, 100), ctrl('halo', 'Halo intensity', 0, 100), { key: 'falloffType', label: 'Falloff model', min: 0, max: 0, options: [{ id: 'inverse-square', label: 'Inverse square' }, { id: 'gaussian', label: 'Gaussian' }, { id: 'exponential', label: 'Exponential' }, { id: 'smooth', label: 'Smooth' }] }];
 const inkControls = [ctrl('flowAngle', 'Flow direction', 0, 360, '°'), ctrl('inkDensity', 'Ink density', 0, 100), ctrl('smokeDensity', 'Smoke density', 0, 100), ctrl('turbulence', 'Turbulence', 0, 100), ctrl('curl', 'Curl', 0, 100), ctrl('diffusion', 'Diffusion', 0, 100), ctrl('edge', 'Edge definition', 0, 100), ctrl('layerCount', 'Plume groups', 1, 8, '', 1)];
@@ -418,7 +440,90 @@ function buildHolographic(c: VisualConfig) {
   return layers;
 }
 
-const defaultBase = (paletteColors: string[], background: string, entries: Record<string, number | string>): VisualConfig => ({
+/* Paint model of the relief builder (fitted to a photo of a painted corrugated roof; see the roofing preset). */
+const RELIEF_WIPE = 0.539, RELIEF_GAMMA = 1.138;
+const RELIEF_ROWS = [0, 0.2, 0.4, 0.6, 0.8, 1];
+const RELIEF_LEFT = [0, 0.129, 0.651, 0.941, 1, 1], RELIEF_RIGHT = [0, 0.023, 0.092, 0.296, 0.813, 1];
+const rampAt = (knots: number[], y: number) => {
+  const v = clamp(y, 0, 1) * (RELIEF_ROWS.length - 1), i = Math.min(RELIEF_ROWS.length - 2, Math.floor(v));
+  return knots[i] + (knots[i + 1] - knots[i]) * (v - i);
+};
+const smooth01 = (t: number) => { const x = clamp(t, 0, 1); return x * x * (3 - 2 * x); };
+
+interface ReliefPaint { wipe: number; split: number; tilt: number; left: number; right: number }
+/** Mesh points (as fractions of the layer) that sample the paint model: columns follow the colour wipe so a narrow wipe stays crisp. */
+function reliefPaintPoints([tl, bl, tr, br]: string[], m: ReliefPaint) {
+  const points: ReturnType<typeof newMeshPoint>[] = [];
+  for (const y of RELIEF_ROWS) {
+    const centre = m.split + m.tilt * (y - 0.5), a = centre - m.wipe / 2, b = centre + m.wipe / 2;
+    const raw = [0, a, a + m.wipe / 4, centre, b - m.wipe / 4, b, 1].map(v => clamp(v, 0, 1));
+    const xs = raw.filter((v, i) => i === 0 || v - raw[i - 1] > 0.02);
+    if (xs[xs.length - 1] < 1) xs.push(1);
+    for (const x of xs) {
+      const leftColor = mixHex(tl, bl, rampAt(RELIEF_LEFT, y - (m.left - 0.33)), 'srgb'), rightColor = mixHex(tr, br, rampAt(RELIEF_RIGHT, y - (m.right - 0.68)), 'srgb');
+      points.push(newMeshPoint(x * 100, y * 100, mixHex(leftColor, rightColor, Math.pow(smooth01((x - a) / m.wipe), RELIEF_GAMMA), 'srgb'), 1, 40));
+    }
+  }
+  return points;
+}
+
+/**
+ * Painted relief sheet: a four-corner colour field (the paint), a lit relief pattern over it (the metal) and optional sheen / grain.
+ * The relief is an ordinary texture layer, so every slider here is also available on the layer itself afterwards.
+ * Colours are the four corners in this order: top-left, bottom-left, top-right, bottom-right.
+ */
+function buildRelief(c: VisualConfig) {
+  const colors = palette(c), seed = Math.round(num(c, 'seed', 7));
+  const [tl, bl, tr, br] = [col(colors, 0), col(colors, 1), col(colors, 2), col(colors, 3)];
+  const known = typeof c.pattern === 'string' && reliefPatternOptions.some(option => option.id === c.pattern);
+  const pattern = known ? String(c.pattern) : 'relief-corrugated-sheet';
+  const ridgeCount = clamp(Math.round(num(c, 'ridgeCount', 0)), 0, 12);
+  const geometry = reliefGeometry({ ...DEFAULT_TEXTURE, pattern, ridgeCount })!;
+  const width = clamp(num(c, 'ridgeWidth', 75), 6, 400), direction = num(c, 'angle', 0);
+  const average = mixHex(mixHex(tl, bl, 0.5), mixHex(tr, br, 0.5), 0.5);
+  const shadow = mixHex('#000000', darken(average, 0.55), clamp(num(c, 'shadowTint', 25), 0, 100) / 100);
+  const strength = clamp(num(c, 'strength', 100), 0, 100), sheen = clamp(num(c, 'sheen', 0), 0, 100), grain = clamp(num(c, 'grain', 0), 0, 100);
+
+  const relief = newLayer('linear', { name: `Relief · ${reliefPatternOptions.find(option => option.id === pattern)?.label ?? 'ridges'}`, stops: [stop('#ffffff', 0, 0), stop('#ffffff', 100, 0)] });
+  relief.texture = {
+    ...DEFAULT_TEXTURE, enabled: true, pattern, scale: Math.max(4, Math.round(width * geometry.count)), angle: ((direction % 360) + 360) % 360,
+    opacity: strength, blend: 'normal', color: '#ffffff', shadowColor: shadow, seed: 17, ridgeCount,
+    reliefDepth: clamp(num(c, 'depth', 100), 0, 200), reliefOcclusion: clamp(num(c, 'occlusion', 100), 0, 200), reliefLight: clamp(num(c, 'light', -35), -90, 90),
+    reliefGloss: clamp(num(c, 'gloss', 100), 0, 300), reliefSoft: clamp(num(c, 'softness', 50), 0, 100),
+  } satisfies TextureData;
+
+  // the paint: a smooth colour FIELD (a true weighted blend, not stacked blobs), so the four corner colours stay vivid and the middle
+  // blends the way real paint does. Each side is a vertical ramp (top → bottom) and a soft wipe moves from the left colours to the right
+  // ones. The ramp shapes, wipe width and tilt were fitted to a photo of a painted roof, then exposed as sliders.
+  const wipe = RELIEF_WIPE * clamp(num(c, 'colorSize', 100), 30, 160) / 100;
+  const paint = newLayer('mesh', {
+    name: 'Relief · paint', space: 'srgb',
+    mesh: {
+      ...DEFAULT_MESH, base: average, core: 40, seed,
+      field: { ...DEFAULT_MESH.field, enabled: true, method: 'gaussian', space: 'srgb', spread: clamp(0.3 + wipe * 0.5, 0.4, 0.75), sharpness: 0.6, edge: 'extend', warp: 0, grain: 0, saturation: 1, contrast: 1 },
+      points: reliefPaintPoints([tl, bl, tr, br], {
+        wipe, split: clamp(num(c, 'split', 50), 10, 90) / 100, tilt: clamp(num(c, 'tilt', -13), -60, 60) / 100,
+        left: clamp(num(c, 'leftChange', 33), 10, 90) / 100, right: clamp(num(c, 'rightChange', 68), 10, 90) / 100,
+      }),
+    },
+  });
+
+  const layers: GradientLayer[] = [];
+  if (sheen > 0) {
+    const sweep = linear('Relief · sheen', ['#ffffff', '#ffffff'], direction + 100, 'soft-light', 1);
+    sweep.stops = bandStops('#ffffff', 58, 36, 0.25 + sheen / 140);
+    layers.push(sweep);
+  }
+  if (grain > 0) {
+    const speckle = linear('Relief · paint grain', ['#ffffff', '#ffffff'], 135, 'soft-light', grain / 260);
+    layerTexture(speckle, 'grain-film-grain', '#ffffff', Math.max(8, 40 - grain / 4), 30 + grain * 0.4, 0);
+    layers.push(speckle);
+  }
+  layers.push(relief, paint, base('Relief · substrate', c, colors));
+  return layers;
+}
+
+const defaultBase = (paletteColors: string[], background: string, entries: Record<string, number | string | boolean>): VisualConfig => ({
   seed: 7, palette: paletteColors, background, angle: 28, speed: 48, animate: true, layerOpacity: 100, blendMode: 'auto', transparent: false, ...entries,
 });
 const defs: VisualBuilderDefinition[] = [
@@ -430,6 +535,7 @@ const defs: VisualBuilderDefinition[] = [
   withShared('metallic', 'Metallic', '2D reflective banding and directional surface texture for polished, brushed, or patinated metal looks.', metallicPresets, defaultBase(['#111827', '#e5edf3', '#617080'], '#131a22', { roughness: 32, bandScale: 42, brushed: 46, scratches: 12, oxidation: 0, reflections: 4, finish: 'linear' }), metalControls, buildMetallic),
   withShared('glass', 'Glass', 'Tinted, frosted, and highlighted glass-like overlays. The preview includes a configurable background; no true optical depth is implied.', glassPresets, defaultBase(['#b8ecff', '#ffffff', '#6bc4e8'], '#24364b', { tintOpacity: 32, frost: 28, refraction: 28, edge: 68, droplets: 0, thickness: 9, reflection: 55 }), glassControls, buildGlass),
   withShared('holographic', 'Holographic', 'Procedural iridescent spectrum, diffraction lines, and foil grain; not a thin-film physics simulation.', holoPresets, defaultBase(['#ff4d9d', '#ffc857', '#4de2c5', '#7272ff'], '#171329', { frequency: 64, spread: 72, intensity: 78, grain: 18, distortion: 28 }), holoControls, buildHolographic),
+  withShared('relief', 'Relief surface', 'Painted corrugated sheets, ribs, pleats and bumps: a four-corner colour field lit as a real surface, with deep valleys and soft highlights. Colours are the four corners (top-left, bottom-left, top-right, bottom-right).', reliefPresets, defaultBase(['#f78009', '#db1523', '#1fe088', '#088be2'], '#10131c', { pattern: 'relief-painted-roofing', ridgeWidth: 79, ridgeCount: 0, angle: 0, depth: 55, occlusion: 0, light: -35, gloss: 40, softness: 50, strength: 100, shadowTint: 0, colorSize: 100, split: 50, tilt: -13, leftChange: 33, rightChange: 68, sheen: 0, grain: 0, animate: false }), reliefControls, buildRelief),
 ];
 
 export const VISUAL_BUILDERS = defs;

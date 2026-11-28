@@ -58,8 +58,15 @@ export function projectFragmentSource(
 
 /** `fragmentSources` holds every distinct shader the page needs (usually one); a canvas picks its own with
  *  `data-shader-fragment`. A plain string is accepted for the single-shader case. */
-export function shaderRuntime(fragmentSources: string | string[], rootExpression = 'document') {
+export interface ShaderRuntimeOptions {
+  /** 'host' (section background): the canvas sits behind the page content and cannot receive pointer events itself, so the
+   *  pointer is read from the section that contains it. Default 'canvas'. */
+  pointerTarget?: 'canvas' | 'host';
+}
+
+export function shaderRuntime(fragmentSources: string | string[], rootExpression = 'document', options: ShaderRuntimeOptions = {}) {
   const sources = Array.isArray(fragmentSources) ? fragmentSources : [fragmentSources];
+  const pointerTarget = options.pointerTarget === 'host' ? "((canvas.closest('[data-sf-bg]') || canvas).parentElement || canvas)" : 'canvas';
   return `
 (function (root) {
   const RigRuntime = ${rigRuntimeExpression()};
@@ -528,6 +535,7 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     const calm = reducedMotion.matches;
     if ((settings.animate && !calm) || (settings.idleMotion && !calm) || (!calm && (rigAmbient || settings.breath > 0)) || engine.hasActivity() || (activeRules.length && pointer.active > 0.003) || (proceduralState && (proceduralState.isSettling() || (settings.animate && !calm && proceduralState.isAnimated()))) || (motionState && !calm && motionState.animating)) schedule();
   };
+  const pointerTarget = ${pointerTarget};
   const position = event => {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
@@ -560,11 +568,11 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     catch (error) { canvas.parentElement && canvas.parentElement.classList.remove('gs-webgl-ready'); canvas.dataset.shaderStatus = 'error'; canvas.dataset.shaderError = String(error); }
   };
   const onVisibility = () => { visible = document.visibilityState === 'visible'; if (visible) schedule(); else { cancelAnimationFrame(frameId); frameId = 0; } };
-  canvas.addEventListener('pointermove', onMove, { passive: true });
-  canvas.addEventListener('pointerdown', onDown, { passive: true });
-  canvas.addEventListener('pointerup', onUp, { passive: true });
-  canvas.addEventListener('pointercancel', onCancel, { passive: true });
-  canvas.addEventListener('pointerleave', onLeave, { passive: true });
+  pointerTarget.addEventListener('pointermove', onMove, { passive: true });
+  pointerTarget.addEventListener('pointerdown', onDown, { passive: true });
+  pointerTarget.addEventListener('pointerup', onUp, { passive: true });
+  pointerTarget.addEventListener('pointercancel', onCancel, { passive: true });
+  pointerTarget.addEventListener('pointerleave', onLeave, { passive: true });
   canvas.addEventListener('webglcontextlost', onLost);
   canvas.addEventListener('webglcontextrestored', onRestored);
   document.addEventListener('visibilitychange', onVisibility);
@@ -583,11 +591,11 @@ export function shaderRuntime(fragmentSources: string | string[], rootExpression
     reducedMotion.removeEventListener('change', motion);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('resize', resize);
-    canvas.removeEventListener('pointermove', onMove);
-    canvas.removeEventListener('pointerdown', onDown);
-    canvas.removeEventListener('pointerup', onUp);
-    canvas.removeEventListener('pointercancel', onCancel);
-    canvas.removeEventListener('pointerleave', onLeave);
+    pointerTarget.removeEventListener('pointermove', onMove);
+    pointerTarget.removeEventListener('pointerdown', onDown);
+    pointerTarget.removeEventListener('pointerup', onUp);
+    pointerTarget.removeEventListener('pointercancel', onCancel);
+    pointerTarget.removeEventListener('pointerleave', onLeave);
     canvas.removeEventListener('webglcontextlost', onLost);
     canvas.removeEventListener('webglcontextrestored', onRestored);
     if (buffer) gl.deleteBuffer(buffer);
@@ -624,8 +632,8 @@ function exportedSettings(entry: { settings: InteractiveSettings; procedural: Pr
   };
 }
 
-function makeDocument(project: GradientProject, useMarkers = false) {
-  const layers = layeredOutput(project);
+function makeDocument(project: GradientProject, useMarkers = false, build: { background?: boolean } = {}) {
+  const layers = layeredOutput(project, { background: build.background });
   const defaultSettings = normalizeInteractiveSettings(project.shader);
   const visibleLayers = project.layers.filter(layer => layer.visible);
   const enabledLayers = visibleLayers.filter(layer => layer.shader?.enabled);
@@ -715,7 +723,8 @@ function makeDocument(project: GradientProject, useMarkers = false) {
     const attributes = useMarkers
       ? `data-shader-settings="__SHADER_CONFIG_${index}__" data-shader-fragment="${entry.fragmentIndex}" data-shader-palette="__SHADER_PALETTE_${index}__" data-shader-geometry="__SHADER_GEOMETRY_${index}__" data-shader-mesh-points="__SHADER_MESH_POINTS_${index}__" data-shader-mesh-base="__SHADER_MESH_BASE_${index}__" data-shader-lut="__SHADER_LUT_${index}__" data-shader-mix-settings="__SHADER_MIX_CONFIG_${index}__" data-shader-mix-lut="__SHADER_MIX_LUT_${index}__" data-shader-layer="__SHADER_LAYER_${index}__"`
       : `data-shader-settings="${escapeAttribute(exportedSettings(entry))}" data-shader-fragment="${entry.fragmentIndex}" data-shader-palette="${escapeAttribute(entry.adapter.palette)}" data-shader-geometry="${escapeAttribute(entry.adapter.geometry)}" data-shader-mesh-points="${escapeAttribute(entry.adapter.meshPoints)}" data-shader-mesh-base="${escapeAttribute(entry.adapter.meshBase)}" data-shader-lut="${paletteLut}" data-shader-mix-settings="${escapeAttribute(entry.layerMix)}" data-shader-mix-lut="${layerMixLut}" data-shader-layer="${escapeAttribute(entry.layerState)}"`;
-    const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;pointer-events:auto;touch-action:pan-y"></canvas>`;
+    // a section background sits behind the page content, so it never takes pointer events itself (the runtime reads them from the section)
+    const canvas = `<canvas data-shader-canvas ${attributes} aria-hidden="true" style="position:absolute;inset:0;z-index:1;width:100%;height:100%;${build.background ? 'pointer-events:none' : 'pointer-events:auto;touch-action:pan-y'}"></canvas>`;
     if (row) {
       html = html.replace(row, `${row.replace(/">$/, ' gs-shader-export-layer">')}${canvas}`);
     } else {
@@ -962,14 +971,14 @@ export default function InteractiveGradientBackground({ settings, palette, geome
 `;
 }
 
-export function interactiveExports(project: GradientProject, rootExpression = 'document') {
-  const built = makeDocument(project);
+export function interactiveExports(project: GradientProject, rootExpression = 'document', build: { background?: boolean } = {}) {
+  const built = makeDocument(project, false, build);
   const note = built.palette.notes.map(message => `<!-- ${message.replace(/--/g, '—')} -->`).join('\n');
   return {
     html: `${note ? `${note}\n` : ''}${built.body}`,
     markup: `${note ? `${note}\n` : ''}${built.markup}`,
     stylesheet: built.stylesheet,
-    runtime: [shaderRuntime(built.fragmentSources, rootExpression), built.fieldScript].filter(Boolean).join('\n\n'),
+    runtime: [shaderRuntime(built.fragmentSources, rootExpression, { pointerTarget: build.background ? 'host' : 'canvas' }), built.fieldScript].filter(Boolean).join('\n\n'),
     javascript: interactiveJavaScriptExport(project),
     glsl: interactiveGlslExport(project),
     react: interactiveReactExport(project),

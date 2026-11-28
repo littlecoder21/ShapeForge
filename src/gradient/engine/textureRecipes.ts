@@ -1,5 +1,5 @@
 import { TEXTURES, slugify, type TexturePreset } from './texturePresets';
-import { describeLayers, type CellsLayer, type Layer, type LayerInfo, type LineSet, type NoiseLayer, type RingsLayer, type ScatterLayer, type StrokesLayer, type TilingLayer, type WavesLayer, type WeaveLayer } from './textureMotifs';
+import { describeLayers, type CellsLayer, type Layer, type LayerInfo, type LineSet, type NoiseLayer, type ReliefLayer, type RingsLayer, type ScatterLayer, type StrokesLayer, type TilingLayer, type WavesLayer, type WeaveLayer } from './textureMotifs';
 import { clamp, tileableSlope } from './textureMath';
 
 /* ═══════════════════════════ Preset recipes ═══════════════════════════
@@ -25,6 +25,7 @@ const RG = (o: Omit<RingsLayer, 'k'>): RingsLayer => ({ k: 'rings', ...o });
 const CE = (o: Omit<CellsLayer, 'k'>): CellsLayer => ({ k: 'cells', ...o });
 const TL = (o: Omit<TilingLayer, 'k'>): TilingLayer => ({ k: 'tiling', ...o });
 const WV = (o: Omit<WeaveLayer, 'k'>): WeaveLayer => ({ k: 'weave', ...o });
+const RL = (o: Omit<ReliefLayer, 'k'>): ReliefLayer => ({ k: 'relief', ...o });
 const HEX = 0.866;
 
 const RECIPES = new Map<string, Recipe>();
@@ -223,6 +224,20 @@ def('material', 'Sandstone', c => [W({ pitch: 6, lambda: 64, amp: 1.2, w: 0.4, h
 def('material', 'Concrete', c => [N(0.09, 3, 'turbulence', (c.d / 100) * 0.7), S({ dist: 'random', count: 60 * (c.d / 50), pitch: 8, r: 0.6, rv: [0.3, 1.6], ov: [0.3, 0.9], shape: 'circle' })]);
 def('material', 'Clay', c => [CE({ dist: 'random', count: 12, w: 0.5, o: 0.6, irregular: 0.8 }), N(0.12, 3, 'fractalNoise', (c.d / 100) * 0.4)]);
 def('organic', 'Plasma Texture', c => [N(0.035, 4, 'turbulence', c.d / 100)]);
+
+/* ───────────── relief (lit height fields) ───────────── */
+def('relief', 'Painted roofing', () => [RL({ form: 'ridges', profile: 'sheet', count: 1, flat: 0.37, soft: 0.5 })]);
+def('relief', 'Corrugated sheet', () => [RL({ form: 'ridges', profile: 'sine', count: 2 })]);
+def('relief', 'Trapezoid roofing', () => [RL({ form: 'ridges', profile: 'trapezoid', count: 2, flat: 0.34, soft: 0.35 })]);
+def('relief', 'Round ribs', () => [RL({ form: 'ridges', profile: 'round', count: 3, flat: 0.1, soft: 0.5 })]);
+def('relief', 'Fluted glass', () => [RL({ form: 'ridges', profile: 'round', count: 8, flat: 0.04, soft: 0.8 })]);
+def('relief', 'Pleated fold', () => [RL({ form: 'ridges', profile: 'pleat', count: 4, soft: 0.2 })]);
+def('relief', 'Sawtooth ridges', () => [RL({ form: 'ridges', profile: 'sawtooth', count: 4, flat: 0.2, soft: 0.3 })]);
+def('relief', 'Wide swell', () => [RL({ form: 'ridges', profile: 'sine', count: 1 })]);
+def('relief', 'Reeded panel', () => [RL({ form: 'ridges', profile: 'trapezoid', count: 6, flat: 0.5, soft: 0.5 })]);
+def('relief', 'Pillow bumps', () => [RL({ form: 'bumps', count: 3, flat: 0.1 })]);
+def('relief', 'Hobnail', () => [RL({ form: 'bumps', count: 4, flat: 0.12, stagger: true })]);
+def('relief', 'Dimples', () => [RL({ form: 'bumps', count: 4, flat: 0.12, invert: true })]);
 
 /* ───────────── public API ───────────── */
 

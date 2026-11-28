@@ -16,13 +16,14 @@ export type FalloffMode = 'none' | 'linear' | 'radial' | 'smooth' | 'edge';
 export type FalloffTarget = 'opacity' | 'size' | 'density' | 'stroke' | 'distortion' | 'detail';
 
 /** Renderer families. A preset is a recipe of one or more layers of these kinds. */
-export type TextureKind = 'noise' | 'scatter' | 'strokes' | 'lines' | 'waves' | 'rings' | 'cells' | 'tiling' | 'weave';
+export type TextureKind = 'noise' | 'scatter' | 'strokes' | 'lines' | 'waves' | 'rings' | 'cells' | 'tiling' | 'weave' | 'relief';
+export type ReliefProfile = 'sine' | 'trapezoid' | 'round' | 'sawtooth' | 'pleat' | 'sheet';
 
 /** What a texture can do. A control is only offered when the selected texture has its capability. */
 export type TextureCapability =
   | 'size' | 'sx' | 'sy' | 'aspect' | 'shape' | 'dist' | 'sizevar' | 'jitter' | 'anglevar' | 'opvar' | 'cover'
   | 'threshold' | 'octaves' | 'stroke' | 'dash' | 'breakup' | 'cross' | 'secondary' | 'corner' | 'sym' | 'weave'
-  | 'phase' | 'warp' | 'falloff' | 'detail';
+  | 'phase' | 'warp' | 'falloff' | 'detail' | 'relief';
 
 export interface TextureParams {
   /** Size of each element, % of the preset's own size. Independent of spacing and of the tile scale. */
@@ -77,7 +78,21 @@ export interface TextureParams {
   detailAmount: number;
   detailScale: number;
   detailDensity: number;
+  /** Relief surfaces (corrugated sheet, ribs, pleats, bumps). 0 / 'auto' = the preset's own value. */
+  ridgeCount: number;
+  reliefProfile: ReliefProfileChoice;
+  /** Height of the relief, % of the preset's own. Drives how steep every slope is, so it changes all the shading. */
+  reliefDepth: number;
+  /** Darkness packed into the valleys / between bumps, % of the preset's own. */
+  reliefOcclusion: number;
+  /** Direction the light comes from, degrees: −90 = from the left, 0 = straight on, +90 = from the right. */
+  reliefLight: number;
+  /** Strength of the glossy highlight on the lit slopes, % of the preset's own. */
+  reliefGloss: number;
+  /** Rounds the corners where flat parts meet slopes, %. */
+  reliefSoft: number;
 }
+export type ReliefProfileChoice = 'auto' | ReliefProfile;
 
 export type TextureControlId = keyof TextureParams;
 export type ControlGroup = 'geometry' | 'distribution' | 'distortion' | 'spatial' | 'detail' | 'rendering';
@@ -108,6 +123,11 @@ export const DISTRIBUTION_OPTIONS: { id: TextureDistribution; label: string }[] 
   { id: 'auto', label: 'Preset default' }, { id: 'grid', label: 'Grid' }, { id: 'staggered', label: 'Staggered' }, { id: 'random', label: 'Random' },
   { id: 'radial', label: 'Radial' }, { id: 'poisson', label: 'Poisson disc' }, { id: 'flow', label: 'Flow field' },
 ];
+export const RELIEF_PROFILE_OPTIONS: { id: ReliefProfileChoice; label: string }[] = [
+  { id: 'auto', label: 'Preset default' }, { id: 'sine', label: 'Corrugated wave' }, { id: 'trapezoid', label: 'Trapezoid (flat crest)' },
+  { id: 'round', label: 'Round ribs' }, { id: 'sawtooth', label: 'Sawtooth' }, { id: 'pleat', label: 'Pleat / fold' },
+  { id: 'sheet', label: 'Painted sheet (soft shadow)' },
+];
 export const FALLOFF_OPTIONS: { id: FalloffMode; label: string }[] = [
   { id: 'none', label: 'None' }, { id: 'linear', label: 'Linear' }, { id: 'radial', label: 'Radial' }, { id: 'smooth', label: 'Smooth' }, { id: 'edge', label: 'Edge' },
 ];
@@ -130,7 +150,7 @@ export const CONTROLS: TextureControl[] = [
   { id: 'distribution', label: 'Distribution', hint: 'How elements are placed: lattice, scattered, evenly spaced (Poisson disc), radial burst or along a flow field. Same seed + settings = same result.', type: 'select', options: DISTRIBUTION_OPTIONS, def: 'auto', group: 'distribution', tier: 'basic', needs: 'dist' },
 
   { id: 'aspectRatio', label: 'Aspect ratio', hint: 'Stretch each element horizontally (above 100%) or vertically (below 100%) at constant area.', type: 'range', min: 25, max: 400, step: 5, unit: '%', def: 100, group: 'geometry', tier: 'advanced', needs: 'aspect', labels: { noise: 'Grain stretch' } },
-  { id: 'strokeWidth', label: 'Stroke width', hint: 'Line, thread or boundary thickness relative to the preset.', type: 'range', min: 20, max: 400, step: 5, unit: '%', def: 100, group: 'geometry', tier: 'advanced', needs: 'stroke', labels: { weave: 'Thread thickness', cells: 'Boundary thickness' } },
+  { id: 'strokeWidth', label: 'Stroke width', hint: 'Line, thread or boundary thickness relative to the preset.', type: 'range', min: 20, max: 400, step: 5, unit: '%', def: 100, group: 'geometry', tier: 'advanced', needs: 'stroke', labels: { weave: 'Thread thickness', cells: 'Boundary thickness', relief: 'Flat crest / gap width' } },
   { id: 'dashLength', label: 'Dash length', hint: 'Dash length in tile units. 0 keeps the preset’s own pattern; a large value makes the line solid.', type: 'range', min: 0, max: 64, step: 1, def: 0, group: 'geometry', tier: 'advanced', needs: 'dash' },
   { id: 'dashGap', label: 'Dash gap', hint: 'Gap between dashes in tile units. 0 = same as the dash length.', type: 'range', min: 0, max: 64, step: 1, def: 0, group: 'geometry', tier: 'advanced', needs: 'dash', when: t => t.dashLength > 0 },
   { id: 'lineBreakup', label: 'Line breakup', hint: 'Randomly cut gaps into horizontal and vertical lines.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 0, group: 'geometry', tier: 'advanced', needs: 'breakup' },
@@ -166,6 +186,14 @@ export const CONTROLS: TextureControl[] = [
   { id: 'detailScale', label: 'Detail scale', hint: 'Size of the fine detail relative to the main texture.', type: 'range', min: 10, max: 200, step: 5, unit: '%', def: 40, group: 'detail', tier: 'advanced', needs: 'detail', when: detailOn },
   { id: 'detailDensity', label: 'Detail density', hint: 'How much fine detail there is.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 50, group: 'detail', tier: 'advanced', needs: 'detail', when: detailOn, familyLabels: { paper: 'Fleck density', material: 'Fleck density' } },
 
+  { id: 'ridgeCount', label: 'Ridges per tile', hint: 'How many ridges (or bumps per row) fit in one tile. The ridge width on screen is Tile size ÷ this number. 0 keeps the preset’s own count.', type: 'range', min: 0, max: 12, step: 1, def: 0, group: 'geometry', tier: 'basic', needs: 'relief', labels: { relief: 'Ridges per tile' } },
+  { id: 'reliefProfile', label: 'Ridge profile', hint: 'Cross-section of every ridge: rounded wave, flat-topped trapezoid, half-round rib, sawtooth or sharp pleat.', type: 'select', options: RELIEF_PROFILE_OPTIONS, def: 'auto', group: 'geometry', tier: 'basic', needs: 'relief' },
+  { id: 'reliefDepth', label: 'Depth', hint: 'How tall the relief is. Deeper relief means steeper slopes, so stronger light and shadow.', type: 'range', min: 0, max: 200, step: 5, unit: '%', def: 100, group: 'rendering', tier: 'basic', needs: 'relief' },
+  { id: 'reliefOcclusion', label: 'Valley shadow', hint: 'Darkness that collects in the valleys, which is what gives a corrugated surface its sense of depth.', type: 'range', min: 0, max: 200, step: 5, unit: '%', def: 100, group: 'rendering', tier: 'basic', needs: 'relief' },
+  { id: 'reliefLight', label: 'Light direction', hint: 'Where the light comes from: −90° from the left, 0° straight on, +90° from the right. Rotate the pattern with Angle to light ridges from above.', type: 'range', min: -90, max: 90, step: 1, unit: '°', def: -35, group: 'rendering', tier: 'basic', needs: 'relief' },
+  { id: 'reliefGloss', label: 'Gloss', hint: 'Strength of the shiny highlight on the slopes facing the light (painted metal = high, matte plaster = low).', type: 'range', min: 0, max: 300, step: 5, unit: '%', def: 100, group: 'rendering', tier: 'basic', needs: 'relief' },
+  { id: 'reliefSoft', label: 'Edge softness', hint: 'Rounds the corners where a flat crest or valley meets a slope. 0 = crisp fold, 100 = smooth wave.', type: 'range', min: 0, max: 100, step: 1, unit: '%', def: 50, group: 'rendering', tier: 'advanced', needs: 'relief' },
+
   { id: 'threshold', label: 'Threshold', hint: 'Cut a noise field to crisp blobs: everything below the threshold disappears. 0 = off.', type: 'range', min: 0, max: 95, step: 1, unit: '%', def: 0, group: 'rendering', tier: 'advanced', needs: 'threshold' },
   { id: 'octaves', label: 'Fine / coarse detail', hint: 'Octaves of the noise field: more octaves add finer detail on top of the coarse shapes. 0 keeps the preset’s own value.', type: 'range', min: 0, max: 6, step: 1, def: 0, group: 'rendering', tier: 'advanced', needs: 'octaves' },
 ];
@@ -183,7 +211,7 @@ const LEGACY_RANGES: Record<string, [number, number]> = {
 /** The one authoritative default texture (frozen — copy it, never mutate it). */
 export const TEXTURE_DEFAULTS: Readonly<TextureData> = Object.freeze({
   enabled: false, pattern: DEFAULT_PATTERN, scale: 36, density: 50, opacity: 18, angle: 0, seed: 17, color: '#ffffff',
-  backgroundEnabled: false, backgroundColor: '#10131a', backgroundOpacity: 100, contrast: 100, softness: 0, offsetX: 0, offsetY: 0, blend: 'soft-light',
+  shadowColor: '#000000', backgroundEnabled: false, backgroundColor: '#10131a', backgroundOpacity: 100, contrast: 100, softness: 0, offsetX: 0, offsetY: 0, blend: 'soft-light',
   ...PARAM_DEFAULTS,
 }) as Readonly<TextureData>;
 
@@ -225,6 +253,7 @@ export function normalizeTexture(raw: unknown): TextureData {
   out.pattern = resolveTextureId(src.pattern) ?? DEFAULT_PATTERN;
   out.color = validColor(src.color) ?? TEXTURE_DEFAULTS.color;
   out.backgroundColor = validColor(src.backgroundColor) ?? TEXTURE_DEFAULTS.backgroundColor;
+  out.shadowColor = validColor(src.shadowColor) ?? TEXTURE_DEFAULTS.shadowColor;
   return out as unknown as TextureData;
 }
 

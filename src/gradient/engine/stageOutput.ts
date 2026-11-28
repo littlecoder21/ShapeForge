@@ -1,6 +1,7 @@
 import { effectDefs, layerCss, layerInnerHtml, ordinalNames, selectorFor, sizeDecls, type LayeredOptions } from './css';
 import { outputOf, type GradientProject } from './model';
 import { meshFieldScript } from './meshFieldExport';
+import { BG_ATTRIBUTE, backgroundRootCss, backgroundStageCss } from './backgroundOutput';
 
 /* ═══════════════════════════ Scaled-stage output ═══════════════════════════
  * The studio preview draws the gradient at its native canvas size (e.g. 1200 × 800 px) and scales that whole picture with
@@ -82,7 +83,7 @@ export function buildStageRuntime(rootSelector: string, canvasWidth: number): st
 }
 
 /** Same layers, names and per-layer CSS as `layeredOutput`, wrapped in the scaled stage. */
-export function stagedLayeredOutput(project: GradientProject) {
+export function stagedLayeredOutput(project: GradientProject, build: { background?: boolean } = {}) {
   const out = outputOf(project), root = selectorFor(project), prefix = cssIdentifier(out.layerPrefix.trim(), 'layer');
   const names = ordinalNames(project, prefix, root.scope);
   const options: LayeredOptions = { rootSel: root.sel, names, pretty: true, comments: out.comments };
@@ -93,7 +94,7 @@ export function stagedLayeredOutput(project: GradientProject) {
   const stage = `${root.sel} > [${STAGE_ATTRIBUTE}]`;
 
   const rows = [...visible].reverse().map(l => `    <i class="${prefix} ${names.cls(l)}">${layerInnerHtml(l, project)}</i>`);
-  const html = `<div ${root.attr} aria-hidden="true">\n  <div ${STAGE_ATTRIBUTE}>\n${rows.join('\n')}${defs ? `\n    <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n  </div>\n</div>`;
+  const html = `<div ${root.attr}${build.background ? ` ${BG_ATTRIBUTE}` : ''} aria-hidden="true">\n  <div ${STAGE_ATTRIBUTE}>\n${rows.join('\n')}${defs ? `\n    <svg width="0" height="0" style="position:absolute"><defs>${defs}</defs></svg>` : ''}\n  </div>\n</div>`;
 
   const comment = (text: string) => (out.comments ? `/* ${text} */\n` : '');
   const percentHeightHost = out.includeSize && !out.responsive && out.height.unit === '%' ? 'html, body { height: 100%; margin: 0; }' : '';
@@ -113,17 +114,18 @@ export function stagedLayeredOutput(project: GradientProject) {
     ...(project.background ? [`background-color: ${project.background}`] : []),
   ].map(x => `  ${x};`).join('\n')}\n}\n\n${root.sel} > :where([${STAGE_ATTRIBUTE}]) > .${prefix} {\n  position: absolute;\n  inset: 0;\n  pointer-events: none;\n}`;
 
+  const backgroundOptions = { comments: out.comments, staged: true, prefix };
   const css = [
-    percentHeightHost,
-    rootRules,
-    fallbackRules,
-    stageRules,
+    ...(build.background
+      ? [backgroundRootCss(project, root.sel, backgroundOptions), backgroundStageCss(project, root.sel, STAGE_ATTRIBUTE, backgroundOptions)]
+      : [percentHeightHost, rootRules, fallbackRules, stageRules]),
     ...[...visible].reverse().map(l => layerCss(l, project, options).replace(/\n  will-change: transform, opacity;/g, '')),
     ...(anyAnim ? [`${comment('Respect reduced-motion preferences')}@media (prefers-reduced-motion: reduce) {\n  ${root.sel} .${prefix} { animation: none; }\n}`] : []),
   ].filter(Boolean).join('\n\n');
 
   const fieldScript = meshFieldScript(project);
-  const runtime = [buildStageRuntime(root.sel, w), fieldScript].filter(Boolean).join('\n\n');
+  // the section background computes its scale in CSS, so only the live mesh-field repaint (if any) needs a script
+  const runtime = [build.background ? '' : buildStageRuntime(root.sel, w), fieldScript].filter(Boolean).join('\n\n');
   return {
     html, css,
     runtime,

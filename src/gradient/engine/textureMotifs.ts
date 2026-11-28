@@ -1,5 +1,5 @@
 import type { TextureData } from './model';
-import type { FalloffTarget, TextureCapability, TextureKind, TextureShape } from './textureControls';
+import type { FalloffTarget, ReliefProfile, TextureCapability, TextureKind, TextureShape } from './textureControls';
 import { CH, TILE, clamp, distribute, falloffAt, flowAngle, makeRand, makeWarp, tileableSlope, wrap, type Dist, type Rand, type WarpFn } from './textureMath';
 
 /* ═══════════════════════════ Texture renderers ═══════════════════════════
@@ -26,7 +26,24 @@ export interface RingsLayer { k: 'rings'; n: number; r0: number; dr: number; rat
 export interface CellsLayer { k: 'cells'; dist: Dist; allow?: Dist[]; count: number; w: number; o?: number; fill?: number; irregular?: number; ov?: Pair; color?: string }
 export interface TilingLayer { k: 'tiling'; form: 'checker' | 'hex' | 'cubes' | 'tri' | 'diamond' | 'scales' | 'knit' | 'frames' | 'rays'; pitch: number; ratio?: number; w: number; o?: number; cross?: boolean; ov?: Pair; color?: string; cover?: number }
 export interface WeaveLayer { k: 'weave'; pitch: number; w: number; o?: number; interval?: number; shift?: number; basket?: boolean; ov?: Pair; color?: string }
-export type Layer = NoiseLayer | ScatterLayer | StrokesLayer | LinesLayer | WavesLayer | RingsLayer | CellsLayer | TilingLayer | WeaveLayer;
+/**
+ * A lit height field. `ridges` = parallel ridges (corrugated sheet, ribs, pleats), `bumps` = a lattice of domes or dimples.
+ * The layer only carries the preset's own defaults; Depth / Light / Gloss … come from the texture controls.
+ */
+export interface ReliefLayer {
+  k: 'relief'; form: 'ridges' | 'bumps';
+  profile?: ReliefProfile;
+  /** ridges (or bumps per row) per tile */
+  count: number;
+  /** share of one period that is flat: crest + valley of a trapezoid, the gap between round ribs, the gap between bumps */
+  flat?: number;
+  /** base edge softness 0…1 (the Edge softness control scales it) */
+  soft?: number;
+  stagger?: boolean;
+  /** bumps → dimples */
+  invert?: boolean;
+}
+export type Layer = NoiseLayer | ScatterLayer | StrokesLayer | LinesLayer | WavesLayer | RingsLayer | CellsLayer | TilingLayer | WeaveLayer | ReliefLayer;
 
 export interface Ctx {
   P: TextureData;
@@ -766,6 +783,141 @@ function renderWeave(L: WeaveLayer, c: Ctx): void {
   open(c, '</g>');
 }
 
+/* ───────────── relief (lit height fields: corrugated sheet, ribs, pleats, bumps) ─────────────
+ * A height profile h(u) is lit with a simple Lambert + specular model and turned into TWO translucent layers:
+ * a shadow colour whose alpha is the darkness and a highlight colour whose alpha is the brightness. Each layer is ONE
+ * repeating linearGradient (many stops), so the surface is exact at any size, has no seams between ridges, and works
+ * with every blend mode (soft-light / overlay / multiply …) over any gradient underneath.
+ */
+
+const sstep = (t: number) => { const x = clamp(t, 0, 1); return x * x * (3 - 2 * x); };
+const f3 = (v: number) => String(Math.round(v * 1000) / 1000);
+
+/** Height 0…1 of one ridge period at position `u` (any real number; the profile repeats every 1). */
+export function ridgeHeight(profile: ReliefProfile, u: number, flat: number, soft: number): number {
+  const w = ((u % 1) + 1) % 1;
+  switch (profile) {
+    case 'sine': return 0.5 - 0.5 * Math.cos(w * Math.PI * 2);
+    case 'trapezoid': {
+      const t = Math.abs(w - 0.5) * 2, a = flat / 2; // t: 0 at the crest centre → 1 at the valley centre
+      const lin = clamp(1 - (t - a) / Math.max(0.02, 1 - 2 * a), 0, 1);
+      return lin + (sstep(lin) - lin) * soft;
+    }
+    case 'round': {
+      const half = Math.max(0.05, (1 - clamp(flat, 0, 0.8)) / 2), x = (w - 0.5) / half;
+      return Math.abs(x) >= 1 ? 0 : Math.pow(1 - x * x, 0.5 + 0.35 * soft);
+    }
+    case 'sawtooth': {
+      const r = clamp(0.8 - flat * 0.5, 0.5, 0.95), lin = w < r ? w / r : 1 - (w - r) / (1 - r);
+      return lin + (sstep(lin) - lin) * soft * 0.8;
+    }
+    case 'pleat': { const lin = 1 - Math.abs(2 * w - 1); return lin + (sstep(lin) - lin) * soft; }
+    case 'sheet': return 0.5 - 0.5 * Math.cos(w * Math.PI * 2); // only used for the valley-shadow term; the tone itself is drawn by sheetTone()
+  }
+}
+
+/**
+ * "Painted sheet": the soft, one-sided shading of a painted corrugated roof, measured from a photo of one — a flat bright crest,
+ * a shadow that deepens gradually down the slope facing away from the light, and a short crisp recovery on the lit edge.
+ * Returned per position u (0 = valley, the shadow ends there): shadow α and highlight α, both 0…1.
+ *  • flat = share of the period that stays bright   • soft = how long the lit-edge recovery takes
+ */
+function sheetTone(u: number, flat: number, soft: number, depth: number, occlusion: number, gloss: number, strength: number): { s: number; h: number } {
+  const rise = 0.1 + soft * 0.2, start = clamp(rise + flat, rise + 0.05, 0.92);
+  const maxA = 0.16 * depth * strength;
+  let s = 0;
+  if (u < rise) s = maxA * (1 - sstep(u / rise));
+  else if (u > start) s = maxA * Math.pow((u - start) / (1 - start), 1.1);
+  s += occlusion * 0.05 * depth * (1 - sstep(Math.min(u, 1 - u) / 0.1)); // a hair of extra darkness right in the valley
+  const h = gloss * 0.05 * depth * Math.exp(-Math.pow((u - rise * 0.55) / (0.05 + rise * 0.25), 2));
+  return { s: clamp(s, 0, 0.9), h: clamp(h, 0, 0.5) };
+}
+
+/**
+ * Drop stops that a straight line between their neighbours already reproduces (keeps the data URI small).
+ * Ramer–Douglas–Peucker against the whole run, not just the next point, so a slow curve cannot drift away unnoticed;
+ * the tolerance scales with the curve's own height so faint shading is not flattened.
+ */
+function simplifyStops(pts: { u: number; a: number }[]): { u: number; a: number }[] {
+  if (pts.length < 3) return pts.slice();
+  const peak = pts.reduce((m, p) => Math.max(m, p.a), 0), tol = Math.max(0.0008, peak * 0.012);
+  const keep = new Array<boolean>(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const walk = (lo: number, hi: number) => {
+    if (hi - lo < 2) return;
+    const a = pts[lo], b = pts[hi];
+    let worst = -1, at = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const t = (pts[i].u - a.u) / (b.u - a.u), err = Math.abs(pts[i].a - (a.a + (b.a - a.a) * t));
+      if (err > worst) { worst = err; at = i; }
+    }
+    if (worst > tol) { keep[at] = true; walk(lo, at); walk(at, hi); }
+  };
+  walk(0, pts.length - 1);
+  return pts.filter((_, i) => keep[i]);
+}
+
+function renderRidges(L: ReliefLayer, c: Ctx): void {
+  const P = c.P;
+  const profile: ReliefProfile = P.reliefProfile === 'auto' ? L.profile ?? 'sine' : P.reliefProfile;
+  const count = clamp(Math.round(P.ridgeCount > 0 ? P.ridgeCount : L.count), 1, 12), width = TILE / count;
+  const flat = clamp((L.flat ?? 0.3) * (P.strokeWidth / 100), 0, 0.8), soft = clamp((L.soft ?? 0.5) * (P.reliefSoft / 50), 0, 1);
+  const depth = P.reliefDepth / 100, occlusion = P.reliefOcclusion / 100, gloss = P.reliefGloss / 100, shift = P.phase / 100;
+  const theta = (clamp(P.reliefLight, -90, 90) * Math.PI) / 180, lx = Math.sin(theta), lz = Math.cos(theta);
+  const hl = Math.hypot(lx, lz + 1), hx = lx / hl, hz = (lz + 1) / hl, flatSpec = Math.pow(hz, 40);
+  const STEPS = 96, amp = 0.34 * depth, d = 0.5 / STEPS;
+  const shadow: { u: number; a: number }[] = [], light: { u: number; a: number }[] = [];
+  const mirror = P.reliefLight > 0 ? -1 : 1, strength = clamp(Math.abs(P.reliefLight) / 35, 0.3, 1.6);
+  for (let i = 0; i <= STEPS; i++) {
+    if (profile === 'sheet') {
+      // light from the left (negative) puts the soft shadow on the right-hand slope of each ridge; positive mirrors it
+      const u = i / STEPS, v = (((mirror > 0 ? u - shift : 1 - u + shift) % 1) + 1) % 1, t = sheetTone(v, flat, soft, depth, occlusion, gloss, strength);
+      shadow.push({ u, a: t.s }); light.push({ u, a: t.h });
+      continue;
+    }
+    const u = i / STEPS, y = ridgeHeight(profile, u - shift, flat, soft);
+    const slope = clamp((amp * (ridgeHeight(profile, u - shift + d, flat, soft) - ridgeHeight(profile, u - shift - d, flat, soft))) / (2 * d), -6, 6);
+    const inv = Math.hypot(slope, 1), nx = -slope / inv, nz = 1 / inv;
+    const diff = nx * lx + nz * lz - lz; // < 0 turned away from the light, > 0 facing it
+    const spec = Math.max(0, Math.pow(Math.max(0, nx * hx + nz * hz), 40) - flatSpec);
+    const valley = occlusion * Math.pow(1 - y, 1.7) * Math.min(1, depth * 1.2) * 0.44;
+    shadow.push({ u, a: clamp(0.95 * Math.max(0, -diff) + valley, 0, 0.82) });
+    light.push({ u, a: clamp(1.1 * Math.max(0, diff) + gloss * spec * 0.7, 0, 0.8) });
+  }
+  const stopsOf = (pts: { u: number; a: number }[], colour: string) => simplifyStops(pts).map(p => `<stop offset="${f3(p.u)}" stop-color="${colour}" stop-opacity="${f3(p.a)}"/>`).join('');
+  const a = `rl${c.uid++}`, b = `rl${c.uid++}`, vec = `gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${f2(width)}" y2="0" spreadMethod="repeat"`;
+  c.defs.push(`<linearGradient id="${a}" ${vec}>${stopsOf(shadow, P.shadowColor)}</linearGradient><linearGradient id="${b}" ${vec}>${stopsOf(light, c.color)}</linearGradient>`);
+  add(c, `<rect x="-14" y="-14" width="92" height="92" fill="url(#${a})"/>`);
+  add(c, `<rect x="-14" y="-14" width="92" height="92" fill="url(#${b})"/>`);
+}
+
+function renderBumps(L: ReliefLayer, c: Ctx): void {
+  const P = c.P;
+  const cols = clamp(Math.round(P.ridgeCount > 0 ? P.ridgeCount : L.count), 1, 10), rows = L.stagger ? cols * 2 : cols, px = TILE / cols, py = TILE / rows;
+  const gap = clamp((L.flat ?? 0.12) * (P.strokeWidth / 100), 0, 0.7), depth = P.reliefDepth / 100, occlusion = P.reliefOcclusion / 100, gloss = P.reliefGloss / 100;
+  const r = (L.stagger ? px * 0.35 : Math.min(px, py) / 2) * (1 - gap);
+  const theta = (clamp(P.reliefLight, -90, 90) * Math.PI) / 180, flip = L.invert ? -1 : 1;
+  const dl = Math.hypot(Math.sin(theta), 0.7), dx = (flip * Math.sin(theta)) / dl, dy = (-flip * 0.7) / dl; // unit vector from the bump towards the light
+  const uid = c.uid++, id = (name: string) => `${name}${uid}`;
+  const hiA = clamp(0.5 * gloss * Math.sqrt(depth) + 0.18 * depth, 0, 0.95), shA = clamp(0.62 * depth, 0, 0.9), ctA = clamp(0.42 * occlusion * Math.sqrt(depth), 0, 0.9);
+  const fo = (k: number) => `fx="${f2(0.5 + dx * k)}" fy="${f2(0.5 + dy * k)}"`;
+  c.defs.push(
+    `<radialGradient id="${id('bh')}" cx=".5" cy=".5" r=".5" ${fo(0.3)}><stop offset="0" stop-color="${c.color}" stop-opacity="${f3(hiA)}"/><stop offset=".38" stop-color="${c.color}" stop-opacity="${f3(hiA * 0.32)}"/><stop offset=".85" stop-color="${c.color}" stop-opacity="0"/></radialGradient>`,
+    `<radialGradient id="${id('bs')}" cx=".5" cy=".5" r=".5" ${fo(-0.3)}><stop offset=".4" stop-color="${P.shadowColor}" stop-opacity="0"/><stop offset=".75" stop-color="${P.shadowColor}" stop-opacity="${f3(shA * 0.4)}"/><stop offset="1" stop-color="${P.shadowColor}" stop-opacity="${f3(shA)}"/></radialGradient>`,
+    `<radialGradient id="${id('bc')}" cx=".5" cy=".5" r=".5"><stop offset=".68" stop-color="${P.shadowColor}" stop-opacity="0"/><stop offset=".82" stop-color="${P.shadowColor}" stop-opacity="${f3(ctA)}"/><stop offset="1" stop-color="${P.shadowColor}" stop-opacity="0"/></radialGradient>`,
+  );
+  const centres: Pair[] = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) centres.push([(i + 0.5 + (L.stagger && j % 2 ? 0.5 : 0)) * px, (j + 0.5) * py]);
+  const pass = (name: string, radius: number) => {
+    open(c, `<g fill="url(#${id(name)})">`);
+    for (const [x, y] of centres) for (const [ox, oy] of copies(c, x - radius, y - radius, x + radius, y + radius)) { if (!room(c)) break; add(c, `<circle cx="${f2(x + ox)}" cy="${f2(y + oy)}" r="${f2(radius)}"/>`); }
+    open(c, '</g>');
+  };
+  pass('bc', r * 1.3); pass('bs', r); pass('bh', r);
+}
+
+function renderRelief(L: ReliefLayer, c: Ctx): void { if (L.form === 'bumps') renderBumps(L, c); else renderRidges(L, c); }
+
 /* ───────────── dispatcher + capability description ───────────── */
 
 export function renderLayers(c: Ctx, layers: Layer[]): void {
@@ -781,6 +933,7 @@ export function renderLayers(c: Ctx, layers: Layer[]): void {
       case 'cells': renderCells(L, c); break;
       case 'tiling': renderTiling(L, c); break;
       case 'weave': renderWeave(L, c); break;
+      case 'relief': renderRelief(L, c); break;
     }
   });
   if (c.P.detailAmount > 0 && !layers.some(l => l.k === 'noise')) renderDetail(c, layers.some(l => l.k === 'lines' || l.k === 'waves' || l.k === 'weave' || l.k === 'strokes') ? 'hairs' : 'specks');
@@ -794,11 +947,13 @@ export interface LayerInfo {
   defaultDist?: Dist;
   defaultShape?: ShapeId;
   falloffTargets: FalloffTarget[];
+  /** set for relief textures: what the preset itself draws (the panel shows the ridge width from it) */
+  relief?: { form: ReliefLayer['form']; profile?: ReliefProfile; count: number };
 }
 
 export function describeLayers(layers: Layer[]): LayerInfo {
   const caps = new Set<TextureCapability>(), targets = new Set<FalloffTarget>();
-  let dists: Dist[] = [], defaultDist: Dist | undefined, defaultShape: ShapeId | undefined;
+  let dists: Dist[] = [], defaultDist: Dist | undefined, defaultShape: ShapeId | undefined, relief: LayerInfo['relief'];
   const all = (...list: TextureCapability[]) => list.forEach(x => caps.add(x));
   const tgt = (...list: FalloffTarget[]) => list.forEach(x => targets.add(x));
   for (const L of layers) {
@@ -826,9 +981,10 @@ export function describeLayers(layers: Layer[]): LayerInfo {
         if (L.form !== 'rays') all('sx', 'sy', 'jitter', 'cover'); else all('sx', 'sy');
         if (L.form === 'checker') { all('corner', 'sizevar', 'aspect'); caps.delete('stroke'); }
         break;
+      case 'relief': all('relief', 'phase', 'stroke'); relief = { form: L.form, profile: L.profile, count: L.count }; break;
       case 'weave': all('sx', 'sy', 'stroke', 'weave', 'sizevar', 'anglevar', 'opvar', 'cover', 'phase', 'warp', 'detail'); tgt('opacity', 'distortion', 'detail'); break;
     }
   }
   if (targets.size) caps.add('falloff');
-  return { kind: layers[0]?.k ?? 'noise', caps: [...caps], dists, defaultDist, defaultShape, falloffTargets: [...targets] };
+  return { kind: layers[0]?.k ?? 'noise', caps: [...caps], dists, defaultDist, defaultShape, falloffTargets: [...targets], relief };
 }

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_TEXTURE, newLayer, normalizeProject, newProject, type TextureData } from './model';
 import { CONTROLS, TEXTURE_DEFAULTS, normalizeTexture } from './textureControls';
 import { falloffAt, tileableSlope } from './textureMath';
-import { LEGACY_TEXTURE_IDS, TEXTURES, findTexture, resolveTextureId, textureDataUri, textureOverlay, textureSupport, textureTileSvg } from './textures';
+import { LEGACY_TEXTURE_IDS, TEXTURES, findTexture, reliefDefaults, reliefGeometry, resolveTextureId, textureDataUri, textureOverlay, textureSupport, textureTileSvg } from './textures';
 
 const tex = (pattern: string, patch: Partial<TextureData> = {}): TextureData => ({ ...DEFAULT_TEXTURE, enabled: true, pattern, ...patch });
 
@@ -27,9 +27,9 @@ function assertValidSvg(svg: string, label: string) {
 }
 const numbers = (svg: string, tag: string, attr: string) => [...svg.matchAll(new RegExp(`<${tag}\\b[^>]*?\\s${attr}="([^"]+)"`, 'g'))].map(m => Number(m[1]));
 
-test('registry: 214 presets, unique stable ids, every legacy id still resolves to the same preset', () => {
-  assert.equal(TEXTURES.length, 214);
-  assert.equal(new Set(TEXTURES.map(t => t.id)).size, 214);
+test('registry: 226 presets, unique stable ids, every legacy id still resolves to the same preset', () => {
+  assert.equal(TEXTURES.length, 226);
+  assert.equal(new Set(TEXTURES.map(t => t.id)).size, 226);
   const perFamily: Record<string, number> = {};
   for (const t of TEXTURES) {
     perFamily[t.family] = (perFamily[t.family] ?? 0) + 1;
@@ -37,7 +37,7 @@ test('registry: 214 presets, unique stable ids, every legacy id still resolves t
     assert.equal(resolveTextureId(t.id), t.id);
     assert.equal(findTexture(t.legacyId)?.label, t.label);
   }
-  assert.deepEqual(perFamily, { grain: 30, dots: 26, lines: 21, crosshatch: 17, grid: 17, waves: 29, geometric: 17, woven: 41, paper: 10, material: 5, organic: 1 });
+  assert.deepEqual(perFamily, { grain: 30, dots: 26, lines: 21, crosshatch: 17, grid: 17, waves: 29, geometric: 17, woven: 41, paper: 10, material: 5, organic: 1, relief: 12 });
   // ids used by saved projects / the halftone builder keep their meaning
   const spot: Record<string, string> = { 'grain-1': 'Film grain', 'dots-1': 'Halftone', 'dots-6': 'Stipple', 'dots-10': 'Diamond dots', 'geometric-9': 'Chevron', 'woven-41': 'Grunge', 'paper-10': 'Torn Paper Edges', 'organic-1': 'Plasma Texture' };
   for (const [legacy, label] of Object.entries(spot)) assert.equal(findTexture(legacy)?.label, label, legacy);
@@ -220,6 +220,8 @@ test('every control changes the output of a preset that supports it', () => {
     warpAmount: 'lines-horizontal-lines', warpFrequency: 'lines-horizontal-lines', warpX: 'lines-horizontal-lines', warpY: 'lines-horizontal-lines', warpOctaves: 'lines-horizontal-lines',
     falloff: 'dots-halftone', falloffTarget: 'dots-halftone', falloffStrength: 'dots-halftone', falloffCenterX: 'dots-halftone', falloffCenterY: 'dots-halftone', falloffRadius: 'dots-halftone', falloffAngle: 'dots-halftone',
     detailAmount: 'dots-halftone', detailScale: 'dots-halftone', detailDensity: 'dots-halftone',
+    ridgeCount: 'relief-corrugated-sheet', reliefProfile: 'relief-trapezoid-roofing', reliefDepth: 'relief-corrugated-sheet', reliefOcclusion: 'relief-corrugated-sheet',
+    reliefLight: 'relief-corrugated-sheet', reliefGloss: 'relief-corrugated-sheet', reliefSoft: 'relief-trapezoid-roofing',
   };
   const context: Partial<Record<string, Partial<TextureData>>> = {
     dashGap: { dashLength: 6 }, symmetry: { shape: 'star' }, warpFrequency: { warpAmount: 60 }, warpX: { warpAmount: 60, warpY: 0 }, warpY: { warpAmount: 60, warpX: 0 }, warpOctaves: { warpAmount: 60 },
@@ -254,4 +256,74 @@ test('tileable slopes snap to directions that repeat on the tile', () => {
   assert.deepEqual(tileableSlope(135), [1, -1]);
   const [a, b] = tileableSlope(30);
   assert.ok(Math.abs((Math.atan2(b, a) * 180) / Math.PI - 30) < 3);
+});
+
+/* ───────────── relief (lit height fields) ───────────── */
+
+const RELIEF_IDS = TEXTURES.filter(t => t.family === 'relief').map(t => t.id);
+const RIDGE_IDS = RELIEF_IDS.filter(id => !['relief-pillow-bumps', 'relief-hobnail', 'relief-dimples'].includes(id));
+
+test('relief ridges repeat exactly: whole ridges per tile, and the shading is continuous across the repeat', () => {
+  for (const id of RIDGE_IDS) for (const ridgeCount of [0, 1, 3, 7, 12]) {
+    const svg = textureTileSvg(tex(id, { ridgeCount }));
+    assertValidSvg(svg, `${id}/${ridgeCount}`);
+    const gradients = [...svg.matchAll(/<linearGradient[^>]*x2="([\d.]+)"[^>]*spreadMethod="repeat">(.*?)<\/linearGradient>/g)];
+    assert.equal(gradients.length, 2, `${id}: shadow + highlight gradient`);
+    for (const [, x2, body] of gradients) {
+      const per = 64 / Number(x2);
+      assert.ok(Math.abs(per - Math.round(per)) < 0.02, `${id}/${ridgeCount}: ${per} ridges across 64 units`);
+      const stops = [...body.matchAll(/offset="([\d.]+)" stop-color="#[0-9a-f]{6}" stop-opacity="([\d.]+)"/g)].map(m => ({ u: Number(m[1]), a: Number(m[2]) }));
+      assert.equal(stops[0].u, 0); assert.equal(stops[stops.length - 1].u, 1);
+      assert.ok(stops.every((st, i) => i === 0 || st.u > stops[i - 1].u), `${id}: stop offsets must increase`);
+      assert.ok(stops.every(st => st.a >= 0 && st.a <= 1));
+      assert.ok(Math.abs(stops[0].a - stops[stops.length - 1].a) < 0.02, `${id}/${ridgeCount}: ridge edge differs between start and end (seam)`);
+    }
+  }
+});
+
+test('relief bumps are whole cells and the ones crossing a tile edge are drawn again on the opposite edge', () => {
+  for (const id of ['relief-pillow-bumps', 'relief-hobnail', 'relief-dimples']) {
+    const svg = textureTileSvg(tex(id, { ridgeCount: 3 }));
+    assertValidSvg(svg, id);
+    const dots = [...svg.matchAll(/<circle cx="([\d.-]+)" cy="([\d.-]+)" r="([\d.]+)"/g)].map(m => ({ x: +m[1], y: +m[2], r: +m[3] }));
+    assert.ok(dots.length >= 9, `${id}: ${dots.length} circles`);
+    const has = (x: number, y: number, r: number) => dots.some(d => Math.abs(d.x - x) < 0.02 && Math.abs(d.y - y) < 0.02 && Math.abs(d.r - r) < 0.02);
+    for (const d of dots) {
+      if (d.x - d.r < 0 && d.x >= 0) assert.ok(has(d.x + 64, d.y, d.r), `${id}: left edge circle has no copy`);
+      if (d.x + d.r > 64 && d.x <= 64) assert.ok(has(d.x - 64, d.y, d.r), `${id}: right edge circle has no copy`);
+      if (d.y - d.r < 0 && d.y >= 0) assert.ok(has(d.x, d.y + 64, d.r), `${id}: top edge circle has no copy`);
+      if (d.y + d.r > 64 && d.y <= 64) assert.ok(has(d.x, d.y - 64, d.r), `${id}: bottom edge circle has no copy`);
+    }
+  }
+});
+
+test('relief: profile, depth, light and colours change the shading; unsafe colours are rejected', () => {
+  const base = textureTileSvg(tex('relief-corrugated-sheet'));
+  assert.notEqual(textureTileSvg(tex('relief-corrugated-sheet', { reliefProfile: 'pleat' })), base);
+  assert.equal(textureTileSvg(tex('relief-corrugated-sheet', { reliefProfile: 'sine' })), base, 'auto = the preset own profile');
+  assert.notEqual(textureTileSvg(tex('relief-corrugated-sheet', { reliefLight: 60 })), base);
+  const flat = textureTileSvg(tex('relief-corrugated-sheet', { reliefDepth: 0, reliefOcclusion: 0 }));
+  assert.ok(!/stop-opacity="0\.[1-9]/.test(flat), 'no depth and no valley shadow = no shading');
+  assert.match(textureTileSvg(tex('relief-corrugated-sheet', { shadowColor: '#112233', color: '#ffeedd' })), /stop-color="#112233"[^>]*\/>.*stop-color="#ffeedd"/);
+  assert.equal(normalizeTexture({ shadowColor: 'url(javascript:alert(1))' }).shadowColor, '#000000');
+  assert.equal(normalizeTexture({ shadowColor: '#ABC' }).shadowColor, '#aabbcc');
+  assert.equal(normalizeTexture({ reliefProfile: 'bogus' }).reliefProfile, 'auto');
+  assert.equal(normalizeTexture({ ridgeCount: 99 }).ridgeCount, 12);
+});
+
+test('relief textures: controls, defaults and geometry helpers', () => {
+  const ids = (id: string) => textureSupport(tex(id)).controls.map(c => c.control.id);
+  assert.equal(textureSupport(tex('relief-corrugated-sheet')).kind, 'relief');
+  assert.ok(['ridgeCount', 'reliefProfile', 'reliefDepth', 'reliefOcclusion', 'reliefLight', 'reliefGloss'].every(c => ids('relief-corrugated-sheet').includes(c as never)));
+  assert.ok(!ids('relief-corrugated-sheet').includes('reliefSoft' as never) && !ids('relief-corrugated-sheet').includes('strokeWidth' as never), 'a pure sine wave has no corners to soften');
+  assert.ok(ids('relief-trapezoid-roofing').includes('reliefSoft' as never) && ids('relief-trapezoid-roofing').includes('strokeWidth' as never));
+  assert.ok(!ids('relief-pillow-bumps').includes('reliefProfile' as never) && !ids('relief-pillow-bumps').includes('distribution' as never));
+  assert.ok(!ids('dots-halftone').some(c => c.startsWith('relief') || c === 'ridgeCount'), 'relief controls never leak into other textures');
+  assert.equal(reliefDefaults('dots-halftone'), undefined);
+  assert.deepEqual(reliefDefaults('relief-corrugated-sheet'), { blend: 'normal', opacity: 100, color: '#ffffff', shadowColor: '#000000', scale: 140 });
+  assert.equal(reliefDefaults('relief-painted-roofing')!.scale, 70);
+  const g = reliefGeometry(tex('relief-corrugated-sheet', { scale: 150 }))!;
+  assert.deepEqual([g.form, g.count, g.width], ['ridges', 2, 75]);
+  assert.equal(reliefGeometry(tex('relief-corrugated-sheet', { scale: 150, ridgeCount: 5 }))!.width, 30);
+  assert.equal(reliefGeometry(tex('dots-halftone')), undefined);
 });

@@ -66,6 +66,8 @@ export interface TextureData extends TextureParams {
   angle: number;
   seed: number;
   color: string;
+  /** Colour of the shadows in relief patterns (the highlights use `color`). */
+  shadowColor: string;
   backgroundEnabled: boolean;
   backgroundColor: string;
   backgroundOpacity: number;

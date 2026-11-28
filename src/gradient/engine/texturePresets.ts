@@ -6,7 +6,7 @@
  * The list order (and therefore the library order in the UI) is unchanged.
  */
 
-export type TextureFamily = 'grain' | 'dots' | 'lines' | 'crosshatch' | 'grid' | 'waves' | 'geometric' | 'woven' | 'paper' | 'material' | 'organic';
+export type TextureFamily = 'grain' | 'dots' | 'lines' | 'crosshatch' | 'grid' | 'waves' | 'geometric' | 'woven' | 'paper' | 'material' | 'organic' | 'relief';
 
 export interface TexturePreset {
   /** Stable identifier — never derived from list position. */
@@ -31,6 +31,7 @@ const FAMILY_NAMES: { family: TextureFamily; names: string[] }[] = [
   { family: 'paper', names: ['Handmade Paper', 'Recycled Paper', 'Parchment', 'Newsprint', 'Cardstock', 'Watercolor Paper', 'Cotton Paper', 'Rice Paper', 'Crumpled Paper', 'Torn Paper Edges'] },
   { family: 'material', names: ['Granite', 'Limestone', 'Sandstone', 'Concrete', 'Clay'] },
   { family: 'organic', names: ['Plasma Texture'] },
+  { family: 'relief', names: ['Painted roofing', 'Corrugated sheet', 'Trapezoid roofing', 'Round ribs', 'Fluted glass', 'Pleated fold', 'Sawtooth ridges', 'Wide swell', 'Reeded panel', 'Pillow bumps', 'Hobnail', 'Dimples'] },
 ];
 
 export const slugify = (label: string) => label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');

@@ -1,0 +1,71 @@
+import { Switch, Seg } from '../../shared/controls';
+import { DEFAULT_OUTPUT, outputOf, type OutputSettings } from '../engine/model';
+import { useStore } from '../engine/store';
+import { useStudio } from './ui';
+
+const W_UNITS = ['%', 'px', 'vw', 'rem', 'em', 'auto'] as const;
+const H_UNITS = ['px', 'vh', '%', 'rem', 'em', 'auto'] as const;
+
+/** Manual naming and sizing for the generated code — nothing is hard-coded. */
+export default function OutputSettingsForm({ variant = 'full' }: { variant?: 'full' | 'names' } = {}) {
+  const { store } = useStudio();
+  const project = useStore(store, s => s.project);
+  const o = outputOf(project);
+  const set = (patch: Partial<OutputSettings>, key = 'out') => store.update(p => ({ ...p, output: { ...outputOf(p), ...patch } }), { coalesce: key });
+  const num = (v: string) => Math.max(0, Number(v) || 0);
+  return <div className="gs-outform" data-testid="output-settings">
+    <div className="field-label">Selector type</div>
+    <Seg value={o.selectorType} label="Selector type" options={[{ id: 'class', label: 'Class' }, { id: 'id', label: 'ID' }, { id: 'attribute', label: 'Attribute' }]} onChange={v => set({ selectorType: v, selector: v === 'attribute' && !o.selector.startsWith('data-') ? 'data-gradient' : o.selector })} testId="out-type" />
+    <div className="gs-two">
+      <label className="nf"><span className="nf-label">{o.selectorType === 'attribute' ? 'Attribute name' : o.selectorType === 'id' ? 'ID name' : 'Class name'}</span>
+        <input className="generate-select" value={o.selector} spellCheck={false} onChange={e => set({ selector: e.target.value }, 'out-sel')} data-testid="out-selector" placeholder={o.selectorType === 'id' ? 'hero-gradient' : o.selectorType === 'attribute' ? 'data-gradient' : 'gradient-canvas'} /></label>
+      {o.selectorType === 'attribute' && <label className="nf"><span className="nf-label">Value</span><input className="generate-select" value={o.attrValue} spellCheck={false} onChange={e => set({ attrValue: e.target.value }, 'out-val')} data-testid="out-attrvalue" /></label>}
+      <label className="nf"><span className="nf-label">Layer class prefix</span><input className="generate-select" value={o.layerPrefix} spellCheck={false} onChange={e => set({ layerPrefix: e.target.value }, 'out-prefix')} data-testid="out-prefix" /></label>
+    </div>
+    {variant === 'full' && <label className="nf"><span className="nf-label">Download filename</span><input className="generate-select" value={o.downloadName} spellCheck={false} onChange={e => set({ downloadName: e.target.value }, 'out-download-name')} data-testid="out-download-name" placeholder="gradient" /><small className="gs-bar-hint">The extension is added automatically.</small></label>}
+    {variant === 'full' && <>
+    <Switch label="Include width / height in the code" checked={o.includeSize} onChange={v => set({ includeSize: v, previewOutputSize: v ? o.previewOutputSize : false })} testId="out-include-size" />
+    <div>
+      <Switch label="Preserve preview proportions when resized" checked={o.responsive} onChange={v => set({ responsive: v, previewOutputSize: v ? false : o.previewOutputSize })} testId="out-responsive" />
+      <small className="gs-bar-hint">Adds the preview aspect ratio so colors stay at the same relative positions. The element height follows its width.</small>
+    </div>
+    <div>
+      <Switch
+        label="Preview at exact output dimensions"
+        checked={o.previewOutputSize}
+        onChange={enabled => set({
+          previewOutputSize: enabled,
+          ...(enabled ? {
+            includeSize: true,
+            responsive: false,
+            width: {
+              value: Math.max(1, Math.round(o.width.value)),
+              unit: o.width.unit === 'auto' ? 'px' : o.width.unit,
+            },
+            height: {
+              ...o.height,
+              value: Math.max(1, Math.round(o.height.value)),
+              unit: o.height.unit === 'auto' ? 'px' : o.height.unit,
+            },
+          } : {}),
+        })}
+        testId="out-preview-size"
+      />
+      <small className="gs-bar-hint">Matches fixed pixel sizes or percentages of the preview area. Width and height stay independent; no aspect ratio is applied.</small>
+    </div>
+    {o.includeSize && <>
+      <div className="gs-two">
+        <label className="nf"><span className="nf-label">Width</span><span className="gs-unitfield">
+          <input inputMode="decimal" disabled={o.width.unit === 'auto'} value={o.width.unit === 'auto' ? '' : o.width.value} onChange={e => set({ width: { ...o.width, value: o.previewOutputSize ? Math.max(1, Math.round(num(e.target.value))) : num(e.target.value) } }, 'out-w')} data-testid="out-width" aria-label="Width value" />
+          <select value={o.width.unit} onChange={e => { const unit = e.target.value as OutputSettings['width']['unit']; set({ width: { ...o.width, unit }, previewOutputSize: (unit === 'px' || unit === '%') ? o.previewOutputSize : false }); }} aria-label="Width unit" data-testid="out-width-unit">{W_UNITS.map(u => <option key={u}>{u}</option>)}</select></span></label>
+        {!o.responsive && <label className="nf"><span className="nf-label">Height</span><span className="gs-unitfield">
+          <input inputMode="decimal" disabled={o.height.unit === 'auto'} value={o.height.unit === 'auto' ? '' : o.height.value} onChange={e => set({ height: { ...o.height, value: o.previewOutputSize ? Math.max(1, Math.round(num(e.target.value))) : num(e.target.value) } }, 'out-h')} data-testid="out-height" aria-label="Height value" />
+          <select value={o.height.unit} onChange={e => { const unit = e.target.value as OutputSettings['height']['unit']; set({ height: { ...o.height, unit }, previewOutputSize: (unit === 'px' || unit === '%') ? o.previewOutputSize : false }); }} aria-label="Height unit" data-testid="out-height-unit">{H_UNITS.map(u => <option key={u}>{u}</option>)}</select></span></label>}
+      </div>
+      {!o.responsive && <Seg value={o.height.prop} label="Height property" options={[{ id: 'min-height', label: 'min-height' }, { id: 'height', label: 'height' }]} onChange={v => set({ height: { ...o.height, prop: v } })} testId="out-heightprop" />}
+    </>}
+    </>}
+    <Switch label="Comments in code" checked={o.comments} onChange={v => set({ comments: v })} testId="out-comments" />
+    <button type="button" className="btn wide" onClick={() => set({ ...DEFAULT_OUTPUT }, 'out-reset')}>{variant === 'full' ? 'Reset naming & size' : 'Reset names'}</button>
+  </div>;
+}
